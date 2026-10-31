@@ -312,12 +312,28 @@ def delegate(f: dict, day: str) -> str:
     if not f["assignee"]:
         f["delegation_error"] = "no principal has the role 'chief of operations' in principals.yaml"
         return ""
+    # One live item per finding, not one per day (audit 2026-10-17, section 3 item 3).
+    # The "already handed over tonight" check in sweep() reads tonight's state file, which
+    # only holds items created in this sweep -- it misses items from previous nights.
+    # Look in the ledger directly: if an open repair item for this finding exists, reuse it.
+    space = _space(ROOT)
+    prefix = f"repair-{f['id']}-"
+    try:
+        from ledger.fold import fold
+        from ledger.log import read_events
+        if (space / ".datacore" / "events").is_dir():
+            state = fold(read_events(space))
+            for existing_id, item in state.items.items():
+                if existing_id.startswith(prefix) and item.status in ("created", "claimed"):
+                    return existing_id
+    except Exception:  # noqa: BLE001 -- unreadable ledger falls through to create
+        pass
     body = "\n".join(["The morning repair sweep found this failing at 02:00 UTC, and one safe "
                       "remediation did not clear it.", "", f"What: {f['title']}",
                       f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
                       "", "Done means the sweep's 03:30 re-check no longer finds it.", "", PR_RULE])
     try:
-        guarded_append(EventLog(_space(ROOT), this_actor()), "item.create",
+        guarded_append(EventLog(space, this_actor()), "item.create",
                        {"id": iid, "title": f"Repair: {f['title']}", "assignee": f["assignee"], "route": "dev",
                         "body": body, "requested_by": this_actor(), "morning_repair": True})
     except Exception as exc:  # noqa: BLE001 -- report, never crash the sweep
