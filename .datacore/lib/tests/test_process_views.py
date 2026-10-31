@@ -45,8 +45,9 @@ def test_every_mark_code_is_known():
 
 
 def test_type_is_one_size_smaller():
-    assert "svg .name{font-family:'Outfit',sans-serif;font-size:18px" in pv.CSS
-    assert "svg .sub{font-family:'JetBrains Mono',monospace;font-size:14px" in pv.CSS
+    # third round (owner, 2026-10-31): one more size down, 16px names and 13px technical lines
+    assert "svg .name{font-family:'Outfit',sans-serif;font-size:16px" in pv.CSS
+    assert "svg .sub{font-family:'JetBrains Mono',monospace;font-size:13px" in pv.CSS
 
 
 # -- third round (owner, 2026-10-31): every process gets a Current / Upgrade switch -------
@@ -95,3 +96,17 @@ def test_no_duplicate_ids_on_the_page():
     ids = re.findall(r'\sid="([^"]+)"', html)
     dup = {i for i in ids if ids.count(i) > 1}
     assert not dup, sorted(dup)
+
+
+def test_sidebar_can_be_collapsed():
+    html = pv.page({})
+    assert 'id="side-toggle"' in html and 'aria-controls="side"' in html
+    assert '<nav class="side" id="side"' in html
+    assert "body.side-off" in pv.CSS
+
+
+def test_every_diagram_has_zoom_and_fit():
+    html = pv.page({})
+    drawn = html.count('<svg viewBox=')
+    for act in ("out", "in", "fit", "full"):
+        assert html.count(f'data-zoom="{act}"') == drawn, act

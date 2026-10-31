@@ -36,7 +36,7 @@ ARCH = ROOT / "2-datacore" / "1-tracks" / "dev" / "architecture"
 # -- geometry (4px grid) ------------------------------------------------------------
 LANE_W = 336          # one actor column; 4 lanes + padding = 1392px, the page width
 BOX_W, BOX_H = 272, 96
-MAX_NAME, MAX_SUB = 26, 28   # characters that fit a box at 18px / 14px mono
+MAX_NAME, MAX_SUB = 26, 28   # characters that fit a box at 16px / 13px mono (kept from 18/14: room to spare)
 ROW = 176             # step pitch; the 80px gap holds a handoff and its label
 TOP = 96              # lane header band
 PAD = 24
@@ -1072,6 +1072,16 @@ KIND_TEXT = {
 }
 
 
+def fig(svg: str) -> str:
+    """A diagram with its zoom bar: smaller, larger, fit the whole diagram on screen, full width."""
+    bar = ('<div class="zoom" role="toolbar" aria-label="Zoom this diagram">'
+           '<button type="button" data-zoom="out" title="Smaller" aria-label="Smaller">−</button>'
+           '<button type="button" data-zoom="in" title="Larger" aria-label="Larger">+</button>'
+           '<button type="button" data-zoom="fit" title="Fit the whole diagram on screen">Fit to screen</button>'
+           '<button type="button" data-zoom="full" title="Back to the default size">Reset</button></div>')
+    return f'<div class="figwrap">{bar}<div class="fig">{svg}</div></div>'
+
+
 def upgrade_flow(f: dict) -> dict:
     """The proposed version of a flow, in the same shape svg_flow draws (own slug, so its ids never clash)."""
     up = UPGRADES[f["slug"]]
@@ -1089,7 +1099,7 @@ def upgrade_pane(f: dict) -> str:
         return f'{head}<p class="lede"><b>{esc(up["summary"])}</b> {esc(up["keep"])}</p>'
     items = "".join(f'<li><span class="need {NEED_CLASS[n]}">{esc(n)}</span> {esc(w)}<br><span class="why">{esc(y)}</span></li>'
                     for w, y, n in up["changes"])
-    return (f'{head}<p class="lede">{esc(up["summary"])}</p><div class="fig">{svg_flow(upgrade_flow(f))}</div>'
+    return (f'{head}<p class="lede">{esc(up["summary"])}</p>{fig(svg_flow(upgrade_flow(f)))}'
             f'<h3 class="ch">What changes, and what each change needs</h3><ol class="changes">{items}</ol>')
 
 
@@ -1184,9 +1194,18 @@ h2{font-family:'Literata',Georgia,serif;font-weight:400;font-size:28px;margin:56
 h3{font-size:20px;font-weight:600;margin:28px 0 10px}
 .lede{font-size:18px;color:var(--muted);max-width:76ch;margin:0 0 20px}
 .src{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--soft);max-width:120ch}
-.fig{overflow-x:auto;margin:8px 0 12px}
+.fig{overflow:auto;margin:0 0 12px}
+.figwrap{position:relative;margin:8px 0 0;scroll-margin-top:60px}
+.zoom{display:flex;gap:4px;justify-content:flex-end;position:sticky;top:64px;z-index:2;margin:0 0 4px}
+.zoom button,.sidebtn{font:inherit;font-size:13px;color:var(--muted);background:var(--paper);border:1px solid var(--rule-solid);
+border-radius:6px;padding:3px 10px;cursor:pointer;min-width:32px}
+.zoom button:hover,.sidebtn:hover{color:var(--accent);border-color:var(--accent)}
+.sidebtn{font-size:14px;color:var(--ink)}
+body.side-off .wrap{grid-template-columns:minmax(0,1fr);max-width:none}
+body.side-off nav.side{display:none}
 ul.notes{max-width:96ch;padding-left:20px;font-size:16px}ul.notes li{margin:6px 0}
 svg.flow{max-width:100%;height:auto;display:block}
+svg.flow.zoomed{max-width:none}
 svg .paper{fill:var(--paper)} svg .box{fill:var(--paper);stroke:var(--ink);stroke-width:1.2}
 svg .box.focal{fill:var(--accent-tint);stroke:var(--accent);stroke-width:2}
 svg .box.new{stroke:var(--accent);stroke-width:2;stroke-dasharray:7 5}
@@ -1213,15 +1232,15 @@ header.top .all button{font:inherit;font-size:14px;color:var(--ink);background:n
 padding:4px 10px;cursor:pointer}
 header.top .all button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 svg .step:hover .box{stroke:var(--accent);stroke-width:2}
-svg .name{font-family:'Outfit',sans-serif;font-size:18px;font-weight:600;fill:var(--ink)}
-svg .sub{font-family:'JetBrains Mono',monospace;font-size:14px;fill:var(--muted)}
-svg .lane{font-family:'JetBrains Mono',monospace;font-size:14px;letter-spacing:.1em;fill:var(--soft)}
+svg .name{font-family:'Outfit',sans-serif;font-size:16px;font-weight:600;fill:var(--ink)}
+svg .sub{font-family:'JetBrains Mono',monospace;font-size:13px;fill:var(--muted)}
+svg .lane{font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.1em;fill:var(--soft)}
 svg .lane-rule{stroke:var(--rule-solid);stroke-width:1}
 svg .edge{fill:none;stroke:var(--muted);stroke-width:1.6} svg .mk{fill:var(--muted)}
-svg .mask{fill:var(--paper)} svg .elabel{font-family:'JetBrains Mono',monospace;font-size:14px;letter-spacing:.04em;fill:var(--soft)}
-svg .state{fill:var(--paper);stroke:var(--accent);stroke-width:1.2} svg .statet{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:400;fill:var(--accent)}
+svg .mask{fill:var(--paper)} svg .elabel{font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;fill:var(--soft)}
+svg .state{fill:var(--paper);stroke:var(--accent);stroke-width:1.2} svg .statet{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:400;fill:var(--accent)}
 .mark circle{fill:var(--paper);stroke:var(--sig);stroke-width:1.8}
-.mark text{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;fill:var(--sig)}
+.mark text{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;fill:var(--sig)}
 .mark.optional circle{stroke-dasharray:3 3}
 .mark[data-k="R"] circle{stroke:var(--prov)} .mark[data-k="R"] text{fill:var(--prov)}
 .mark{cursor:help}
@@ -1251,6 +1270,19 @@ try{localStorage.setItem('processes-view',v)}catch(e){}}
 secs.forEach(function(s){s.querySelectorAll('.switch input').forEach(function(r){r.addEventListener('change',function(){show(s,r.value)})})});
 btns.forEach(function(b){b.addEventListener('click',function(){all(b.dataset.all)})});
 var saved=null;try{saved=localStorage.getItem('processes-view')}catch(e){}if(saved==='up')all('up')})();
+(function(){var b=document.getElementById('side-toggle');if(!b)return;
+function set(off){document.body.classList.toggle('side-off',off);b.setAttribute('aria-expanded',String(!off));
+try{localStorage.setItem('processes-side',off?'off':'on')}catch(e){}}
+b.addEventListener('click',function(){set(!document.body.classList.contains('side-off'))});
+var s=null;try{s=localStorage.getItem('processes-side')}catch(e){}if(s==='off')set(true)})();
+document.addEventListener('click',function(e){var t=e.target.closest('[data-zoom]');if(!t)return;
+var svg=t.closest('.figwrap').querySelector('svg.flow'),vb=svg.viewBox.baseVal,box=svg.parentNode.clientWidth,a=t.dataset.zoom;
+var w=svg.getBoundingClientRect().width;
+if(a==='full'){svg.classList.remove('zoomed');svg.style.width='';return}
+if(a==='fit'){w=Math.min(box,vb.width*(window.innerHeight-150)/vb.height)}
+else{w=w*(a==='in'?1.25:0.8)}
+w=Math.max(240,Math.min(w,vb.width*3));svg.classList.add('zoomed');svg.style.width=Math.round(w)+'px';
+if(a==='fit')svg.closest('.figwrap').scrollIntoView({block:'start'})});
 """
 
 
@@ -1281,7 +1313,7 @@ def sidebar() -> str:
     key.append('<div>Dashed ring: happens only in some cases.</div>')
     key.append('<div><svg width="28" height="20" aria-hidden="true"><rect x="1" y="1" width="26" height="18" rx="4" '
                'style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 3"/></svg>Upgrade view: new or changed step</div></div>')
-    return f'<nav class="side" aria-label="Processes">{"".join(out)}{"".join(key)}</nav>'
+    return f'<nav class="side" id="side" aria-label="Processes">{"".join(out)}{"".join(key)}</nav>'
 
 
 def page(inv: dict) -> str:
@@ -1294,7 +1326,7 @@ def page(inv: dict) -> str:
                   f'<input type="radio" name="view-{s}" id="{s}-up" value="up"><label for="{s}-up">Upgrade</label></div>')
         body.append(f'<section class="flow-sec" data-view="cur"><h2 id="{s}">{esc(f["title"])}</h2>{switch}'
                     f'<div class="pane cur" id="{s}-cur-pane"><p class="lede">{esc(f["lede"])}</p>'
-                    f'<div class="fig">{svg_flow(f)}</div><ul class="notes">{notes}</ul>'
+                    f'{fig(svg_flow(f))}<ul class="notes">{notes}</ul>'
                     f'<p class="src">From the code: {esc(f["source"])}</p></div>'
                     f'<div class="pane up" id="{s}-up-pane">{upgrade_pane(f)}</div></section>')
         if f["slug"] == "task-lifecycle":
@@ -1312,7 +1344,7 @@ def page(inv: dict) -> str:
 <meta name="description" content="How work moves through Datacore: tasks, the morning, the ledger (admit, fold, seal, corrections, daily checks), sync, scheduled jobs, cadences, repairs, and where processes overlap.">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Literata:ital,wght@0,300;0,400;1,300;1,400&family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
 <style>{CSS}</style></head><body>
-<header class="top"><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Upgrade</button></span></header>
+<header class="top"><button type="button" id="side-toggle" class="sidebtn" aria-controls="side" aria-expanded="true" title="Hide or show the list of processes">☰ List</button><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Upgrade</button></span></header>
 <div class="wrap">{sidebar()}
 <main><h1>Processes and workflows</h1>
 <p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has a Current / Upgrade switch: Upgrade shows a proposal, with what each change needs, and nothing in it is running.</p>
