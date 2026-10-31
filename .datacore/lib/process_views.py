@@ -28,6 +28,8 @@ from pathlib import Path
 
 import yaml
 
+from process_upgrades import UPGRADES
+
 ROOT = Path(__file__).resolve().parents[2]
 ARCH = ROOT / "2-datacore" / "1-tracks" / "dev" / "architecture"
 
@@ -1006,6 +1008,8 @@ def svg_flow(f: dict) -> str:
             x1 -= x1 % 4
             y1 = ty(ra) + BOX_H
             x2, y2 = cx(lb), ty(rb) - 4
+            if n > 1 and la == lb:   # a fanned handoff into the box straight below drops straight, label beside it
+                x2 = x1
             # fanned handoffs cross at different heights, so two lines never share a run
             ym = y1 + (y2 - y1) // 2 + ((n - 1 - k) * 24 if n > 1 else 0)
             out.append(f'<path d="{_elbow(x1, y1, x2, y2, ym=ym)}" class="edge" marker-end="url(#ar-{f["slug"]})"/>')
@@ -1027,7 +1031,7 @@ def svg_flow(f: dict) -> str:
         sid, lane, row, name, sub, state, kind = st[:7]
         marks = st[7] if len(st) > 7 else ""
         x, y = cx(lane) - BOX_W // 2, ty(row)
-        cls = "box focal" if kind == "focal" else "box"
+        cls = {"focal": "box focal", "new": "box new"}.get(kind, "box")
         tip = f"{name} — {sub}" + "".join(f"\n{MARKS[c][1]}: {MARKS[c][2]}" for c in marks)
         out.append(f'<g class="step"><title>{esc(tip)}</title>'
                    f'<rect x="{x}" y="{y}" width="{BOX_W}" height="{BOX_H}" rx="6" class="paper"/>'
@@ -1066,6 +1070,51 @@ KIND_TEXT = {
     "contract-not-in-shared-manifest": ("Contract only in a host-local manifest", "Checked on that host, invisible here."),
     "cadence-not-in-shared-manifest": ("Venture cadence (declared in venture.yaml)", "Judged by cadence liveness, not a job contract."),
 }
+
+
+def upgrade_flow(f: dict) -> dict:
+    """The proposed version of a flow, in the same shape svg_flow draws (own slug, so its ids never clash)."""
+    up = UPGRADES[f["slug"]]
+    return {"slug": f["slug"] + "-up", "title": f["title"] + " (proposed)", "lede": up["summary"],
+            "lanes": up["lanes"], "steps": up["steps"], "edges": up["edges"]}
+
+
+NEED_CLASS = {"your decision": "dec", "DIP amendment": "dip", "code fix": "fix", "install": "ins"}
+
+
+def upgrade_pane(f: dict) -> str:
+    up = UPGRADES[f["slug"]]
+    head = '<p class="proposed">Proposed, not running</p>'
+    if up.get("keep"):
+        return f'{head}<p class="lede"><b>{esc(up["summary"])}</b> {esc(up["keep"])}</p>'
+    items = "".join(f'<li><span class="need {NEED_CLASS[n]}">{esc(n)}</span> {esc(w)}<br><span class="why">{esc(y)}</span></li>'
+                    for w, y, n in up["changes"])
+    return (f'{head}<p class="lede">{esc(up["summary"])}</p><div class="fig">{svg_flow(upgrade_flow(f))}</div>'
+            f'<h3 class="ch">What changes, and what each change needs</h3><ol class="changes">{items}</ol>')
+
+
+def upgrades_markdown() -> str:
+    """The proposals as a report, in page order (process_views.py --report)."""
+    out = ["# Process upgrades: proposals for every process (2026-10-31)", "",
+           "Owner, 2026-10-31: review the diagrams, suggest improvements in processes, and give each process a "
+           "Current / Upgrade toggle. Each proposal is drawn on the processes page "
+           "(`1-tracks/dev/architecture/processes.html`, switch to Upgrade). Nothing has been changed in the running fleet.", "",
+           "Each change names what it needs: **your decision**, a **DIP amendment** for you to ratify, a **code fix**, "
+           "or an **install** (the code exists; nothing schedules or wires it).", ""]
+    group = None
+    for f in FLOWS:
+        if f["group"] != group:
+            group = f["group"]
+            out += [f"## {group}", ""]
+        up = UPGRADES[f["slug"]]
+        out += [f"### {f['title']}", "", up["summary"], ""]
+        if up.get("keep"):
+            out += [up["keep"], ""]
+            continue
+        for w, y, n in up["changes"]:
+            out.append(f"- **{n}**: {w} *Why:* {y}")
+        out.append("")
+    return "\n".join(out)
 
 
 def overlap_section(inv: dict) -> str:
@@ -1140,6 +1189,29 @@ ul.notes{max-width:96ch;padding-left:20px;font-size:16px}ul.notes li{margin:6px 
 svg.flow{max-width:100%;height:auto;display:block}
 svg .paper{fill:var(--paper)} svg .box{fill:var(--paper);stroke:var(--ink);stroke-width:1.2}
 svg .box.focal{fill:var(--accent-tint);stroke:var(--accent);stroke-width:2}
+svg .box.new{stroke:var(--accent);stroke-width:2;stroke-dasharray:7 5}
+.switch{display:inline-flex;border:1px solid var(--rule-solid);border-radius:8px;overflow:hidden;margin:4px 0 14px}
+.switch input{position:absolute;opacity:0;pointer-events:none}
+.switch label{padding:6px 16px;font-size:15px;cursor:pointer;color:var(--muted)}
+.switch label+input+label{border-left:1px solid var(--rule-solid)}
+.switch input:checked+label{background:var(--accent-tint);color:var(--accent);font-weight:600}
+.switch input:focus-visible+label{outline:2px solid var(--accent);outline-offset:-2px}
+.pane.up{display:none}
+section.flow-sec[data-view="up"] .pane.cur{display:none} section.flow-sec[data-view="up"] .pane.up{display:block}
+section.flow-sec:has(input[value="up"]:checked) .pane.cur{display:none}
+section.flow-sec:has(input[value="up"]:checked) .pane.up{display:block}
+.proposed{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+color:var(--prov);border:1px dashed var(--prov);border-radius:4px;padding:2px 8px;margin:0 0 10px}
+h3.ch{font-size:18px;margin:18px 0 6px}
+ol.changes{max-width:96ch;padding-left:22px;font-size:16px}ol.changes li{margin:10px 0}
+ol.changes .why{color:var(--muted);font-size:15px}
+.need{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;
+border-radius:4px;border:1px solid currentColor;margin-right:6px;white-space:nowrap}
+.need.dec{color:var(--sig)} .need.dip{color:var(--prov)} .need.fix{color:var(--accent)} .need.ins{color:var(--soft)}
+header.top .all{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:13px;color:var(--soft)}
+header.top .all button{font:inherit;font-size:14px;color:var(--ink);background:none;border:1px solid var(--rule-solid);border-radius:6px;
+padding:4px 10px;cursor:pointer}
+header.top .all button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 svg .step:hover .box{stroke:var(--accent);stroke-width:2}
 svg .name{font-family:'Outfit',sans-serif;font-size:18px;font-weight:600;fill:var(--ink)}
 svg .sub{font-family:'JetBrains Mono',monospace;font-size:14px;fill:var(--muted)}
@@ -1172,6 +1244,13 @@ if(!('IntersectionObserver' in window))return;var cur=null;
 var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){if(cur)cur.classList.remove('on');
 cur=links[e.target.id];if(cur)cur.classList.add('on')}})},{rootMargin:'-64px 0px -70% 0px'});
 document.querySelectorAll('main h2[id]').forEach(function(h){io.observe(h)})})();
+(function(){var secs=document.querySelectorAll('section.flow-sec'),btns=document.querySelectorAll('[data-all]');
+function show(sec,v){sec.dataset.view=v;var r=sec.querySelector('input[value="'+v+'"]');if(r)r.checked=true}
+function all(v){secs.forEach(function(s){show(s,v)});btns.forEach(function(b){b.setAttribute('aria-pressed',b.dataset.all===v)});
+try{localStorage.setItem('processes-view',v)}catch(e){}}
+secs.forEach(function(s){s.querySelectorAll('.switch input').forEach(function(r){r.addEventListener('change',function(){show(s,r.value)})})});
+btns.forEach(function(b){b.addEventListener('click',function(){all(b.dataset.all)})});
+var saved=null;try{saved=localStorage.getItem('processes-view')}catch(e){}if(saved==='up')all('up')})();
 """
 
 
@@ -1199,7 +1278,9 @@ def sidebar() -> str:
                  "C": "your co-sign, only for side effects", "R": "provenance receipt, where the hook is on"}[letter]
         key.append(f'<div title="{esc(text)}">{_key_badge(letter, how)}<span>{esc(short)}'
                    f'{" <i>(optional)</i>" if how == "optional" else ""}</span></div>')
-    key.append('<div>Dashed ring: happens only in some cases.</div></div>')
+    key.append('<div>Dashed ring: happens only in some cases.</div>')
+    key.append('<div><svg width="28" height="20" aria-hidden="true"><rect x="1" y="1" width="26" height="18" rx="4" '
+               'style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 3"/></svg>Upgrade view: new or changed step</div></div>')
     return f'<nav class="side" aria-label="Processes">{"".join(out)}{"".join(key)}</nav>'
 
 
@@ -1207,9 +1288,15 @@ def page(inv: dict) -> str:
     body = []
     for f in FLOWS:
         notes = "".join(f"<li>{esc(n)}</li>" for n in f["notes"])
-        body.append(f'<h2 id="{f["slug"]}">{esc(f["title"])}</h2><p class="lede">{esc(f["lede"])}</p>'
+        s = f["slug"]
+        switch = (f'<div class="switch" role="radiogroup" aria-label="Current or proposed upgrade">'
+                  f'<input type="radio" name="view-{s}" id="{s}-cur" value="cur" checked><label for="{s}-cur">Current</label>'
+                  f'<input type="radio" name="view-{s}" id="{s}-up" value="up"><label for="{s}-up">Upgrade</label></div>')
+        body.append(f'<section class="flow-sec" data-view="cur"><h2 id="{s}">{esc(f["title"])}</h2>{switch}'
+                    f'<div class="pane cur" id="{s}-cur-pane"><p class="lede">{esc(f["lede"])}</p>'
                     f'<div class="fig">{svg_flow(f)}</div><ul class="notes">{notes}</ul>'
-                    f'<p class="src">From the code: {esc(f["source"])}</p>')
+                    f'<p class="src">From the code: {esc(f["source"])}</p></div>'
+                    f'<div class="pane up" id="{s}-up-pane">{upgrade_pane(f)}</div></section>')
         if f["slug"] == "task-lifecycle":
             rows = "".join(f"<tr><td><b>{a}</b></td><td><code>{esc(b)}</code></td><td>{esc(c)}</td><td>{esc(d)}</td></tr>"
                            for a, b, c, d in STATES)
@@ -1225,10 +1312,10 @@ def page(inv: dict) -> str:
 <meta name="description" content="How work moves through Datacore: tasks, the morning, the ledger (admit, fold, seal, corrections, daily checks), sync, scheduled jobs, cadences, repairs, and where processes overlap.">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Literata:ital,wght@0,300;0,400;1,300;1,400&family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
 <style>{CSS}</style></head><body>
-<header class="top"><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a></header>
+<header class="top"><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Upgrade</button></span></header>
 <div class="wrap">{sidebar()}
 <main><h1>Processes and workflows</h1>
-<p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text.</p>
+<p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has a Current / Upgrade switch: Upgrade shows a proposal, with what each change needs, and nothing in it is running.</p>
 {"".join(body)}
 </main></div><script>{JS}</script></body></html>"""
 
@@ -1238,10 +1325,14 @@ def main(argv=None) -> int:
     ap.add_argument("--inventory", default=str(ARCH / "processes.yaml"))
     ap.add_argument("--out", default=str(ARCH / "processes.html"))
     ap.add_argument("--open", action="store_true")
+    ap.add_argument("--report", help="also write the upgrade proposals as a markdown report to this path")
     a = ap.parse_args(argv)
     inv = yaml.safe_load(Path(a.inventory).read_text()) if Path(a.inventory).exists() else {}
     Path(a.out).write_text(page(inv))
     print(a.out)
+    if a.report:
+        Path(a.report).write_text(upgrades_markdown() + "\n")
+        print(a.report)
     if a.open:
         subprocess.run(["open", a.out], check=False)
     return 0

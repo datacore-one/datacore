@@ -47,3 +47,51 @@ def test_every_mark_code_is_known():
 def test_type_is_one_size_smaller():
     assert "svg .name{font-family:'Outfit',sans-serif;font-size:18px" in pv.CSS
     assert "svg .sub{font-family:'JetBrains Mono',monospace;font-size:14px" in pv.CSS
+
+
+# -- third round (owner, 2026-10-31): every process gets a Current / Upgrade switch -------
+
+NEEDS = {"your decision", "DIP amendment", "code fix", "install"}
+
+
+def test_every_flow_has_an_upgrade_entry():
+    for f in pv.FLOWS:
+        up = pv.UPGRADES.get(f["slug"])
+        assert up, f"{f['slug']}: no upgrade entry"
+        assert up.get("summary"), f["slug"]
+        if up.get("keep"):
+            continue
+        assert up["changes"], f["slug"]
+        for what, why, needs in up["changes"]:
+            assert what and why, f["slug"]
+            assert needs in NEEDS, (f["slug"], needs)
+        pv.svg_flow(pv.upgrade_flow(f))   # raises on long labels and unknown marks
+
+
+def test_upgrade_edges_go_down_and_cells_are_unique():
+    for f in pv.FLOWS:
+        if pv.UPGRADES[f["slug"]].get("keep"):
+            continue
+        u = pv.upgrade_flow(f)
+        assert len(u["lanes"]) <= 4, u["slug"]
+        pos = {s[0]: (s[1], s[2]) for s in u["steps"]}
+        assert len(pos) == len(u["steps"]), u["slug"]
+        assert len({(s[1], s[2]) for s in u["steps"]}) == len(u["steps"]), u["slug"]
+        for a, b, _ in u["edges"]:
+            assert pos[b][1] > pos[a][1], (u["slug"], a, b)
+
+
+def test_page_has_a_switch_per_flow_and_one_for_the_page():
+    html = pv.page({})
+    for f in pv.FLOWS:
+        assert f'name="view-{f["slug"]}"' in html, f["slug"]
+        assert f'id="{f["slug"]}-up-pane"' in html, f["slug"]
+    assert 'data-all="up"' in html and 'data-all="cur"' in html
+    assert html.count("Proposed, not running") >= len(pv.FLOWS)
+
+
+def test_no_duplicate_ids_on_the_page():
+    html = pv.page({})
+    ids = re.findall(r'\sid="([^"]+)"', html)
+    dup = {i for i in ids if ids.count(i) > 1}
+    assert not dup, sorted(dup)
