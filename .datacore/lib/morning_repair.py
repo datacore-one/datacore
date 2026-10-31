@@ -498,6 +498,43 @@ def _page_owner(f: dict, day: str) -> bool:
     return _dead_lettered(f["item"]) or _in_repair_since_yesterday(f["id"], day)
 
 
+def _close_repaired(repaired: list[dict]) -> int:
+    """Dismiss live ledger items for findings the 03:30 re-check no longer reports.
+
+    Each repair item's body says "Done means the sweep's 03:30 re-check no longer
+    finds it." This is the code that acts on that: when recheck() confirms a
+    finding is gone, the live item closes as `kind=done`. A ledger read/write
+    failure must not break the fragment or the alert -- swallowed and counted.
+    Returns the number of items closed.
+    """
+    to_close = [f for f in repaired if f.get("item")]
+    if not to_close:
+        return 0
+    try:
+        from actor_identity import this_actor
+        from ledger.fold import fold
+        from ledger.log import EventLog, read_events
+        from jobs.autofix import _space
+        space = _space(ROOT)
+        state = fold(read_events(space))
+        log = None
+        n = 0
+        for f in to_close:
+            iid = f["item"]
+            item = state.items.get(iid)
+            if item is None or item.status == "dismissed":
+                continue
+            if log is None:
+                log = EventLog(space, this_actor())
+            log.append("item.dismiss", {
+                "id": iid, "kind": "done",
+                "reason": f"03:30 re-check: {f['id']} no longer reported"})
+            n += 1
+        return n
+    except Exception:  # noqa: BLE001 -- ledger errors must not break the fragment
+        return 0
+
+
 def recheck() -> int:
     day = datetime.now(timezone.utc).date().isoformat()
     try:
@@ -517,6 +554,7 @@ def recheck() -> int:
                for f in swept if f["id"] not in now and CHECK_OF.get(f.get("kind")) in now]
     repaired = [f for f in swept if f["id"] not in now and f["kind"] != "self"
                 and f["id"] not in {u["id"] for u in unknown}]
+    _close_repaired(repaired)
     failing = [{**f, "evidence_now": now[f["id"]].get("evidence", "")} for f in swept if f["id"] in now]
     failing += unknown
     failing += [f for f in swept if f["kind"] == "self"]
