@@ -274,6 +274,28 @@ if [ -n "$_gen" ]; then
   fail=1
 fi
 
+# Phase F (one way in): in a space whose .datacore/config.yaml sets
+# `org_lists: readonly`, the org lists are read-only views of the ledger and are
+# gitignored, so no staged diff shows a hand edit to them. Ask the editor hook
+# instead: it lists the adapter commands a hand edit stands for, or refuses it
+# (saving the edit to a file it names). Nothing is applied here.
+if [ -n "$repo_root" ] && grep -qs '^  org_lists: readonly' "$repo_root/.datacore/config.yaml"; then
+  _ro=""
+  for _c in "$HOME/Data/.datacore/lib/org_readonly.py" \
+            "$repo_root/../.datacore/lib/org_readonly.py"; do
+    [ -f "$_c" ] && { _ro="$_c"; break; }
+  done
+  if [ -n "$_ro" ]; then
+    _ro_out=$(python3 "$_ro" hook --space "$repo_root" --quiet 2>&1)
+    if [ $? -ne 0 ]; then
+      printf "\n\033[1;31mREAD-ONLY LIST EDITED BY HAND\033[0m — the ledger has not got this change:\n"
+      printf '%s\n' "$_ro_out" | sed 's/^/  /'
+      printf "Turn it into ledger events with: python3 %s hook --space %s --apply\n" "$_ro" "$repo_root"
+      fail=1
+    fi
+  fi
+fi
+
 [ "$fail" = "1" ] && { printf "\nTo bypass (emergency): git commit --no-verify\n"; exit 1; }
 
 exit 0

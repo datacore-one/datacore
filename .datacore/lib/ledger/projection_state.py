@@ -223,15 +223,22 @@ def guard_projection(space, current_text, proposed_text):
         raise ProjectionConflict('authored changes are not represented in the ledger; ingest first')
 
 
-def sync_generated(space, state, actor, dry_run=False):
-    """Plan all changes before emitting; stale unchanged projection fields are inert."""
+def sync_generated(space, state, actor, dry_run=False, current_text=None):
+    """Plan all changes before emitting; stale unchanged projection fields are inert.
+
+    `current_text` is the list to reconcile; by default the file on disk. The
+    read-only lists of phase F (org_readonly) pass the ledger's own rendering
+    with one adapter edit applied, so a hand edit in the file never rides along.
+    """
     from .log import EventLog, read_events
     from .fold import fold
     expected = _reviewed.get()
     if expected is not None and expected.get(str(Path(space).resolve())) != state.state_root():
         raise ProjectionConflict('reviewed ledger state changed; rebuild the decision board')
     target = Path(space) / 'org/next_actions.org'
-    current_text = target.read_text(encoding='utf-8')
+    from_file = current_text is None
+    if from_file:
+        current_text = target.read_text(encoding='utf-8')
     proposed = project(state, space=Path(space).name, as_of=time.time()).text
     # Compare against what would actually be WRITTEN, not the intermediate.
     # project() emits no in-buffer settings; ledger_project_org._with_org_header
@@ -300,7 +307,10 @@ def sync_generated(space, state, actor, dry_run=False):
             _emit('item.dismiss', conditional_payload(current_item, {
                 'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True,
                 version=2 if strict else 1))
-        if appended:
+        if appended and from_file:
+            # Only the file can become the common ancestor. A caller's text
+            # (org_readonly's scratch) is not on disk; the projection that
+            # follows moves the base when it writes.
             _advance_base(space, current_text, appended)
     return {'dismissed': len(dismissals), 'updated': len(updates)}
 
