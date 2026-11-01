@@ -15,7 +15,7 @@ the newest seal must be:
   * verified over admitted events (`ledger.hub.seal_report`, the same judgement
     as `ledger_seal.py status`).
 
-    ledger_seal_age_check.py [--root ~/Data] [--max-age-s 3600]
+    ledger_seal_age_check.py [--root ~/Data] [--max-age-s 3600 | --no-age]
 
 Output: one indented line per hub space, then one verdict line, LAST:
 `OK <n> hub space(s) ...` only when every hub space passes, else `FAIL ...`, or
@@ -42,9 +42,11 @@ from ledger import hub as hubmod  # noqa: E402
 MAX_AGE_S = 3600
 
 
-def check_space(space_dir, *, now_ms: int | None = None, max_age_s: int = MAX_AGE_S, expected: str | None = None,
-                registry_path=None) -> dict:
-    """{space, ok, detail, sealer, age_s} for one hub space."""
+def check_space(space_dir, *, now_ms: int | None = None, max_age_s: int | None = MAX_AGE_S,
+                expected: str | None = None, registry_path=None) -> dict:
+    """{space, ok, detail, sealer, age_s} for one hub space. `max_age_s=None`
+    judges the seal alone (sequencer, verifies) with no age limit: the daily
+    ledger check's seal step (ledger_daily.sh); the hourly contract judges age."""
     space = Path(space_dir)
     now = int(time.time() * 1000) if now_ms is None else now_ms
     out = {"space": space.name, "ok": False, "sealer": None, "age_s": None}
@@ -69,14 +71,14 @@ def check_space(space_dir, *, now_ms: int | None = None, max_age_s: int = MAX_AG
                         "as ledger-hub.json names")
     if age_s is None:
         problems.append(f"the newest seal's time cannot be read ({seal.hlc!r})")
-    elif age_s >= max_age_s and r.get("current") is not True:
+    elif max_age_s is not None and age_s >= max_age_s and r.get("current") is not True:
         problems.append(f"the newest seal is {age_s // 60} min old (limit {max_age_s // 60} min) and admitted "
                         "events wait unsealed: the hub has stopped sealing")
     if r["ok"] is not True:
         problems.append(f"the newest seal does not verify: {r['detail']}")
     if problems:
         return {**out, "detail": "; ".join(problems)}
-    quiet = "" if age_s < max_age_s else ", nothing admitted since (the hub writes no seal when nothing changed)"
+    quiet = "" if max_age_s is None or age_s < max_age_s else ", nothing admitted since (the hub writes no seal when nothing changed)"
     return {**out, "ok": True, "detail": f"sealed {age_s // 60} min ago by {seal.sequencer}, verifies{quiet}"}
 
 
@@ -95,6 +97,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", type=Path, default=Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data"))))
     ap.add_argument("--max-age-s", type=int, default=MAX_AGE_S)
+    ap.add_argument("--no-age", action="store_true",
+                    help="judge only that each newest seal is the sequencer's and verifies (the daily ledger check)")
     ap.add_argument("--expect", default=None, help="the sealer every space must name (default: its ledger-hub.json grantor)")
     ap.add_argument("--registry", type=Path, default=None, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
@@ -103,7 +107,8 @@ def main(argv=None) -> int:
         print(f"NONE no space under {a.root} has a hub -- nothing to judge, not a pass")
         return 2
     now = int(time.time() * 1000)
-    results = [check_space(s, now_ms=now, max_age_s=a.max_age_s, expected=a.expect, registry_path=a.registry)
+    max_age = None if a.no_age else a.max_age_s
+    results = [check_space(s, now_ms=now, max_age_s=max_age, expected=a.expect, registry_path=a.registry)
                for s in spaces]
     for r in results:
         print(f"  {'ok  ' if r['ok'] else 'FAIL'} {r['space']:<14} {r['detail']}")
@@ -111,7 +116,8 @@ def main(argv=None) -> int:
     if bad:
         print(f"FAIL {len(bad)} of {len(results)} hub space(s) not freshly sealed by their grantor: {', '.join(bad)}")
         return 1
-    print(f"OK {len(results)} hub space(s): newest seal under {a.max_age_s // 60} min, by the grantor, verifies")
+    age = "" if max_age is None else f"newest seal under {max_age // 60} min, "
+    print(f"OK {len(results)} hub space(s): {age}by the grantor, verifies")
     return 0
 
 

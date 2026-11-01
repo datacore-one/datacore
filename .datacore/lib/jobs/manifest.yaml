@@ -621,6 +621,13 @@ jobs:
         check: regex
         arg: "^OK "
         max_age_hours: 26
+      # The seal step (plan 2026-10-31, phase H): every hub space's newest seal
+      # is the sequencer's and recomputes from the events (no age limit here;
+      # box-ledger-seal-age judges age hourly). NONE is never a pass.
+      - path: "~/.datacore/state/ledger-seal.log"
+        check: last_line_regex
+        arg: "^OK \\d+ hub space"
+        max_age_hours: 26
 
   # THE HUB KEEPS SEALING (plan 2026-10-31, phase D). The hub (datacored in
   # Winston's pod) seals every hub space every 15 minutes; until this contract
