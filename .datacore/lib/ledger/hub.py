@@ -830,6 +830,11 @@ def authoritative_state(space_dir, events=None, *, registry_path=None, policy=No
     events, verified with the same inputs; an unverified seal raises
     `ValueError`, like `seal.settled_events`."""
     from .fold import fold
+    if events is None and not settled:
+        # The live state folds task events only (plan phase C): telemetry has
+        # no effect on it. A settled read keeps every event for the seal check.
+        from .log import read_task_events
+        events = read_task_events(Path(space_dir))
     admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
                                           now_ms=now_ms)
     if not settled:

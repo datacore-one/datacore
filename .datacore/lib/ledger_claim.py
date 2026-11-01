@@ -52,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from briefing.actions import act  # noqa: E402
 from ledger.fold import fold  # noqa: E402
-from ledger.log import EventLog, read_events  # noqa: E402
+from ledger.log import EventLog, read_events, read_task_events  # noqa: E402
 from ledger.policy import guarded_append, PolicyError, approval_payload_hash
 from executors import get_executor  # noqa: E402
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
@@ -565,7 +565,7 @@ def main() -> int:
     space = args.space.resolve()
     from ledger.hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
     # The dead-letter and waiting scans below read the same admitted events (round 6).
-    events, _ = authoritative_events(space, read_events(space))
+    events, _ = authoritative_events(space, read_task_events(space))  # task fold: no telemetry (phase C)
     state = authoritative_state(space, events)
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 

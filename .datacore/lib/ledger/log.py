@@ -800,6 +800,16 @@ def _parse_prefix(raw: bytes) -> list[Event]:
     return events
 
 
+def read_task_events(space_dir: Path) -> list[Event]:
+    """`read_events` without the telemetry logs: what the task fold reads.
+
+    `fold()` ignores telemetry types, so the state is identical; the reader
+    just stops parsing them (plan phase C, owner 2026-10-31: 155k telemetry
+    lines against 26k task lines in one space). Readers that need telemetry
+    (job checker, presence, scoreboard) keep `read_events` (LED-8)."""
+    return _read_logs(space_dir, telemetry=False)
+
+
 def read_events(space_dir: Path) -> list[Event]:
     """Merge every writer's `*.jsonl` file under `space_dir` into one list,
     sorted by `hlc` (ascending). Returns `[]` if the events dir is missing
@@ -813,6 +823,10 @@ def read_events(space_dir: Path) -> list[Event]:
     policy for the WHOLE space (LED-7, audit A#15). Nothing is repaired: the
     damage stays for verify_chain to report and an operator to address.
     """
+    return _read_logs(space_dir, telemetry=True)
+
+
+def _read_logs(space_dir: Path, *, telemetry: bool) -> list[Event]:
     # A hub space this host's code does not support is refused, never mis-read
     # (DIP-0034 amendment I; audit finding 17).
     from .hub_admission import check_space_protocol
@@ -822,7 +836,7 @@ def read_events(space_dir: Path) -> list[Event]:
     events: list[Event] = []
     # Task logs, then the telemetry logs folded in at read time (LED-8).
     paths = [*(sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []),
-             *(sorted(telemetry_dir.glob("*.jsonl")) if telemetry_dir.is_dir() else [])]
+             *(sorted(telemetry_dir.glob("*.jsonl")) if telemetry and telemetry_dir.is_dir() else [])]
     for path in paths:
         raw = path.read_bytes()
         try:

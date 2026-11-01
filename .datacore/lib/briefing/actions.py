@@ -56,7 +56,7 @@ from pathlib import Path
 
 from ledger.events import Event
 from ledger.fold import fold
-from ledger.log import EventLog, read_events
+from ledger.log import EventLog, read_events, read_task_events
 from ledger.policy import Policy, PolicyError, guarded_append
 from file_utils import file_lock
 
@@ -118,7 +118,7 @@ def materialize(
     """Turn `items` (each `{"text": str, "effects": [...]?}`) into ledger
     `item.create` events, one per item, skipping anything already known.
 
-    Folds `read_events(space_dir)` exactly ONCE, up front -- not once per
+    Folds `read_task_events(space_dir)` exactly ONCE, up front -- not once per
     item -- so the whole call sees one consistent snapshot of existing
     item ids. For each item, in order:
 
@@ -157,7 +157,7 @@ def materialize(
 
 def _materialize_locked(items, space_dir, actor, policy) -> MaterializeResult:
     from ledger.hub import authoritative_events  # hub spaces: admission + policy (Codex re-audit, finding 2)
-    events, fold_inputs = authoritative_events(space_dir)
+    events, fold_inputs = authoritative_events(space_dir, read_task_events(space_dir))
     state = fold(events, **fold_inputs)
     seen_ids: set[str] = set(state.items.keys())
 
