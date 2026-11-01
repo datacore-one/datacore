@@ -88,6 +88,7 @@ def manifest_processes(manifest: Path = MANIFEST) -> list[dict]:
             "trigger": _trigger(j),
             "entrypoints": entrypoints(j.get("cmd", "")),
             "writes": sorted({a["path"] for a in j.get("artifacts") or [] if a.get("path")}),
+            "commands": sorted({c for c in [program(j.get("cmd", ""))] if c}),
             "checked_by": f"job_verify on {j.get('machine')}",
         })
     return out
@@ -114,14 +115,39 @@ def live_schedules(machines: list[tuple[str, bool]]) -> dict[str, list[str]]:
     return out
 
 
+def program(command: str) -> str:
+    """The program a command runs, for a command that names no .py/.sh script
+    (`git -C ~/Data pull`, `touch ~/x`, a systemd `ExecStart=/usr/bin/docker ...`):
+    its basename, after env assignments; "" for a comment or an assignment."""
+    line = (command or "").strip()
+    if not line or line.startswith("#"):
+        return ""
+    if line.startswith("ExecStart="):
+        line = line[len("ExecStart="):].lstrip("-@:+!")
+    elif re.match(r"[A-Za-z_][A-Za-z0-9_]*=", line):
+        return ""
+    else:
+        parts = line.split(None, 1 if line.startswith("@") else 5)
+        if len(parts) == 6 and all(re.fullmatch(r"[0-9*/,A-Za-z-]+", f) for f in parts[:5]):
+            line = parts[5]
+        elif line.startswith("@") and len(parts) == 2:
+            line = parts[1]
+    words = [w for w in line.split() if not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", w) and w != "env"]
+    return Path(words[0]).name if words else ""
+
+
 def identity(line: str) -> str:
-    """What one scheduled line runs: its manifest job tag, else its script plus first argument."""
+    """What one scheduled line runs: its manifest job tag, else its script plus
+    first argument, else `cmd:<program>` for a line that runs no script -- such
+    a line was dropped here before, so nothing could flag it (plan 2026-10-31,
+    phase H: the scan flags any scheduled line that is not in the manifest)."""
     tag = _TAG.search(line)
     if tag:
         return "job:" + tag.group(1)
     eps = entrypoints(line)
     if not eps:
-        return ""
+        prog = program(line)
+        return f"cmd:{prog}" if prog else ""
     ep = eps[0]
     after = line.split(ep, 1)[1].split(">")[0].split()
     arg = next((a for a in after if not a.startswith(("-", "$", "~", "/", "2", "&", "|"))), "")
@@ -145,7 +171,7 @@ def overlaps(procs: list[dict], live: dict[str, list[str]]) -> list[dict]:
     where = defaultdict(set)
     for label, ids in live.items():
         for i in ids:
-            if i.startswith("("):
+            if i.startswith(("(", "cmd:")):   # a bare program name (git, touch) is too coarse to call overlap
                 continue
             ep = i.split()[0] if not i.startswith("job:") else (names.get(i[4:], {}).get("entrypoints") or [i])[0]
             if ep in PER_MACHINE or i[4:] in PER_MACHINE_TAGS or i.endswith("job-verify-hourly"):
@@ -159,6 +185,7 @@ def overlaps(procs: list[dict], live: dict[str, list[str]]) -> list[dict]:
     for p in procs:
         declared[p["machine"]].update(p["entrypoints"])
         declared[p["machine"]].add("job:" + p["name"])
+        declared[p["machine"]].update("cmd:" + c for c in p.get("commands") or [])
     alias = {"box host": "box"}
     for label, ids in sorted(live.items()):
         m = alias.get(label, label)
@@ -172,6 +199,10 @@ def overlaps(procs: list[dict], live: dict[str, list[str]]) -> list[dict]:
                 if i not in mine and i[4:] not in PER_MACHINE_TAGS and "job-verify" not in i:
                     kind = "cadence-not-in-shared-manifest" if i.startswith("job:cadence-") else "contract-not-in-shared-manifest"
                     flags.append({"kind": kind, "what": i[4:], "by": [label]})
+                continue
+            if i.startswith("cmd:"):
+                if i not in mine:
+                    flags.append({"kind": "no-contract", "what": i, "by": [label]})
                 continue
             if i.split()[0] in PER_MACHINE or i.split()[0] in _WRAPPERS:
                 continue
