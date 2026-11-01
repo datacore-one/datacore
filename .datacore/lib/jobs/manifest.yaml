@@ -622,6 +622,26 @@ jobs:
         arg: "^OK "
         max_age_hours: 26
 
+  # THE HUB KEEPS SEALING (plan 2026-10-31, phase D). The hub (datacored in
+  # Winston's pod) seals every hub space every 15 minutes; until this contract
+  # nothing watched that it kept running. Every hub space's newest seal must be
+  # under one hour old, made by the grantor its ledger-hub.json names (Winston)
+  # and verify over admitted events -- ledger.hub.seal_report, the judgement
+  # `ledger_seal.py status` prints. The last line is OK only when every hub
+  # space passes; NONE (no hub space found) is never a pass. Not delegated:
+  # a stopped hub is restarted or redeployed by the owner (deploys are his).
+  - name: box-ledger-seal-age
+    machine: box
+    schedule: "50 * * * *"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/ledger-seal-age.log -- python3 ~/Data/.datacore/lib/ledger_seal_age_check.py"
+    on_fail: telegram
+    delegate: false
+    artifacts:
+      - path: "~/.datacore/state/ledger-seal-age.log"
+        check: last_line_regex
+        arg: "^OK \\d+ hub space"
+        max_age_hours: 2
+
   # Agent registry integrity. registry_gc.py existed and was never scheduled --
   # capability with no runner. Contracted on "duplicate keys (0)", an
   # unambiguous corruption signal that is TRUE today, rather than on

@@ -859,13 +859,32 @@ def seal_status(space_dir, events=None, *, registry_path=None, policy=None,
     and the grantor as the only sealer (Codex round 4: `ledger_seal status`
     verified raw events and printed ok over an unsigned, rehashed creation).
     A space without a hub verifies exactly as before."""
-    from .seal import as_sequencer, verify_seal
+    r = seal_report(space_dir, events, registry_path=registry_path, policy=policy, now_ms=now_ms)
+    return r["ok"], r["detail"]
+
+
+def seal_report(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None) -> dict:
+    """`seal_status` with what it judged: {ok, detail, sealer, seal}. `sealer`
+    is the active grantor whose seals count (None without a hub); `seal` is its
+    newest seal over admitted events (`ledger.seal.Seal`, None if it never
+    sealed). `current`: the newest seal covers every admitted event (a seal
+    made now would be the hub's `unchanged`), None without one. For the hub's
+    seal-age contract (plan phase D2)."""
+    from .seal import _event_set_hash, as_sequencer, latest_seal, verify_seal
     admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
                                           now_ms=now_ms)
     if sealer is None:
-        return verify_seal(admitted)
+        ok, detail = verify_seal(admitted)
+        return {"ok": ok, "detail": detail, "sealer": None, "seal": None, "current": None}
     with as_sequencer(sealer):
-        return verify_seal(admitted, kw)
+        ok, detail = verify_seal(admitted, kw)
+        try:
+            seal = latest_seal(admitted)
+        except ValueError:
+            seal = None
+    current = None if seal is None else (
+        seal.event_set_hash == _event_set_hash([e for e in admitted if e.type != "ledger.seal"]))
+    return {"ok": ok, "detail": detail, "sealer": sealer, "seal": seal, "current": current}
 
 
 #: The incident a correction after a seal records: the original event should
@@ -2953,6 +2972,32 @@ class Hub:
         return {"hub": cfg.hub_id, "now_ms": now,
                 "agents": presence(events, now, agents=agents, registry_path=self.registry_path)}
 
+    def events(self, since=None) -> dict:
+        """The hub's ADMITTED task events after `since` (GET /ledger/hub/{space}/events;
+        plan 2026-10-31, phase D part 2): what `authoritative_events` gives on
+        this hub's own copy, task logs only (no telemetry, phase C).
+
+        `since`: {chain: highest seq the reader already holds}; only events
+        beyond it are sent. A reader re-admits what it gets exactly as it would
+        events that came by git (`task_events_hub_first`), so this answer adds
+        no trust, only speed. The admitted list is reused while no log changes,
+        for at most STATUS_CACHE_MS, like `status`."""
+        from .log import TELEMETRY_SUFFIX, read_task_events
+        cfg = self.config()
+        heads = _since_heads(since)
+        now = self.clock()
+        sig = self._logs_signature()
+        cached = getattr(self, "_events_cache", None)
+        if cached is None or cached[0] != sig or now - cached[1] > self.STATUS_CACHE_MS:
+            admitted, _ = authoritative_events(self.space_dir, read_task_events(self.space_dir),
+                                               registry_path=self.registry_path, policy=self.policy, now_ms=now)
+            rows = [((getattr(e, "log", None) or e.actor), e.seq, to_line(e)) for e in admitted]
+            cached = (sig, now, rows)
+            self._events_cache = cached
+        out = [{"chain": chain, "event": json.loads(line)} for chain, seq, line in cached[2]
+               if not chain.endswith(TELEMETRY_SUFFIX) and type(seq) is int and seq > heads.get(chain, -1)]
+        return {"hub": cfg.hub_id, "space": cfg.space_id, "actor": self.actor, "now_ms": now, "events": out}
+
     def _policy_status(self, events) -> dict:
         """Which policy is in force (the ledger's) and whether the policy this
         hub was started with differs from it: a policy file edited without the
@@ -3079,6 +3124,9 @@ class LocalTransport:
     def reconcile(self, req: dict) -> dict:
         return self._hub().reconcile(req)
 
+    def events(self, since=None) -> dict:
+        return self._hub().events(since)
+
 
 class HttpTransport:
     """datacored's `/ledger/hub` API (stdlib urllib). Not exercised against a
@@ -3132,6 +3180,125 @@ class HttpTransport:
 
     def reconcile(self, req: dict) -> dict:
         return self._call("POST", self.prefix + "/reconcile", req)
+
+    def events(self, since=None) -> dict:
+        """The hub's admitted task events after `since` ({chain: seq})."""
+        import urllib.parse
+        query = "?" + urllib.parse.urlencode({"since": json.dumps(_since_heads(since), sort_keys=True)})
+        return self._call("GET", self.prefix + "/events" + query)
+
+
+# ── reads: the hub first, the git copy when it does not answer (phase D2) ───
+
+#: How long a reader waits for the hub before it reads its git copy instead.
+READ_TIMEOUT_S = 3.0
+
+
+def _since_heads(since) -> dict:
+    """{chain: seq} from a reader's `since`, malformed entries dropped."""
+    if isinstance(since, str):
+        try:
+            since = json.loads(since)
+        except ValueError:
+            since = None
+    if not isinstance(since, dict):
+        return {}
+    return {str(k): v for k, v in since.items() if isinstance(k, str) and type(v) is int and v >= -1}
+
+
+def transport_from_env(space_dir, consumer: str, *, hub_url: str | None = None, token_id: str | None = None,
+                       timeout_s: float = READ_TIMEOUT_S):
+    """The hub transport a reader or writer of `space_dir` uses, or None.
+
+    None for a space without a hub, and when no hub is named: the URL and the
+    broker id of its bearer token come from the caller or from
+    DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID, the same pair `ledger.checkin`
+    and agent_presence_check use. The token is asked of the credentials broker
+    (`creds get <id> --consumer <consumer>`), never read from a file, never
+    printed; a broker that serves nothing is an unreachable hub (None)."""
+    if load_config(space_dir) is None:
+        return None
+    hub_url = hub_url or os.environ.get("DATACORE_HUB_URL")
+    token_id = token_id or os.environ.get("DATACORE_HUB_TOKEN_ID")
+    if not hub_url or not token_id:
+        return None
+    from .checkin import Offline, transport_for
+    t = transport_for(hub_url, token_id, Path(space_dir).name, consumer, timeout_s=timeout_s)
+    return None if isinstance(t, Offline) else t
+
+
+def task_events_hub_first(space_dir, transport=None) -> tuple[list, str]:
+    """(task events, "hub" | "git") for every reader that claims or folds.
+
+    The git copy's task events (`read_task_events`), extended by what the hub
+    has ADMITTED beyond them when the space has a hub and `transport` answers;
+    the git copy alone when it does not (HubUnavailable, a refusal, a timeout,
+    a malformed answer) or when no hub is named.
+
+    The result is RAW, exactly like `read_task_events`: the caller passes it to
+    `authoritative_events` / `authoritative_state`, which admit the hub's
+    events by the same rule as events that came by git (signatures, signing
+    domain, chains, grantor authority). A hub answer is never trusted more than
+    the git copy, and never replaces it: an event is taken only where it
+    extends a chain of this copy (next seq, linked to its head) or starts one
+    this copy does not have; anything else is dropped."""
+    from .log import TELEMETRY_SUFFIX, read_task_events
+    space = Path(space_dir)
+    local = read_task_events(space)
+    if transport is None or load_config(space) is None:
+        return local, "git"
+    tails: dict = {}
+    for e in local:
+        chain = getattr(e, "log", None) or e.actor
+        if type(e.seq) is int and e.seq > tails.get(chain, (-1, GENESIS))[0]:
+            tails[chain] = (e.seq, e.hash)
+    try:
+        answer = transport.events({c: t[0] for c, t in sorted(tails.items())})
+    except (HubError, ValueError, TypeError, OSError):
+        return local, "git"
+    rows = answer.get("events") if isinstance(answer, dict) else None
+    if not isinstance(rows, list):
+        return local, "git"
+    added, broken = [], set()
+    for row in rows:
+        chain = row.get("chain") if isinstance(row, dict) else None
+        raw = row.get("event") if isinstance(row, dict) else None
+        if not isinstance(chain, str) or chain.endswith(TELEMETRY_SUFFIX) or chain in broken \
+                or not isinstance(raw, dict):
+            continue
+        try:
+            e = Event(**raw)
+        except TypeError:
+            broken.add(chain)
+            continue
+        seq, head = tails.get(chain, (-1, GENESIS))
+        if type(e.seq) is not int or e.seq != seq + 1 or e.prev != head:
+            # Not the next link of this copy's chain: a gap, a rival at a seq
+            # this copy holds, or a fork. The git copy stands.
+            broken.add(chain)
+            continue
+        e.log = chain
+        added.append(e)
+        tails[chain] = (e.seq, e.hash)
+    return sorted([*local, *added], key=lambda ev: ev.hlc), "hub"
+
+
+def send_own_log(space_dir, actor: str, transport, *, keys_dir=None, registry_path=None, state_dir=None,
+                 clock=None) -> str:
+    """Send `actor`'s local log to the hub (whatever it does not yet hold):
+    "sent", "buffered" (unreachable: git carries it as before), "refused: <code>",
+    or "off" (no hub space or no hub named). Never raises for the hub's answer:
+    the local append already landed."""
+    if transport is None or load_config(space_dir) is None:
+        return "off"
+    try:
+        HubWriter(space_dir, actor, transport, keys_dir=keys_dir, registry_path=registry_path,
+                  state_dir=state_dir, clock=clock).replay()
+    except HubUnavailable:
+        return "buffered"
+    except HubRefused as exc:
+        return f"refused: {exc.code}"
+    return "sent"
 
 
 # ── the writer's side ───────────────────────────────────────────────────────

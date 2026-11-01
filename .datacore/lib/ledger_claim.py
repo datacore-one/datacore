@@ -541,7 +541,11 @@ def chain_follow_up(space: Path, actor: str, payload: dict) -> tuple[bool, str]:
     return True, f"CHAINED  {then['id']} -> {then['assignee']}"
 
 
-def main() -> int:
+#: `main(transport=...)` default: the hub DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID name.
+_FROM_ENV = object()
+
+
+def main(argv=None, *, transport=_FROM_ENV) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
     ap.add_argument("--actor", default=None,
@@ -549,7 +553,11 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=3)
     ap.add_argument("--execute", action="store_true",
                     help="actually claim and run; without it, plan only and write nothing")
-    args = ap.parse_args()
+    ap.add_argument("--hub-url", default=None,
+                    help="the hub to read first (default: $DATACORE_HUB_URL); its git copy when it does not answer")
+    ap.add_argument("--token-id", default=None,
+                    help="broker id of the hub's bearer token (default: $DATACORE_HUB_TOKEN_ID)")
+    args = ap.parse_args(argv)
     # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
     # here, naming identity.env and the registry, rather than dispatching as a
     # guessed hostname (the default used to be evaluated non-strictly even
@@ -564,8 +572,17 @@ def main() -> int:
 
     space = args.space.resolve()
     from ledger.hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
+    # THE HUB FIRST (plan 2026-10-31, phase D2): its admitted log when it
+    # answers -- a task delegated by day is claimable on the next tick with no
+    # git publish -- and this host's git copy when it does not. What the hub
+    # sends is admitted below by the same rule as the git copy; never trusted more.
+    from ledger.hub import task_events_hub_first, transport_from_env
+    if transport is _FROM_ENV:
+        transport = transport_from_env(space, "ledger-claim", hub_url=args.hub_url, token_id=args.token_id)
+    raw, source = task_events_hub_first(space, transport)  # task fold: no telemetry (phase C)
+    print("read from: " + ("hub (its admitted log)" if source == "hub" else "git copy"))
     # The dead-letter and waiting scans below read the same admitted events (round 6).
-    events, _ = authoritative_events(space, read_task_events(space))  # task fold: no telemetry (phase C)
+    events, _ = authoritative_events(space, raw)
     state = authoritative_state(space, events)
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 
