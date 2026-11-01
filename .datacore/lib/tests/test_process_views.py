@@ -156,3 +156,25 @@ def test_phase_b_is_done():
     from process_upgrades import PLAN_PROGRESS
     b = next(p for p in PLAN_PROGRESS if p[0] == "B")
     assert b[2] == "done" and "cfec20b5" in b[3]
+
+
+# ---- 2026-11-01: owner -- every process shows previous, current and desired ----
+
+def test_every_process_has_previous_current_and_desired():
+    html = pv.page(pv.load_inventory())
+    for f in pv.FLOWS:
+        s = f["slug"]
+        for v, label in (("prev", "Previous"), ("cur", "Current"), ("up", "Desired")):
+            assert f'id="{s}-{v}"' in html and f'for="{s}-{v}">{label}<' in html, (s, v)
+        assert f'id="{s}-prev-pane"' in html
+    for v in ("prev", "cur", "up"):
+        assert f'data-all="{v}"' in html
+
+
+def test_previous_is_frozen_before_the_rebuild_and_differs_where_the_rebuild_changed_it():
+    from process_previous import PREVIOUS, AS_OF
+    assert AS_OF == "2026-10-31"
+    assert "ledger-corrections" in PREVIOUS
+    assert any(s[4] == "ledger.void" for s in PREVIOUS["ledger-corrections"]["steps"])
+    html = pv.page(pv.load_inventory())
+    assert 'id="ledger-corrections-prev-pane"' in html and "Reverse it" in html

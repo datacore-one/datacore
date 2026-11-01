@@ -1115,9 +1115,25 @@ def rebuild_section() -> str:
             f'<ol class="phases">{rows}</ol></section>')
 
 
+def previous_pane(f: dict) -> str:
+    """How the process ran before the rebuild began (process_previous.py, frozen 2026-10-31)."""
+    from process_previous import PREVIOUS, AS_OF, COMMIT
+    old = PREVIOUS.get(f["slug"])
+    head = f'<p class="proposed prev">Before the rebuild · {AS_OF}</p>'
+    if old is None:
+        return f'{head}<p class="lede">Not drawn before the rebuild: this process was added to the page later.</p>'
+    if all(old[k] == f[k] for k in ("lanes", "steps", "edges")):
+        return (f'{head}<p class="lede">Unchanged: before the rebuild it ran as the Current drawing shows.</p>')
+    notes = "".join(f"<li>{esc(n)}</li>" for n in old["notes"])
+    flow = {"slug": f["slug"] + "-prev", "title": old["title"], "lede": old["lede"],
+            "lanes": old["lanes"], "steps": old["steps"], "edges": old["edges"]}
+    return (f'{head}<p class="lede">{esc(old["lede"])}</p>{fig(svg_flow(flow))}<ul class="notes">{notes}</ul>'
+            f'<p class="src">As drawn from the code on {AS_OF} (commit {COMMIT}): {esc(old["source"])}</p>')
+
+
 def upgrade_pane(f: dict) -> str:
     up = UPGRADES[f["slug"]]
-    head = '<p class="proposed">Proposed, not running</p>'
+    head = '<p class="proposed">Desired · Proposed, not running</p>'
     if up.get("keep"):
         return f'{head}<p class="lede"><b>{esc(up["summary"])}</b> {esc(up["keep"])}</p>'
     items = "".join(f'<li><span class="need {NEED_CLASS[c[2]]}">{esc(c[2])}</span>'
@@ -1131,8 +1147,8 @@ def upgrades_markdown() -> str:
     """The proposals as a report, in page order (process_views.py --report)."""
     out = ["# Process upgrades: proposals for every process (2026-10-31)", "",
            "Owner, 2026-10-31: review the diagrams, suggest improvements in processes, and give each process a "
-           "Current / Upgrade toggle. Each proposal is drawn on the processes page "
-           "(`1-tracks/dev/architecture/processes.html`, switch to Upgrade). Nothing has been changed in the running fleet.", "",
+           "Previous / Current / Desired switch. Each proposal is drawn on the processes page "
+           "(`1-tracks/dev/architecture/processes.html`, switch to Desired). Nothing has been changed in the running fleet.", "",
            "Each change names what it needs: **your decision**, a **DIP amendment** for you to ratify, a **code fix**, "
            "or an **install** (the code exists; nothing schedules or wires it).", ""]
     group = None
@@ -1240,7 +1256,12 @@ svg .box.new{stroke:var(--accent);stroke-width:2;stroke-dasharray:7 5}
 .switch label+input+label{border-left:1px solid var(--rule-solid)}
 .switch input:checked+label{background:var(--accent-tint);color:var(--accent);font-weight:600}
 .switch input:focus-visible+label{outline:2px solid var(--accent);outline-offset:-2px}
-.pane.up{display:none}
+.pane.up,.pane.prev{display:none}
+section.flow-sec[data-view="prev"] .pane.cur{display:none} section.flow-sec[data-view="prev"] .pane.prev{display:block}
+section.flow-sec:has(input[value="prev"]:checked) .pane.cur{display:none}
+section.flow-sec:has(input[value="prev"]:checked) .pane.prev{display:block}
+section.flow-sec:has(input[value="prev"]:checked) .pane.up{display:none}
+.proposed.prev{color:var(--muted);border-color:var(--muted)}
 section.flow-sec[data-view="up"] .pane.cur{display:none} section.flow-sec[data-view="up"] .pane.up{display:block}
 section.flow-sec:has(input[value="up"]:checked) .pane.cur{display:none}
 section.flow-sec:has(input[value="up"]:checked) .pane.up{display:block}
@@ -1300,7 +1321,7 @@ function all(v){secs.forEach(function(s){show(s,v)});btns.forEach(function(b){b.
 try{localStorage.setItem('processes-view',v)}catch(e){}}
 secs.forEach(function(s){s.querySelectorAll('.switch input').forEach(function(r){r.addEventListener('change',function(){show(s,r.value)})})});
 btns.forEach(function(b){b.addEventListener('click',function(){all(b.dataset.all)})});
-var saved=null;try{saved=localStorage.getItem('processes-view')}catch(e){}if(saved==='up')all('up')})();
+var saved=null;try{saved=localStorage.getItem('processes-view')}catch(e){}if(saved==='up'||saved==='prev')all(saved)})();
 (function(){var b=document.getElementById('side-toggle');if(!b)return;
 function set(off){document.body.classList.toggle('side-off',off);b.setAttribute('aria-expanded',String(!off));
 try{localStorage.setItem('processes-side',off?'off':'on')}catch(e){}}
@@ -1343,7 +1364,7 @@ def sidebar() -> str:
                    f'{" <i>(optional)</i>" if how == "optional" else ""}</span></div>')
     key.append('<div>Dashed ring: happens only in some cases.</div>')
     key.append('<div><svg width="28" height="20" aria-hidden="true"><rect x="1" y="1" width="26" height="18" rx="4" '
-               'style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 3"/></svg>Upgrade view: new or changed step</div></div>')
+               'style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 3"/></svg>Desired view: new or changed step</div></div>')
     return f'<nav class="side" id="side" aria-label="Processes">{"".join(out)}{"".join(key)}</nav>'
 
 
@@ -1352,13 +1373,15 @@ def page(inv: dict) -> str:
     for f in FLOWS:
         notes = "".join(f"<li>{esc(n)}</li>" for n in f["notes"])
         s = f["slug"]
-        switch = (f'<div class="switch" role="radiogroup" aria-label="Current or proposed upgrade">'
+        switch = (f'<div class="switch" role="radiogroup" aria-label="Previous, current or desired flow">'
+                  f'<input type="radio" name="view-{s}" id="{s}-prev" value="prev"><label for="{s}-prev">Previous</label>'
                   f'<input type="radio" name="view-{s}" id="{s}-cur" value="cur" checked><label for="{s}-cur">Current</label>'
-                  f'<input type="radio" name="view-{s}" id="{s}-up" value="up"><label for="{s}-up">Upgrade</label></div>')
+                  f'<input type="radio" name="view-{s}" id="{s}-up" value="up"><label for="{s}-up">Desired</label></div>')
         body.append(f'<section class="flow-sec" data-view="cur"><h2 id="{s}">{esc(f["title"])}</h2>{switch}'
                     f'<div class="pane cur" id="{s}-cur-pane"><p class="lede">{esc(f["lede"])}</p>'
                     f'{fig(svg_flow(f))}<ul class="notes">{notes}</ul>'
                     f'<p class="src">From the code: {esc(f["source"])}</p></div>'
+                    f'<div class="pane prev" id="{s}-prev-pane">{previous_pane(f)}</div>'
                     f'<div class="pane up" id="{s}-up-pane">{upgrade_pane(f)}</div></section>')
         if f["slug"] == "task-lifecycle":
             rows = "".join(f"<tr><td><b>{a}</b></td><td><code>{esc(b)}</code></td><td>{esc(c)}</td><td>{esc(d)}</td></tr>"
@@ -1375,10 +1398,10 @@ def page(inv: dict) -> str:
 <meta name="description" content="How work moves through Datacore: tasks, the morning, the ledger (admit, fold, seal, corrections, daily checks), sync, scheduled jobs, cadences, repairs, and where processes overlap.">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Literata:ital,wght@0,300;0,400;1,300;1,400&family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
 <style>{CSS}</style></head><body>
-<header class="top"><button type="button" id="side-toggle" class="sidebtn" aria-controls="side" aria-expanded="true" title="Hide or show the list of processes">☰ List</button><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Upgrade</button></span></header>
+<header class="top"><button type="button" id="side-toggle" class="sidebtn" aria-controls="side" aria-expanded="true" title="Hide or show the list of processes">☰ List</button><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="prev" aria-pressed="false">Previous</button><button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Desired</button></span></header>
 <div class="wrap">{sidebar()}
 <main><h1>Processes and workflows</h1>
-<p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has a Current / Upgrade switch: Upgrade shows a proposal, with what each change needs, and nothing in it is running.</p>
+<p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has three views: Previous is how it ran before the rebuild began on 31 October, Current is how it runs now, and Desired is the target, with what each change needs and what has already happened to it.</p>
 {rebuild_section()}
 {"".join(body)}
 </main></div><script>{JS}</script></body></html>"""
