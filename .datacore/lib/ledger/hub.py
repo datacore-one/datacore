@@ -838,7 +838,7 @@ def authoritative_state(space_dir, events=None, *, registry_path=None, policy=No
     admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
                                           now_ms=now_ms)
     if not settled:
-        return fold(admitted, **kw)
+        return fold(live_events(admitted, _grantors_of(kw)) if sealer is not None else admitted, **kw)
     from .seal import _covered_events, as_sequencer, latest_seal, settled as plain_settled, verify_seal
     if sealer is None:
         return plain_settled(admitted)
@@ -902,6 +902,72 @@ def incidents(space_dir, events=None, *, registry_path=None, policy=None) -> lis
     return sorted(out, key=lambda r: (r["original"], r["correction"]))
 
 
+def sealed_late(candidates, events, grantors) -> dict:
+    """{hash: why} for each candidate that would reorder a SEALED decision:
+    not covered by any grantor's latest seal, yet stamped at or before a
+    sealed event about the same item (see `Hub._sealed_late`). A pure
+    function of the events held, so the hub and every reader agree."""
+    from .seal import as_sequencer, latest_seal
+    seals = []
+    for g in sorted(grantors):
+        try:
+            with as_sequencer(g):
+                seal = latest_seal(events)
+        except ValueError:
+            continue
+        if seal is not None:
+            seals.append(seal)
+    if not seals:
+        return {}
+
+    def sealed_by_any(e):
+        return any(seal.includes(e) for seal in seals)
+
+    top: dict = {}
+    for e in events:
+        item = e.payload.get("id") if isinstance(e.payload, dict) else None
+        if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and sealed_by_any(e):
+            top[item] = max(top.get(item, ""), e.hlc)
+    out = {}
+    for e in candidates:
+        item = e.payload.get("id") if isinstance(e.payload, dict) else None
+        # AT or before (round-7 audit): an equal stamp ties with the sealed
+        # event and may fold before it, so it reorders a sealed decision too.
+        if (isinstance(item, str) and isinstance(e.hlc, str) and not sealed_by_any(e)
+                and item in top and e.hlc <= top[item]):
+            out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
+                           "a sealed decision is final")
+    return out
+
+
+def _grantors_of(kw: dict) -> frozenset:
+    """Every grantor the fold inputs name ({hub: {grantor: epoch}})."""
+    out: set = set()
+    for v in (kw.get("lease_grantors") or {}).values():
+        out |= set(v)
+    return frozenset(out)
+
+
+def live_events(admitted, grantors) -> list:
+    """The admitted events the LIVE state folds (round-8 GLM re-check, C2):
+    without an event that reached this copy by git after a seal and would
+    reorder what that seal decided. The grantor rejects it at its next seal
+    (`sealed_late`); until then every reader already treats it as having no
+    effect, so a confirmed claim never shows another owner, not even for one
+    seal period. One the grantor already rejected stays in (a no-op, as
+    recorded). The settled view and seals fold their own events, unchanged."""
+    grantors = frozenset(grantors)
+    if not grantors:
+        return list(admitted)
+    gev = [e for e in admitted if (getattr(e, "log", None) or e.actor) in grantors]
+    recorded = {h for (_, _, h) in rejected_proposals(gev)}
+    pending = [e for e in admitted if e.actor not in grantors and e.hash not in recorded]
+    late = sealed_late(pending, admitted, grantors)
+    if not late:
+        return list(admitted)
+    return [e for e in admitted if e.hash not in late]
+
+
 def predecessor_seal_marks(events, auth: Authority, grantor: str) -> tuple[dict, str | None]:
     """({log: seq} the predecessor's last seal covered, problem) for `grantor`'s epoch.
 
@@ -956,7 +1022,7 @@ def resolve_attempt(space_dir, item_id: str, attempt: str, *, by: str, reason: s
 
 def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None, registry_path=None,
             attest_stopped: bool = False, clock: Callable[[], int] | None = None,
-            never_served: bool = False) -> HubConfig:
+            never_served: bool = False, last_seal: str | None = None) -> HubConfig:
     """The owner's one command that moves lease granting to another hub (H).
 
     Explicit by design: nothing in this module calls it. It is recorded in the
@@ -968,6 +1034,13 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
         -- when it cannot be reached -- `attest_stopped=True`, the owner's
         statement that it is stopped, with the frontier the owner's copy
         holds. Neither: refused (`unfenced`); leases stay paused, on purpose;
+      * when only attested, the owner also names the old grantor's LAST SEAL
+        (`last_seal`: its hash, e.g. the seal a writer's receipt names, or
+        "none" when it never sealed), and this copy must hold exactly that
+        seal as its latest one. A copy cannot know whether it lost the old
+        hub's last seal, so without the owner's word it refuses
+        (`last_seal_unknown`, round-8 GLM re-check C1): a floor below what
+        the old hub sealed would let a rival reorder a confirmed claim;
       * the new grantor grants nothing before `not_before_ms`: the last expiry
         of any old-epoch lease within the frontier (and, when only attested,
         now plus one lease period) plus the clock uncertainty. A higher epoch
@@ -1028,6 +1101,26 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
                              "served (its start record or the leases held results name); restore it before "
                              "promoting, or the promotion would cut off what it sealed (if it truly never "
                              "served, say so: --never-served)")
+        # THE OLD HUB'S LAST SEAL IS THE OWNER'S WORD (round-8 GLM re-check,
+        # C1): a copy cut short after an earlier seal looks complete. The
+        # owner names the last seal; the copy must hold it as its latest.
+        held = [e for e in admitted if e.type == "ledger.seal"]
+        if last_seal is None and never_served and not held:
+            last_seal = "none"
+        if not isinstance(last_seal, str) or not last_seal:
+            raise HubRefused("last_seal_unknown", f"this copy cannot tell whether it holds {old.grantor}'s last "
+                             "seal; name it (`last_seal=` / --last-seal <hash>, the seal a writer's receipt "
+                             "names, or 'none' if it never sealed) and make sure this copy holds it")
+        if last_seal == "none":
+            if held:
+                raise HubRefused("last_seal_unknown", f"the owner says {old.grantor} never sealed, but this copy "
+                                 f"holds its seal {held[-1].hash}; name its last seal (--last-seal)")
+        elif not any(e.hash == last_seal for e in held):
+            raise HubRefused("behind_predecessor", f"this copy does not hold {old.grantor}'s last seal "
+                             f"{last_seal}; restore its log before promoting")
+        elif held[-1].hash != last_seal:
+            raise HubRefused("last_seal_unknown", f"this copy holds a later seal of {old.grantor} "
+                             f"({held[-1].hash}) than the one named ({last_seal}); check which seal was its last")
     upto = admitted[: admitted.index(last) + 1] if last is not None else []
     expiries = [e.payload["expires_ms"] for e in upto if e.type in ("item.lease", "item.lease.renew")
                 and type((e.payload or {}).get("expires_ms")) is int]
@@ -1366,7 +1459,9 @@ class Hub:
         self.config()                                   # a space that opted out has no hub state
         events, kw = authoritative_events(self.space_dir, registry_path=self.registry_path, policy=self.policy,
                                           now_ms=self.clock())
-        return events, fold(events, **kw)
+        # The live fold leaves out what would reorder a sealed decision
+        # (`live_events`, C2); the events stay whole for sealing and judging.
+        return events, fold(live_events(events, _grantors_of(kw)), **kw)
 
     def _fold_kwargs(self, cfg: HubConfig) -> dict:
         return self._authority(cfg).fold_inputs(self.policy)
@@ -1817,7 +1912,8 @@ class Hub:
                           "actor": bad.actor, "type": bad.type}}, after=floor).hlc
 
     # ── leases ─────────────────────────────────────────────────────────────
-    def _verify_request(self, req: dict, kind: str, cfg: HubConfig, *, replay: bool = False) -> str:
+    def _verify_request(self, req: dict, kind: str, cfg: HubConfig, *, replay: bool = False,
+                        answered_ms: int | None = None) -> str:
         from .keys import verify
         if not isinstance(req, dict) or req.get("kind") != kind:
             raise HubRefused("malformed", f"expected a signed {kind}")
@@ -1829,7 +1925,12 @@ class Hub:
         # A FRESH request is judged by the key the writer holds NOW (audit
         # finding 5): a key rotated out stays valid for the history it signed,
         # never for new requests.
-        if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=now):
+        # An EXACT retry of an answered request is judged by the key that was
+        # valid when the hub answered it (round-8 GLM re-check, C4): its bytes,
+        # signature included, are the ones verified then, so a rotation since
+        # never turns a stored answer into `bad_signature`.
+        at = answered_ms if replay and type(answered_ms) is int else now
+        if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=at):
             raise HubRefused("bad_signature", f"the {kind} is not signed with {actor!r}'s current key")
         # An EXACT retry of an answered request (same nonce, same digest) is
         # not a fresh request: it gets its stored answer however late it comes
@@ -2061,7 +2162,8 @@ class Hub:
         """Verify, then answer `req` exactly once: a retry gets the stored answer."""
         rec = self._answers.get(req.get("nonce")) if isinstance(req, dict) else None
         replay = rec is not None and rec.get("digest") == request_digest(req)
-        actor = self._verify_request(req, kind, cfg, replay=replay)
+        actor = self._verify_request(req, kind, cfg, replay=replay,
+                                     answered_ms=rec.get("ts_ms") if replay else None)
         cached = self._answered(req)
         if cached is not None:
             return cached
@@ -2167,7 +2269,14 @@ class Hub:
             # The day's budget (amendment G): a stop-on-recorded-spend
             # threshold, not a hard cap (see `pool_budget`).
             from .fold import pool_budget, pool_spent
-            cap = pool_budget(state, cfg.hub_id, self.actor, str(role))
+            # A HAND-OVER KEEPS THE BUDGET (round-8 GLM re-check, C3): the
+            # newest record of any grantor in the chain, the active one first,
+            # each predecessor's admitted only up to its fence.
+            cap = None
+            for g in [self.actor, *(ep.grantor for ep in reversed(self._authority(cfg).epochs))]:
+                cap = pool_budget(state, cfg.hub_id, g, str(role))
+                if cap is not None:
+                    break
             spent = pool_spent(state, str(role), now)
             if cap is not None and spent >= cap:
                 raise HubRefused("budget_reached", f"the {role!r} pool has spent {spent} of its {cap} "
@@ -2359,44 +2468,13 @@ class Hub:
         an earlier-stamped claim, delivered between the promotion and the new
         grantor's first seal, reorder (and fail) a claim its predecessor had
         sealed as confirmed. Sealed means final whoever sealed it."""
-        from .seal import as_sequencer, latest_seal
         try:
             cfg = self._writable(grant=True)
         except HubError:
             return {}                               # a standby rejects nothing
         if events is None:
             events, state = self._state()
-        grantors = sorted(self._authority(cfg).grantors | {self.actor})
-        seals = []
-        for g in grantors:
-            try:
-                with as_sequencer(g):
-                    seal = latest_seal(events)
-            except ValueError:
-                continue
-            if seal is not None:
-                seals.append(seal)
-        if not seals:
-            return {}
-
-        def sealed_by_any(e):
-            return any(seal.includes(e) for seal in seals)
-
-        top: dict = {}
-        for e in events:
-            item = e.payload.get("id") if isinstance(e.payload, dict) else None
-            if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and sealed_by_any(e):
-                top[item] = max(top.get(item, ""), e.hlc)
-        out = {}
-        for e in candidates:
-            item = e.payload.get("id") if isinstance(e.payload, dict) else None
-            # AT or before (round-7 audit): an equal stamp ties with the sealed
-            # event and may fold before it, so it reorders a sealed decision too.
-            if (isinstance(item, str) and isinstance(e.hlc, str) and not sealed_by_any(e)
-                    and item in top and e.hlc <= top[item]):
-                out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
-                               "a sealed decision is final")
-        return out
+        return sealed_late(candidates, events, self._authority(cfg).grantors | {self.actor})
 
     def _correction_problem(self, event: Event, events, cfg: HubConfig):
         """(code, why) when correction `event` may not take effect, else None --
@@ -3714,6 +3792,9 @@ def main(argv=None) -> int:
                     help="the old grantor cannot fence itself; the owner states it is stopped")
     pr.add_argument("--never-served", action="store_true",
                     help="with --attest-stopped: the old grantor never started serving this space")
+    pr.add_argument("--last-seal", default=None, metavar="HASH",
+                    help="with --attest-stopped: the old grantor's last seal (its hash, e.g. the seal a "
+                         "writer's receipt names, or 'none' if it never sealed); this copy must hold it")
     rd = sub.add_parser("ready", help="this writer's host speaks the hub protocol (run before `enable`)")
     rd.add_argument("space")
     rd.add_argument("--actor", required=True)
@@ -3748,7 +3829,7 @@ def main(argv=None) -> int:
         cfg = enable_pools(a.space, on=not a.off)
     elif a.cmd == "promote":
         cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped,
-                      never_served=a.never_served)
+                      never_served=a.never_served, last_seal=a.last_seal)
     elif a.cmd == "ready":
         print(json.dumps(declare_ready(a.space, a.actor), indent=2, sort_keys=True))
         return 0

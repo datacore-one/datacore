@@ -327,7 +327,7 @@ def test_r8e_an_attested_promotion_needs_the_predecessors_log(penv, lost):
     first = e.hub()
     own = e.writer("own", H.LocalTransport(first))
     event, _ = own.append("item.create", {"id": "t", "effects": ["publish"]})
-    first.seal()
+    last_seal = first.seal()["seal"]["hash"]
     first.close()
     actors = (T.GRANTOR, "own") if lost == "grantor-and-writer" else (T.GRANTOR,)
     saved = {}
@@ -341,8 +341,9 @@ def test_r8e_an_attested_promotion_needs_the_predecessors_log(penv, lost):
     assert exc.value.code == "behind_predecessor", exc.value
     for path, data in saved.items():
         path.write_bytes(data)
+    # The owner names the stopped hub's last seal (round-8 GLM re-check, C1).
     H.promote(e.hub_dir, "hubb", by=T.OWNER, reason="recover a stopped hub", attest_stopped=True,
-              keys_dir=e.keys_dir, registry_path=e.registry, clock=e.clock)
+              keys_dir=e.keys_dir, registry_path=e.registry, clock=e.clock, last_seal=last_seal)
     e.clock.advance(1000)
     _set_policy(e, CHANGED)
     successor = e.hub("hubb")

@@ -219,7 +219,8 @@ def test_fold_rule_earliest_lease_wins_and_the_losers_completion_is_a_recorded_c
     # wrong clock gets a second, overlapping grant out of it: the owner's clock
     # here is an hour behind, so the wait has already passed on the hub's.
     hubmod.promote(b_dir, "hubb", by=OWNER, reason="test partition", keys_dir=env.keys_dir,
-                   registry_path=env.registry, attest_stopped=True, clock=lambda: env.clock() - 3_600_000)
+                   registry_path=env.registry, attest_stopped=True, clock=lambda: env.clock() - 3_600_000,
+                   last_seal="none")    # the owner: hub A never sealed (round-8 GLM re-check, C1)
     hub_b = env.hub("hubb", b_dir)
     env.clock.advance(1)
     wb_dir = env.tmp / "wb-space"
@@ -547,7 +548,8 @@ def test_second_hub_refuses_to_grant_until_explicitly_promoted(env):
     # attests the closed primary is stopped, and the standby waits out one
     # lease period plus the clock uncertainty before it grants.
     cfg = hubmod.promote(standby_dir, "hubstandby", by="owner", reason="primary retired", keys_dir=env.keys_dir,
-                         registry_path=env.registry, attest_stopped=True, clock=env.clock)
+                         registry_path=env.registry, attest_stopped=True, clock=env.clock,
+                         last_seal="none")   # the primary never sealed (round-8 GLM re-check, C1)
     assert cfg.grantor == "hubstandby" and cfg.promoted_by == "owner"
     env.clock.advance(900 + 120)
     # The writer learns of the promotion the way every copy does: it pulls the
@@ -1346,7 +1348,7 @@ def test_audit4_an_old_grantor_that_keeps_granting_after_promotion_confers_nothi
     wb = _writer_in(env, space, "wb", ta)
     assert wb.request_lease("t1")["status"] == "granted"   # A, still running, grants
 
-    _promote(env, owner_copy, "hubb", attest_stopped=True)
+    _promote(env, owner_copy, "hubb", attest_stopped=True, last_seal="none")   # A never sealed (C1)
     hub_b = env.hub("hubb", owner_copy, state="qb")
     git_pull(space, owner_copy)                          # the partition heals
     assert _hub_item(hub_b, "t1").lease_holder is None   # A's grant after the fence frontier counts for nothing
