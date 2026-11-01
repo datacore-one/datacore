@@ -657,11 +657,11 @@ PLAN_PROGRESS = [
     ("C", "Telemetry out of the task fold", "done",
      "067b5291: same state root in all ten spaces; fold 3.9 s to 1.6 s (1-datafund), 5.0 s to 1.7 s (2-datacore)"),
     ("D", "The hub as the front door", "waiting on you",
-     "deployed 2026-11-01: PR #37 merged (9e53c33), datacored restarted on the new library and serves GET /events, seal-age job live on the box. Waiting on you: the hub token into the broker (then claims read the hub, not git). Open: four spaces not sealed since this morning (seal-age job FAIL), and the seal-age line still to be added to 8-firm values-firm.yaml from a firm session"),
+     "deployed 2026-11-01: PR #37 merged (9e53c33), datacored restarted on the new library and serves GET /events, seal-age job live on the box. Waiting on you: the hub token into the broker (then claims read the hub, not git). Four spaces left unsealed this morning were resealed by the restart; the seal-age job passes all ten. Open: and the seal-age line still to be added to 8-firm values-firm.yaml from a firm session"),
     ("E", "One delegation route", "waiting on you",
      "code done and checked: datacore f681632b, nightshift bb81952 (an item names its runner; Miles's hourly run takes his assigned items from the ledger; nightshift.org is regenerated from the ledger each run; a hand-added entry is imported as a ledger item; wip_limit is data on Miles). Live once you merge DIP PR #13 and update Miles's checkout; trial one space first, since the first run imports every NEXT entry in nightshift.org"),
-    ("F", "One way in: org lists read-only", "not started", "one-space trial before the rest"),
-    ("G", "One ledger", "not started", "two-space trial, then your go"),
+    ("F", "One way in: org lists read-only", "in progress", "code and a one-space trial switch (off by default); the week-long trial starts on your word"),
+    ("G", "One ledger", "in progress", "merge tool and a rehearsal on copies of two small spaces; genesis is signed by you; the live two-space trial starts on your word"),
     ("H", "The remaining process upgrades", "not started", "per item, as tagged on this page"),
 ]
 
