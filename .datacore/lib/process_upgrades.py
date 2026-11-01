@@ -661,7 +661,7 @@ PLAN_PROGRESS = [
     ("E", "One delegation route", "waiting on you",
      "code done and checked: datacore f681632b, nightshift bb81952 (an item names its runner; Miles's hourly run takes his assigned items from the ledger; nightshift.org is regenerated from the ledger each run; a hand-added entry is imported as a ledger item; wip_limit is data on Miles). Live once you merge DIP PR #13 and update Miles's checkout; trial one space first, since the first run imports every NEXT entry in nightshift.org"),
     ("F", "One way in: org lists read-only", "in progress", "code and a one-space trial switch (off by default); the week-long trial starts on your word"),
-    ("G", "One ledger", "in progress", "merge tool and a rehearsal on copies of two small spaces; genesis is signed by you; the live two-space trial starts on your word"),
+    ("G", "One ledger", "waiting on you", "paused on your question: the fold already merges every writer; choose (a) one view by folding the ten spaces together, keyed by space and id (recommended; no migration), or (b) the full merge under a genesis you sign. Comparison in the plan's Phase G section; 696 task ids exist in more than one space, so either way items are keyed by space and id"),
     ("H", "The remaining process upgrades", "not started", "per item, as tagged on this page"),
 ]
 
