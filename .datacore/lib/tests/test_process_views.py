@@ -141,3 +141,18 @@ def test_corrections_have_a_forward_only_proposal():
     assert not up.get("keep")
     assert any("ledger.compensate" in (s[4] if len(s) > 4 else "") for s in up["steps"])
     assert not any("ledger.void" in s[4] for s in up["steps"])
+
+
+# ---- 2026-11-01: phase B shipped (cfec20b5) ----
+
+def test_the_current_corrections_drawing_has_no_reversal():
+    cur = next(p for p in pv.FLOWS if p["slug"] == "ledger-corrections")
+    assert not any(s[4] == "ledger.void" and "refused" not in s[3].lower() for s in cur["steps"])
+    assert any("void_retired" in s[4] for s in cur["steps"])
+    assert "REVERSAL_MAX_AGE_MS" not in cur["source"]
+
+
+def test_phase_b_is_done():
+    from process_upgrades import PLAN_PROGRESS
+    b = next(p for p in PLAN_PROGRESS if p[0] == "B")
+    assert b[2] == "done" and "cfec20b5" in b[3]

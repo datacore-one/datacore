@@ -273,13 +273,16 @@ UPGRADES = {
         "changes": [
             ("A new void is refused when it is written (library, command line, hub), with a pointer to the forward correction.",
              "You ruled that voids should never happen: a chain cannot make an event not have happened.",
-             F, ("in progress", "plan phase B, started 2026-11-01; the eval rewrite was approved the same day")),
+             F, ("done", "plan phase B, cfec20b5 (2026-11-01)")),
             ("The reversal window and 'nothing reversed after a seal' retire: you correct by a new event at any time.",
              "With nothing reversed, a window has nothing to bound, and seals stop gating corrections.",
              A, ("ratified", "DIP-0034 and DIP-0042 amendments merged 2026-11-01 (datacore-dips a6d3aad)")),
             ("The three old voids (one in 5-plur, two in 6-meridian) keep exactly their effect.",
              "History is never rewritten; the replay of every space must give the same state root before and after.",
-             F, ("in progress", "plan phase B checks the roots before and after")),
+             F, ("done", "state roots identical before and after in all ten spaces (cfec20b5)")),
+            ("A forward correction also for an event not yet sealed, so one way fixes every mistake.",
+             "Today ledger.compensate needs a sealed original (LED-16), so an unsealed mistake is fixed by a task update instead: two ways.",
+             F, ("waiting on you", "changing it means changing the LED-16 promise eval, which needs your approval")),
         ],
     },
     "ledger-daily": {
@@ -649,7 +652,8 @@ PLAN_PROGRESS = [
     ("A", "Rules ratified, signing always on, fds-id identity", "in progress",
      "A1 DIP amendments merged 2026-11-01 (datacore-dips a6d3aad) · A2 signing always on (d71851c7) · "
      "A3 fds-id wallets: Web3 v3 keystores per the FDS spec; each machine needs its keystore password in the broker"),
-    ("B", "Forward-only corrections: no new voids", "in progress", "eval rewrite approved 2026-11-01; under way"),
+    ("B", "Forward-only corrections: no new voids", "done",
+     "cfec20b5: voids refused by library, command line and hub; same state roots in all ten spaces; nine evals rewritten, LED-15 retired"),
     ("C", "Telemetry out of the task fold", "done",
      "067b5291: same state root in all ten spaces; fold 3.9 s to 1.6 s (1-datafund), 5.0 s to 1.7 s (2-datacore)"),
     ("D", "The hub as the front door", "next", "the hand-over defect (C1) is fixed first; deploying the hub on the box is yours"),
