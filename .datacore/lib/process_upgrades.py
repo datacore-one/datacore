@@ -657,7 +657,7 @@ PLAN_PROGRESS = [
     ("C", "Telemetry out of the task fold", "done",
      "067b5291: same state root in all ten spaces; fold 3.9 s to 1.6 s (1-datafund), 5.0 s to 1.7 s (2-datacore)"),
     ("D", "The hub as the front door", "waiting on you",
-     "code done and checked: D1 2b31bc42 (four hub defects, each probe no longer reproduces), D2 b9a17fef (claims and folds read the hub first, seal-age contract, daytime delegations reach the hub on the next 15-minute claim). Live once you merge datacore-app PR #37, deploy datacored, install box-ledger-seal-age and set DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID"),
+     "deployed 2026-11-01: PR #37 merged (9e53c33), datacored restarted on the new library and serves GET /events, seal-age job live on the box. Waiting on you: the hub token into the broker (then claims read the hub, not git). Open: four spaces not sealed since this morning (seal-age job FAIL), and the seal-age line still to be added to 8-firm values-firm.yaml from a firm session"),
     ("E", "One delegation route", "in progress", "Miles claims his ledger items; nightshift.org becomes a generated view"),
     ("F", "One way in: org lists read-only", "not started", "one-space trial before the rest"),
     ("G", "One ledger", "not started", "two-space trial, then your go"),
