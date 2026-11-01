@@ -63,7 +63,7 @@ def test_every_flow_has_an_upgrade_entry():
         if up.get("keep"):
             continue
         assert up["changes"], f["slug"]
-        for what, why, needs in up["changes"]:
+        for what, why, needs, *_status in up["changes"]:
             assert what and why, f["slug"]
             assert needs in NEEDS, (f["slug"], needs)
         pv.svg_flow(pv.upgrade_flow(f))   # raises on long labels and unknown marks
@@ -110,3 +110,34 @@ def test_every_diagram_has_zoom_and_fit():
     drawn = html.count('<svg viewBox=')
     for act in ("out", "in", "fit", "full"):
         assert html.count(f'data-zoom="{act}"') == drawn, act
+
+
+# ---- 2026-11-01: the page shows what the rebuild has done ----
+
+def test_the_page_shows_the_rebuild_plan_progress():
+    from process_upgrades import PLAN_PROGRESS
+    assert [p[0] for p in PLAN_PROGRESS] == list("ABCDEFGH")
+    html = pv.page(pv.load_inventory())
+    assert 'id="rebuild"' in html
+    for phase, title, status, _note in PLAN_PROGRESS:
+        assert f'data-phase="{phase}"' in html and status in pv.STATUS_ICON
+
+
+def test_a_change_that_is_done_or_ratified_carries_its_status():
+    from process_upgrades import UPGRADES
+    with_status = [c for u in UPGRADES.values() for c in u.get("changes", []) if len(c) == 4]
+    assert with_status, "no change records what has already happened"
+    html = pv.page(pv.load_inventory())
+    assert 'class="status ' in html
+
+
+def test_signing_is_drawn_as_always_on():
+    assert "always" in pv.MARKS["S"][2].lower() and "DATACORE_LEDGER_SIGN=0" in pv.MARKS["S"][2]
+
+
+def test_corrections_have_a_forward_only_proposal():
+    from process_upgrades import UPGRADES
+    up = UPGRADES["ledger-corrections"]
+    assert not up.get("keep")
+    assert any("ledger.compensate" in (s[4] if len(s) > 4 else "") for s in up["steps"])
+    assert not any("ledger.void" in s[4] for s in up["steps"])

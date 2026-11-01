@@ -259,9 +259,28 @@ UPGRADES = {
         ],
     },
     "ledger-corrections": {
-        "summary": "No change proposed.",
-        "keep": ("These rules are your own decisions of 2026-10-23 (reversal within one hour on the hub's clock, nothing reversed "
-                 "after a seal, control records never reversible), and the drawing matches the code. Nothing to simplify."),
+        "summary": ("Forward only, like a chain: nothing is cancelled after the fact. A mistake is fixed by a new event that undoes "
+                    "its effect (a refund, not an erasure), and the original stays on the record. The one-hour window goes with the voids."),
+        "lanes": ["ANY WRITER", "YOU · MAC", "HUB ON THE BOX"],
+        "steps": [
+            ("bad", 0, 0, "A mistaken event", "admitted like any other", "", "", "S"),
+            ("ref", 0, 1, "A void is refused", "refused: void_retired", "", "new", ""),
+            ("comp", 1, 2, "You write a correction", "ledger.compensate", "", "new", "O"),
+            ("adm", 2, 3, "Admitted at once", "ledger.admit · compensation", "", "", "S"),
+            ("fold", 2, 4, "The fold applies it", "original stays on record", "", "focal", ""),
+        ],
+        "edges": [("bad", "ref", "VOID?"), ("bad", "comp", "TO FIX"), ("comp", "adm", ""), ("adm", "fold", "")],
+        "changes": [
+            ("A new void is refused when it is written (library, command line, hub), with a pointer to the forward correction.",
+             "You ruled that voids should never happen: a chain cannot make an event not have happened.",
+             F, ("in progress", "plan phase B, started 2026-11-01; the eval rewrite was approved the same day")),
+            ("The reversal window and 'nothing reversed after a seal' retire: you correct by a new event at any time.",
+             "With nothing reversed, a window has nothing to bound, and seals stop gating corrections.",
+             A, ("ratified", "DIP-0034 and DIP-0042 amendments merged 2026-11-01 (datacore-dips a6d3aad)")),
+            ("The three old voids (one in 5-plur, two in 6-meridian) keep exactly their effect.",
+             "History is never rewritten; the replay of every space must give the same state root before and after.",
+             F, ("in progress", "plan phase B checks the roots before and after")),
+        ],
     },
     "ledger-daily": {
         "summary": "The daily check also verifies the seals and the hub's health, so the hub contract and the daily ledger check report together.",
@@ -622,3 +641,33 @@ UPGRADES = {
         ],
     },
 }
+
+
+# ---- what has already happened (2026-11-01) ---------------------------------------
+# (phase, what, status, evidence). Status is one of process_views.STATUS_ICON.
+PLAN_PROGRESS = [
+    ("A", "Rules ratified, signing always on, fds-id identity", "in progress",
+     "A1 DIP amendments merged 2026-11-01 (datacore-dips a6d3aad) · A2 signing always on (d71851c7) · "
+     "A3 fds-id wallets: Web3 v3 keystores per the FDS spec; each machine needs its keystore password in the broker"),
+    ("B", "Forward-only corrections: no new voids", "in progress", "eval rewrite approved 2026-11-01; under way"),
+    ("C", "Telemetry out of the task fold", "done",
+     "067b5291: same state root in all ten spaces; fold 3.9 s to 1.6 s (1-datafund), 5.0 s to 1.7 s (2-datacore)"),
+    ("D", "The hub as the front door", "next", "the hand-over defect (C1) is fixed first; deploying the hub on the box is yours"),
+    ("E", "One delegation route", "not started", "after D"),
+    ("F", "One way in: org lists read-only", "not started", "one-space trial before the rest"),
+    ("G", "One ledger", "not started", "two-space trial, then your go"),
+    ("H", "The remaining process upgrades", "not started", "per item, as tagged on this page"),
+]
+
+# Changes whose rule you have ratified, though the code may still be to do.
+_RATIFIED = ("ratified", "DIP amendment merged 2026-11-01 (datacore-dips a6d3aad); the code follows in its plan phase")
+CHANGE_STATUS = {
+    ("task-lifecycle", 0): _RATIFIED,
+    ("task-lifecycle", 3): _RATIFIED,
+    ("overnight-run", 0): _RATIFIED,
+    ("overnight-run", 2): _RATIFIED,
+    ("delegation-safety", 0): ("ratified", "DIP-0009 amendment merged 2026-11-01: approval is an approval.grant event; code in phase E"),
+}
+for (_flow, _i), _st in CHANGE_STATUS.items():
+    _c = UPGRADES[_flow]["changes"][_i]
+    UPGRADES[_flow]["changes"][_i] = (*_c[:3], _st)

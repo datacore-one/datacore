@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import html
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -50,8 +51,8 @@ def esc(s: str) -> str:
 # code -> (always|optional, letter, hover text). Lower-case codes are optional and
 # drawn dashed; the letter is what the badge shows.
 MARKS = {
-    "S": ("always", "S", "Signed by the writer's own key. In a hub space (all ten since activation) an unsigned event is not admitted."),
-    "O": ("always", "O", "Signed by the owner (the Mac's key): hub.enable, policy.set, reversals and forward corrections."),
+    "S": ("always", "S", "Signed by the writer's own key, always (since 2026-11-01): only an explicit DATACORE_LEDGER_SIGN=0 turns it off, and never in a hub space, where an unsigned event is not admitted."),
+    "O": ("always", "O", "Signed by the owner (the Mac's key): hub.enable, policy.set and forward corrections (ledger.compensate)."),
     "c": ("optional", "C", "Needs your co-sign (approval.grant) only when the task has a side effect such as email.send, payment or prod.deploy (ledger/policy.py)."),
     "r": ("optional", "R", "Provenance receipt on Swarm: fingerprints only, signed by the gateway's notary. Only where the receipt hook (agent turns) or the git commit hook is installed."),
 }
@@ -1092,13 +1093,35 @@ def upgrade_flow(f: dict) -> dict:
 NEED_CLASS = {"your decision": "dec", "DIP amendment": "dip", "code fix": "fix", "install": "ins"}
 
 
+#: What has already happened to a proposal or a plan phase (2026-11-01).
+STATUS_ICON = {"done": "✓", "ratified": "§", "in progress": "◐", "waiting on you": "⏸", "next": "→", "not started": "○"}
+STATUS_CLASS = {"done": "sdone", "ratified": "srat", "in progress": "sprog", "waiting on you": "swait", "next": "snext",
+                "not started": "snot"}
+
+
+def status_pill(status: str, note: str = "") -> str:
+    return (f'<span class="status {STATUS_CLASS[status]}" title="{esc(note)}">{STATUS_ICON[status]} {esc(status)}</span>')
+
+
+def rebuild_section() -> str:
+    """The rebuild plan's phases and where each stands, above the processes."""
+    from process_upgrades import PLAN_PROGRESS
+    rows = "".join(f'<li data-phase="{ph}">{status_pill(st, note)}<b>{ph}</b> {esc(title)}'
+                   f'<span class="why">{esc(note)}</span></li>' for ph, title, st, note in PLAN_PROGRESS)
+    return (f'<section id="rebuild" class="rebuild"><h2>Tasks and ledger rebuild: where it stands</h2>'
+            f'<p class="lede">The plan you approved on 31 October, phase by phase, in order. Hover a status for its evidence. '
+            f'Plan: 2-datacore/1-tracks/dev/superpowers/plans/2026-10-31-tasks-and-ledger-rebuild-plan.md</p>'
+            f'<ol class="phases">{rows}</ol></section>')
+
+
 def upgrade_pane(f: dict) -> str:
     up = UPGRADES[f["slug"]]
     head = '<p class="proposed">Proposed, not running</p>'
     if up.get("keep"):
         return f'{head}<p class="lede"><b>{esc(up["summary"])}</b> {esc(up["keep"])}</p>'
-    items = "".join(f'<li><span class="need {NEED_CLASS[n]}">{esc(n)}</span> {esc(w)}<br><span class="why">{esc(y)}</span></li>'
-                    for w, y, n in up["changes"])
+    items = "".join(f'<li><span class="need {NEED_CLASS[c[2]]}">{esc(c[2])}</span>'
+                    f'{status_pill(*c[3]) if len(c) == 4 else ""} {esc(c[0])}<br><span class="why">{esc(c[1])}</span></li>'
+                    for c in up["changes"])
     return (f'{head}<p class="lede">{esc(up["summary"])}</p>{fig(svg_flow(upgrade_flow(f)))}'
             f'<h3 class="ch">What changes, and what each change needs</h3><ol class="changes">{items}</ol>')
 
@@ -1121,8 +1144,9 @@ def upgrades_markdown() -> str:
         if up.get("keep"):
             out += [up["keep"], ""]
             continue
-        for w, y, n in up["changes"]:
-            out.append(f"- **{n}**: {w} *Why:* {y}")
+        for c in up["changes"]:
+            st = f" ({STATUS_ICON[c[3][0]]} {c[3][0]}: {c[3][1]})" if len(c) == 4 else ""
+            out.append(f"- **{c[2]}**{st}: {c[0]} *Why:* {c[1]}")
         out.append("")
     return "\n".join(out)
 
@@ -1227,6 +1251,12 @@ ol.changes .why{color:var(--muted);font-size:15px}
 .need{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;
 border-radius:4px;border:1px solid currentColor;margin-right:6px;white-space:nowrap}
 .need.dec{color:var(--sig)} .need.dip{color:var(--prov)} .need.fix{color:var(--accent)} .need.ins{color:var(--soft)}
+.status{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;margin:0 6px 0 4px;border:1px solid currentColor;border-radius:4px;white-space:nowrap;cursor:help}
+.status.sdone{color:#34d399} .status.srat{color:var(--prov)} .status.sprog{color:#f0a050} .status.swait{color:#e8695f} .status.snext{color:#22d3ee} .status.snot{color:var(--soft)}
+.rebuild{margin:8px 0 36px;padding:16px 20px;border:1px solid var(--rule-solid);border-radius:10px;background:var(--paper-2)}
+.rebuild h2{margin:0 0 6px;font-size:20px;font-weight:500} .rebuild .lede{font-size:15px;margin-bottom:10px}
+.phases{list-style:none;margin:0;padding:0} .phases li{padding:6px 0;border-top:1px solid var(--rule);font-size:15px}
+.phases li b{font-family:'JetBrains Mono',monospace;margin-right:6px} .phases .why{display:block;margin-left:2px;font-size:13px;color:var(--soft)}
 header.top .all{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:13px;color:var(--soft)}
 header.top .all button{font:inherit;font-size:14px;color:var(--ink);background:none;border:1px solid var(--rule-solid);border-radius:6px;
 padding:4px 10px;cursor:pointer}
@@ -1348,8 +1378,14 @@ def page(inv: dict) -> str:
 <div class="wrap">{sidebar()}
 <main><h1>Processes and workflows</h1>
 <p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has a Current / Upgrade switch: Upgrade shows a proposal, with what each change needs, and nothing in it is running.</p>
+{rebuild_section()}
 {"".join(body)}
 </main></div><script>{JS}</script></body></html>"""
+
+
+def load_inventory(path=None) -> dict:
+    p = Path(path) if path else ARCH / "processes.yaml"
+    return yaml.safe_load(p.read_text()) if p.exists() else {}
 
 
 def main(argv=None) -> int:
@@ -1359,14 +1395,16 @@ def main(argv=None) -> int:
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--report", help="also write the upgrade proposals as a markdown report to this path")
     a = ap.parse_args(argv)
-    inv = yaml.safe_load(Path(a.inventory).read_text()) if Path(a.inventory).exists() else {}
+    inv = load_inventory(a.inventory)
     Path(a.out).write_text(page(inv))
     print(a.out)
     if a.report:
         Path(a.report).write_text(upgrades_markdown() + "\n")
         print(a.report)
     if a.open:
-        subprocess.run(["open", a.out], check=False)
+        # dayshift has no screen: mac-open shows it on the Mac while `ds` is attached.
+        opener = "open" if sys.platform == "darwin" else "mac-open"
+        subprocess.run([opener, a.out], check=False)
     return 0
 
 
