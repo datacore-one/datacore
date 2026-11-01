@@ -1,4 +1,12 @@
-"""LED-15: A mistaken task change can be reversed only by the space's owner,
+"""RETIRED 2026-11-01 (owner: "1. yes, do it" -- retire the reversal-window eval).
+The DIP-0034 amendment of 2026-10-31 (items 2 and 3) supersedes the reversal
+window: no new reversal is written or admitted, and every correction is a new
+forward event. LED-15 now promises that rule; its eval is
+`tests/test_promise_LED15_corrections_are_forward_only.py`. Kept here, not
+collected, as the record of what the window promised. Reversals admitted
+before the retirement are still judged exactly so (`ledger.finality`).
+
+LED-15 (until 2026-11-01): A mistaken task change can be reversed only by the space's owner,
 within one hour of the hub accepting it and before it is sealed; after that
 only a new correcting record fixes it.
 

@@ -544,6 +544,8 @@ class EventLog:
             Where it says `2`, the edit is written as type-strict version 2
             (decision L7; see `ledger.edits`). The caller's dict is not mutated.
           * an unsigned event in a space served by a hub (`HubSigningRequired`).
+          * a new `ledger.void` (`ledger.voids.VoidRetired`, DIP-0034 amendment
+            of 2026-10-31: no voids; the message names the forward correction).
 
         `after`: an HLC this event must sort after, beyond the causal floor read
         from disk -- a writer passes the stamp of a hub lease it was granted but
@@ -572,6 +574,12 @@ class EventLog:
                     "missing; restore it before writing (every event of a hub space is signed and names its hub)")
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
+        # NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B): every
+        # correction is a new forward event. `ledger.void` stays a known type
+        # so the voids already in the history still read and fold. Looked up
+        # on the module at call time (one rule, one place).
+        from . import voids as _voids
+        _voids.refuse_new_void(type)
         if type == "ledger.void" and self.hub_required:
             # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): no writer
             # of a hub space signs a reversal of one into its log when it holds

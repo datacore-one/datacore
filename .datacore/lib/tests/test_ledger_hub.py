@@ -2061,7 +2061,8 @@ def test_round4_a_voided_completion_is_never_a_confirmed_receipt(env, monkeypatc
     # Round 6 (owner decision C5): in a hub space only the owner the owner's
     # records name reverses; a human principal of the registry no longer does.
     owner = env.writer(OWNER, t)
-    owner.append("ledger.void", {"log": "wa", "seq": done.seq, "hash": done.hash, "reason": "completion withdrawn"})
+    from tests._legacy_void import append_legacy_void       # history: before voids were retired
+    append_legacy_void(owner, {"log": "wa", "seq": done.seq, "hash": done.hash, "reason": "completion withdrawn"})
     published = _published(env, hub, [wa, own, owner])
     assert hub._state()[1].items["t"].status == "claimed"      # the void took the effect away
     report = wa.receipt_check(published, required=[done.hash])

@@ -110,8 +110,9 @@ def test_checkpoint_restore_excuses_a_mismatch_only_through_a_void(tmp_path, mon
         C._restore(document(), space.name)
 
     gregor = EventLog(space, "gregor")
-    gregor.append("ledger.void", {"log": "miles.jsonl", "seq": body["seq"], "hash": bad,
-                                  "body_sha256": compute_hash(body), "reason": "test"})
+    from tests._legacy_void import append_legacy_void       # history: before voids were retired
+    append_legacy_void(gregor, {"log": "miles.jsonl", "seq": body["seq"], "hash": bad,
+                                "body_sha256": compute_hash(body), "reason": "test"})
     with pytest.raises(C.StateRootMismatch):
         # Past the integrity check: the void cancels exactly that mismatch.
         C._restore(document(), space.name)

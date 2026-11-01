@@ -24,6 +24,17 @@ from tests.test_ledger_hub_round5 import _confirmed, _replica, _setup, _void, en
 from ledger import hub as H
 from ledger.events import from_line, to_line
 from ledger.log import read_events
+from tests._legacy_void import legacy_void_rules
+
+
+@pytest.fixture(autouse=True)
+def _voids_judged_as_before_the_retirement():
+    """HISTORY. These tests pin how a reversal written and admitted BEFORE voids
+    were retired (DIP-0034 amendment of 2026-10-31, in force 2026-11-01) is
+    judged; that history keeps its rule. Today's rule (no new voids) is pinned
+    by test_promise_LED15_corrections_are_forward_only.py."""
+    with legacy_void_rules():
+        yield
 
 
 def _rejected_hashes(h):

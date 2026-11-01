@@ -16,10 +16,14 @@ model, specs/datacore-lean.)
 Promise, as evals: a hub space holds, imported by git,
   (i)   an unsigned claim by a writer the task was never given to,
   (ii)  a signed claim the hub refused and keeps as a rejected proposal,
-  (iii) an item event the owner reversed inside the correction window,
+  (iii) an item event the owner reversed inside the correction window
+        BEFORE voids were retired (history, written by the legacy fixture
+        helper `tests/_legacy_void.py`): the admitted reversal is honoured,
   (iv)  unsigned control records: a key rotation, an approval grant, a job
         attestation and a reversal,
-  (v)   a signed reversal the hub refused (the window had closed),
+  (v)   a signed reversal written after the retirement (DIP-0034 amendment
+        of 2026-10-31: no new voids), which the hub refused as
+        `void_retired` and keeps as a rejected proposal,
 and every decision reader -- the state, the settled state, the seal check,
 receipts, generic verification's correction reader, the key-rotation reader,
 approval validation and the job-health reader -- ignores all of them; the
@@ -40,6 +44,7 @@ from tests.test_ledger_hub_round5 import _replica, env  # noqa: F401
 from ledger import hub as H
 from ledger.events import to_line
 from ledger.log import read_events
+from tests._legacy_void import legacy_void_rules
 
 
 def _forge(env, writer, log: str, type: str, payload: dict):
@@ -70,9 +75,11 @@ def space(env, monkeypatch):
     rejected = T._signed_into(env, wb, "item.claim", {"id": "t2"})
     r = h.append(wb._submission(rejected, rejected=True))
     assert r["status"] == "rejected", r
-    # (iii) wa's claim of t3, reversed by the owner inside the window
+    # (iii) wa's claim of t3, reversed by the owner inside the window, before
+    # voids were retired (history)
     claim3, _ = wa.append("item.claim", {"id": "t3"})
-    owner.append("ledger.void", {"log": "wa", "seq": claim3.seq, "hash": claim3.hash, "reason": "eval"})
+    with legacy_void_rules():
+        owner.append("ledger.void", {"log": "wa", "seq": claim3.seq, "hash": claim3.hash, "reason": "eval"})
     # (iv) unsigned control records
     claim4, _ = wa.append("item.claim", {"id": "t4"})
     forged["rotation"] = _forge(env, wa, "wa-forged-rotation", "key.rotate", {"actor": "wa", "reason": "forged"})
@@ -85,12 +92,16 @@ def space(env, monkeypatch):
     forged["void"] = _forge(env, owner, "owner-forged", "ledger.void",
                             {"log": "wa", "seq": claim4.seq, "hash": claim4.hash, "reason": "forged"})
     h.seal()
-    # (v) a signed reversal of the now sealed claim of t4: the hub refuses it
-    # (closed window) and keeps it as a rejected proposal
+    # (v) a signed reversal of the now sealed claim of t4, written after the
+    # retirement: the hub refuses it (no new voids) and keeps it as a rejected
+    # proposal
     late_void = T._signed_into(env, owner, "ledger.void",
                                {"log": "wa", "seq": claim4.seq, "hash": claim4.hash, "reason": "after the seal"})
     r = h.append(owner._submission(late_void, rejected=True))
     assert r["status"] == "rejected", r
+    codes = [e.payload.get("code") for e in h._state()[0] if e.type == "ledger.reject"
+             and (e.payload.get("event") or {}).get("hash") == late_void.hash]
+    assert codes == ["void_retired"], f"the hub did not refuse the new reversal as retired: {codes}"
     h.seal()
     return {"h": h, "wa": wa, "wb": wb, "rejected": rejected, "claim3": claim3, "claim4": claim4,
             "approved": approved, "forged": forged}

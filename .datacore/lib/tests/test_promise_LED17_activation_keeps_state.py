@@ -24,6 +24,13 @@ dismissal of another agent's task by a lower-ranked agent -- is checked by
 the dry run (which writes nothing and reports only the accepted change) and
 is then activated on a copy: every task reads as before except the accepted
 one, and the frozen reversals keep their effect.
+
+Since 2026-11-01 (DIP-0034 amendment of 2026-10-31: no new voids; owner
+approval of this rewrite 2026-11-01) the old reversals in the fixture are
+HISTORY: written as raw lines, the way they were written before the
+retirement, never through today's writer. After activation they still keep
+their effect, while a new reversal in the activated space is refused at
+write time and changes nothing.
 """
 from __future__ import annotations
 
@@ -130,3 +137,10 @@ def test_activating_a_copy_changes_only_accepted_tasks(env, monkeypatch):
     for name in ("completion", "attest", "bad"):
         e = ev[name]
         assert fin.voids.applies("wa", e), f"the old reversal of the {name} lost its effect on activation"
+    from ledger.log import EventLog
+    plain = ev["completion"]
+    with pytest.raises(ValueError) as exc:
+        EventLog(copy, "own", sign=True, keys_dir=env.keys_dir, registry_path=env.registry).append(
+            "ledger.void", {"log": "wa", "seq": plain.seq, "hash": plain.hash, "reason": "a new reversal"})
+    assert type(exc.value).__name__ == "VoidRetired", exc.value
+    assert _view(H.authoritative_state(copy, registry_path=env.registry, policy=_policy())) == after

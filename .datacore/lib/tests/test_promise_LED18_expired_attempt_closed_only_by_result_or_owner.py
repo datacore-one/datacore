@@ -10,8 +10,16 @@ counted the reversed release as closing the attempt, so the task could be
 handed to someone else while the first holder might still be working.
 (No Lean theorem covers this promise yet.)
 
+Since 2026-11-01 (DIP-0034 amendment of 2026-10-31: no new voids; owner
+approval of this rewrite 2026-11-01) a release can no longer be reversed: the
+owner's reversal is refused, the release stands and closes the attempt. A
+release reversed BEFORE the retirement (history, written by the legacy
+fixture helper `tests/_legacy_void.py`) still does not close it.
+
 Promise, as evals: a task leased to its holder, whose lease then expires --
-  * a release the owner reversed inside the window does not close the attempt;
+  * a release the owner reversed inside the window before the retirement
+    does not close the attempt;
+  * a release whose reversal was refused after the retirement closes it;
   * a release naming another attempt or other task content does not close it;
   * the holder's own standing release closes it;
   * the owner's resolution closes it.
@@ -23,20 +31,26 @@ import pytest
 from tests import test_ledger_hub as T
 from tests.test_ledger_hub_round5 import _setup, _void, env  # noqa: F401
 from ledger import hub as H
+from tests._legacy_void import legacy_void_rules
 
 CASES = {"reversed-release": False, "other-attempt": False, "other-content": False,
-         "standing-release": True, "owner-resolution": True}
+         "standing-release": True, "owner-resolution": True, "release-whose-reversal-was-refused": True}
 
 
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_an_expired_attempt_is_closed_only_by_a_standing_result_or_the_owner(env, case):
     h, own, wa, grant = _setup(env)
     attempt, task_hash = grant["attempt"], grant["task_hash"]
-    if case in ("reversed-release", "standing-release"):
+    if case in ("reversed-release", "standing-release", "release-whose-reversal-was-refused"):
         release, _ = wa.append("item.release", {"id": "t", "attempt": attempt, "task_hash": task_hash})
+        owner = env.writer(T.OWNER, H.LocalTransport(h))
         if case == "reversed-release":
-            owner = env.writer(T.OWNER, H.LocalTransport(h))
-            owner.append("ledger.void", _void(release))
+            with legacy_void_rules():                    # history: admitted before the retirement
+                owner.append("ledger.void", _void(release))
+        elif case == "release-whose-reversal-was-refused":
+            with pytest.raises(H.HubRefused) as exc:
+                owner.append("ledger.void", _void(release))
+            assert exc.value.code == "void_retired", exc.value
     elif case in ("other-attempt", "other-content"):
         wrong = {"attempt": "not-this-attempt"} if case == "other-attempt" else {"task_hash": "0" * 64}
         e = T._signed_into(env, wa, "item.release", dict({"id": "t", "attempt": attempt, "task_hash": task_hash},

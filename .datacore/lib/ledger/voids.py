@@ -1,4 +1,14 @@
-"""In-ledger void records: the only way a bad event is cancelled (LED-4, LED-5).
+"""In-ledger void records: RETIRED for new writes since 2026-11-01; the voids
+already in the history keep their effect (LED-4, LED-5, LED-15).
+
+RETIRED (DIP-0034 amendment of 2026-10-31, items 2 and 3: "no voids";
+"corrections are forward only"; plan phase B). No new `ledger.void` is
+written: `refuse_new_void` is called by every writer (the event log, the hub
+writer, `ledger_cli.py void`) and raises `VoidRetired`, naming the forward
+correction. A hub refuses one it had not admitted by `VOID_RETIRED_MS` (its
+own admission clock), however it arrives. Everything below still decides how
+the voids written BEFORE the retirement fold -- exactly as before, so the
+history never changes. The rest of this docstring describes that history.
 
 WHY. The ledger is append-only, so an event that fails its own checks -- a hash
 that never matched its body (5-plur tris.jsonl seq 5), a hand-written line whose
@@ -47,7 +57,34 @@ from .events import Event, body_dict, compute_hash, event_body, from_line
 VOID_TYPE = "ledger.void"
 COMPENSATE_TYPE = "ledger.compensate"
 
+# ── voids are retired (DIP-0034 amendment of 2026-10-31; plan phase B) ──────
+#: The moment no new reversal takes effect, by the HUB'S admission clock:
+#: 2026-11-01T00:00:00Z. A reversal a hub admitted before it keeps the
+#: decision recorded then; one it had not admitted by then is refused
+#: (`void_retired`), whoever wrote it and however it arrived (by the network or
+#: by git from a machine still on older code). One named constant.
+VOID_RETIRED_MS = 1_793_491_200_000
+
+#: The way to correct a mistake now: a new forward event that names it.
+FORWARD_CORRECTION = ("correct it with a new forward event instead: `ledger.compensate` naming the event "
+                      "(log, seq, hash) and why, once it is sealed, or for a task a new item.update / "
+                      "item.reopen")
+VOID_RETIRED_WHY = ("ledger.void is retired (DIP-0034 amendment of 2026-10-31): nothing is cancelled after "
+                    "the fact; " + FORWARD_CORRECTION)
+
+
+class VoidRetired(ValueError):
+    """A new `ledger.void`: refused at write time; nothing was written."""
+
+
+def refuse_new_void(type_) -> None:
+    """Raise `VoidRetired` for a new `ledger.void`; every writer calls this first."""
+    if type_ == VOID_TYPE:
+        raise VoidRetired(VOID_RETIRED_WHY + "; nothing was written")
+
 # ── the correction window (round 5; round 6 owner decisions, 2026-10-23) ────
+# HISTORY since 2026-11-01: it judges only reversals a hub admitted before
+# `VOID_RETIRED_MS`; no new reversal is admitted.
 # In a HUB space a reversal (`ledger.void`) takes effect only inside the
 # correction window: admitted by the hub before the first grantor seal that
 # covers the reversed event, AND at most REVERSAL_MAX_AGE_MS after the hub

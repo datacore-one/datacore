@@ -10,7 +10,7 @@ Usage:
     python3 ledger_cli.py verify --space <dir> [--strict]
     python3 ledger_cli.py items --space <dir> [--status <s>] [--owner <o>]
     python3 ledger_cli.py balances --space <dir>
-    python3 ledger_cli.py void --space <dir> --log <writer>.jsonl --seq <n> --reason '<why>' [--actor <a>]
+    python3 ledger_cli.py void ...   (retired 2026-11-01: refused, names the forward correction)
     python3 ledger_cli.py init --space <dir> --actor <name> [--email <git email>]
     python3 ledger_cli.py principals add --actor <name> [--kind human|agent] [--email <git email>]
     python3 ledger_cli.py doctor [--space <dir>]
@@ -159,7 +159,11 @@ def cmd_close(args: argparse.Namespace) -> None:
 
 
 def cmd_void(args: argparse.Namespace) -> None:
-    """Cancel one bad event with an in-ledger `ledger.void` (LED-4/LED-5).
+    """RETIRED (DIP-0034 amendment of 2026-10-31, plan phase B): refused with a
+    pointer to the forward correction (`ledger.compensate`); writes nothing.
+
+    Until 2026-11-01 it cancelled one bad event with an in-ledger `ledger.void`
+    (LED-4/LED-5), as follows; the code stays for the history it describes.
 
     Names the event exactly as stored (log, seq, stored hash) and pins the hash
     its body produces, so a later edit of the voided event revokes the void.
@@ -167,6 +171,12 @@ def cmd_void(args: argparse.Namespace) -> None:
     decided at read time (ledger.voids): only an authorised voider who is not
     the event's writer cancels anything.
     """
+    from ledger import voids
+    try:
+        voids.refuse_new_void(voids.VOID_TYPE)
+    except voids.VoidRetired as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
     from ledger.voids import body_hash, log_stem, refusal
     space = _require_space(args.space)
     actor = args.actor or _default_actor()
@@ -374,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", required=True, help="Why it closed (recorded in the ledger)")
     p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
 
-    p = sub.add_parser("void", help="Cancel one bad event with an in-ledger void record")
+    p = sub.add_parser("void", help="Retired 2026-11-01: refused; correct with a forward ledger.compensate")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--log", required=True, help="The voided event's log file (e.g. agent-a.jsonl)")
     p.add_argument("--seq", required=True, type=int, help="The voided event's seq")

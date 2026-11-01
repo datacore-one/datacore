@@ -2401,12 +2401,23 @@ class Hub:
     def _correction_problem(self, event: Event, events, cfg: HubConfig):
         """(code, why) when correction `event` may not take effect, else None --
         the one rule (ledger.finality), judged now by this hub's clock. A
-        reversal already admitted here is judged at ITS admission time."""
+        reversal already admitted here is judged at ITS admission time.
+
+        NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B): a
+        reversal this hub had not admitted before `voids.VOID_RETIRED_MS` (by
+        its own admission clock, never a writer's stamp) is refused,
+        `void_retired` -- one signed by a host still on older code, by the
+        network or by git, included. One admitted before keeps being judged
+        exactly as it was, and one already decided is never judged again
+        (`_judge_corrections`), so the history does not change."""
+        from . import voids as _voids
         from .finality import compensation_problem, reversal_problem
         from .voids import VOID_TYPE
         auth = self._authority(cfg)
         if event.type == VOID_TYPE:
             at = self._admitted_ms(event)
+            if (self.clock() if at is None else at) >= _voids.VOID_RETIRED_MS:
+                return "void_retired", _voids.VOID_RETIRED_WHY
             return reversal_problem(event, events, owner=auth.owner, sealers=auth.grantors,
                                     admitted_ms=self._admitted_ms, now_ms=self.clock() if at is None else at)
         return compensation_problem(event, events, owner=auth.owner, sealers=auth.grantors)
@@ -3049,7 +3060,7 @@ class HttpTransport:
 
 #: Refusals of an event for what it IS: already in a signed writer log, such an
 #: event is kept by the hub as a rejected proposal (finding 11).
-REJECTABLE = PROPOSAL_CODES | {"not_authorized", "reversal_closed", "bad_compensate"}
+REJECTABLE = PROPOSAL_CODES | {"not_authorized", "reversal_closed", "bad_compensate", "void_retired"}
 
 
 class HubWriter:
@@ -3196,6 +3207,14 @@ class HubWriter:
             if why:
                 raise HubRefused("bad_checkin", f"not a check-in: {why}; not appended")
         if type == "ledger.void":
+            # NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B):
+            # refused before the local append, so no signed reversal enters my
+            # log; the hub refuses one from older code too (`_correction_problem`).
+            from . import voids as _voids
+            try:
+                _voids.refuse_new_void(type)
+            except _voids.VoidRetired as exc:
+                raise HubRefused("void_retired", f"{exc}; not appended") from None
             # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): refused
             # before the local append when this copy holds the target, so no
             # signed reversal of one ever enters my log. (The hub refuses it

@@ -12,17 +12,31 @@ refused such a reversal, but the library writer and the command line still
 signed it into the owner's log first (R4). (Formal counterpart: `LED13_*`
 theorems in the Lean model, specs/datacore-lean.)
 
+Since 2026-11-01 (DIP-0034 amendment of 2026-10-31, items 2 and 3; owner
+approval of this rewrite 2026-11-01) no reversal of anything is written or
+admitted, so the promise now holds for every record; the authority records
+keep their stronger guarantee for the HISTORY: a reversal admitted before the
+retirement never touched one.
+
 Promise, as evals: in a hub space holding one record of every authority
 kind (activation, start, seal, admission, rejection, key rotation, approval,
 ownership, lease, job attestation) and one ordinary task event --
-  * the hub refuses a reversal of each authority record (`not_reversible`);
+  * the hub refuses a reversal of each authority record (`void_retired`),
+    and judged by the rule before the retirement it was refused as
+    `not_reversible`;
   * a writer that holds the record refuses before appending: the hub
-    writer, the event log and the command line leave the log unchanged;
+    writer, the event log and the command line leave the log unchanged --
+    under today's rule and under the rule before the retirement;
   * a reversal of each, imported by git -- even one a grantor's record
     admitted -- has no effect in the state on the hub or on a replica;
-  * the ordinary task event is still reversible inside the window;
-  * the reversible kinds are one closed list of task events, and a kind
-    nobody has listed is not reversible.
+  * the ordinary task event is no longer reversible: the hub refuses its
+    reversal (`void_retired`) and the mistake is fixed by a forward event;
+    a reversal of one admitted before the retirement keeps its effect;
+  * the reversible kinds (for the history) are one closed list of task
+    events, and a kind nobody has listed is not reversible.
+
+Legacy fixtures (a reversal admitted before the retirement) are written with
+the helper `tests/_legacy_void.py`.
 """
 from __future__ import annotations
 
@@ -34,6 +48,7 @@ from tests import test_ledger_hub as T
 from tests.test_ledger_hub_round5 import _replica, env  # noqa: F401
 from ledger import hub as H
 from ledger.log import EventLog, read_events
+from tests._legacy_void import legacy_void_rules
 
 AUTHORITY_TYPES = ("hub.enable", "hub.start", "ledger.seal", "ledger.admit", "ledger.reject", "key.rotate",
                    "approval.grant", "owner.set", "item.lease", "metric.attest")
@@ -60,7 +75,8 @@ def space(env, monkeypatch):
     refused = T._signed_into(env, wb, "item.claim", {"id": "t"})
     h.append(wb._submission(refused, rejected=True))
     item_done, _ = wa.append("item.complete", {"id": "t"})
-    v, _ = owner.append("ledger.void", _ref(item_done, "completion recorded on the wrong task"))
+    with legacy_void_rules():                          # history: admitted before the retirement
+        v, _ = owner.append("ledger.void", _ref(item_done, "completion recorded on the wrong task"))
     h.seal()
     held = {}
     for e in h._state()[0]:
@@ -72,17 +88,26 @@ def space(env, monkeypatch):
     return {"h": h, "owner": owner, "held": held, "claim": claim}
 
 
-def test_the_hub_refuses_reversing_any_authority_record(env, space):
+def _rule(rule):
+    """Today's rule, or the rule a reversal was judged by before the retirement."""
+    import contextlib
+    return contextlib.nullcontext() if rule == "today" else legacy_void_rules()
+
+
+@pytest.mark.parametrize("rule", ["today", "before-the-retirement"])
+def test_the_hub_refuses_reversing_any_authority_record(env, space, rule):
     h, owner = space["h"], space["owner"]
+    expected = "void_retired" if rule == "today" else "not_reversible"
     wrong = []
     for etype, rec in sorted(space["held"].items()):
         v = T._signed_into(env, owner, "ledger.void", _ref(rec))
         try:
-            r = h.append(owner._submission(v))
+            with _rule(rule):
+                r = h.append(owner._submission(v))
             wrong.append(f"{etype}: accepted ({r.get('status')})")
         except H.HubRefused as exc:
-            if exc.code != "not_reversible":
-                wrong.append(f"{etype}: refused as {exc.code}, expected not_reversible")
+            if exc.code != expected:
+                wrong.append(f"{etype}: refused as {exc.code}, expected {expected}")
         # whatever the door said, the record keeps its effect
         state = h._state()[1]
         if state.finality.voids.applies(getattr(rec, "log", None) or rec.actor, rec):
@@ -90,24 +115,26 @@ def test_the_hub_refuses_reversing_any_authority_record(env, space):
     assert not wrong, "authority records were reversible: " + "; ".join(wrong)
 
 
+@pytest.mark.parametrize("rule", ["today", "before-the-retirement"])
 @pytest.mark.parametrize("how", ["hub-writer", "event-log", "command-line"])
-def test_a_writer_holding_the_record_refuses_before_appending(env, space, monkeypatch, how):
+def test_a_writer_holding_the_record_refuses_before_appending(env, space, monkeypatch, how, rule):
     owner = space["owner"]
     signed = []
     for etype, rec in sorted(space["held"].items()):
         before = owner.log.path.read_text()
         try:
-            if how == "hub-writer":
-                owner.append("ledger.void", _ref(rec))
-            elif how == "event-log":
-                EventLog(owner.space_dir, T.OWNER, sign=True, keys_dir=env.keys_dir,
-                         registry_path=env.registry).append("ledger.void", _ref(rec))
-            else:
-                import ledger_cli
-                monkeypatch.setattr(ledger_cli, "EventLog", lambda space, actor: EventLog(
-                    space, actor, sign=True, keys_dir=env.keys_dir, registry_path=env.registry))
-                ledger_cli.cmd_void(argparse.Namespace(space=str(owner.space_dir), actor=T.OWNER,
-                                                       log=_ref(rec)["log"], seq=rec.seq, reason="wrong"))
+            with _rule(rule):
+                if how == "hub-writer":
+                    owner.append("ledger.void", _ref(rec))
+                elif how == "event-log":
+                    EventLog(owner.space_dir, T.OWNER, sign=True, keys_dir=env.keys_dir,
+                             registry_path=env.registry).append("ledger.void", _ref(rec))
+                else:
+                    import ledger_cli
+                    monkeypatch.setattr(ledger_cli, "EventLog", lambda space, actor: EventLog(
+                        space, actor, sign=True, keys_dir=env.keys_dir, registry_path=env.registry))
+                    ledger_cli.cmd_void(argparse.Namespace(space=str(owner.space_dir), actor=T.OWNER,
+                                                           log=_ref(rec)["log"], seq=rec.seq, reason="wrong"))
         except (Exception, SystemExit):
             pass
         if owner.log.path.read_text() != before:
@@ -140,13 +167,29 @@ def test_an_imported_reversal_has_no_effect_even_if_a_grantor_admitted_it(env, s
     assert not took, f"imported reversals of authority records took effect: {took}"
 
 
-def test_an_ordinary_task_event_is_still_reversible_inside_the_window(env, space):
+def test_an_ordinary_task_event_is_no_longer_reversible_and_is_corrected_forward(env, space):
     h, owner = space["h"], space["owner"]
     own = env.writer("own", H.LocalTransport(h))
     e, _ = own.append("item.create", {"id": "fresh", "title": "created by mistake"})
-    v, _ = owner.append("ledger.void", _ref(e, "created by mistake"))
+    with pytest.raises(H.HubRefused) as exc:
+        owner.append("ledger.void", _ref(e, "created by mistake"))
+    assert exc.value.code == "void_retired", exc.value
     h.seal()
-    assert "fresh" not in h._state()[1].items, "a task event could not be reversed inside the window"
+    assert "fresh" in h._state()[1].items, "a task event was reversed after voids were retired"
+    c, answer = owner.append("ledger.compensate", _ref(e, "created by mistake"))
+    assert answer["status"] == "accepted", answer
+    h.seal()
+    assert owner.receipt_check(env.hub_dir, required=[c.hash])["status"] == "confirmed"
+
+
+def test_a_task_event_reversed_before_the_retirement_stays_reversed(env, space):
+    h, owner = space["h"], space["owner"]
+    own = env.writer("own", H.LocalTransport(h))
+    e, _ = own.append("item.create", {"id": "fresh", "title": "created by mistake"})
+    with legacy_void_rules():
+        v, _ = owner.append("ledger.void", _ref(e, "created by mistake"))
+    h.seal()
+    assert "fresh" not in h._state()[1].items, "a reversal admitted before the retirement lost its effect"
     assert owner.receipt_check(env.hub_dir, required=[v.hash])["status"] == "confirmed"
 
 

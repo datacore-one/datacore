@@ -1,12 +1,26 @@
-"""LED-5: No one can cancel their own bad record; a cancel from someone not
-allowed has no effect and is flagged.
+"""LED-5: No one cancels a record any more -- not their own, not anyone's: a
+new cancel (`ledger.void`) is refused at write time for every actor, however
+authorised, and a mistake is corrected by a new forward event. In the HISTORY,
+a cancel by the record's own writer or by someone not allowed still has no
+effect and is flagged.
+
+Rule: DIP-0034 amendment of 2026-10-31, items 2 and 3; owner approval of this
+rewrite 2026-11-01. The promise until then read: "no one can cancel their own
+bad record; a cancel from someone not allowed has no effect and is flagged".
 
 Seeded failure: there is no authorisation rule for cancelling a record at all
 (audit D T1/T7) -- no `ledger.void` type exists, and the out-of-band exception
 file excuses whatever anyone with commit access writes into it. The agent that
 forged an event could equally "cancel" it.
 
+Second seeded failure (2026-11-01): after the rule changed, the event log
+still wrote a new void for anyone, a human principal or a listed voider.
+
 Promise, as evals, on the same hand-written forgery as LED-4:
+  * a NEW void by any actor -- the writer itself, a human principal, an
+    explicit voider, a stranger -- is refused before anything is written;
+HISTORY (voids written before the retirement, by the legacy fixture helper
+`tests/_legacy_void.py`), judged exactly as before:
   * a void appended by the forged event's own actor -> verify still fails, and
     the void is reported as having no effect;
   * a void by an agent that is not an authorised voider -> still fails, reported;
@@ -26,6 +40,7 @@ from ledger.events import body_dict, compute_hash
 from ledger.fold import fold
 from ledger.log import EventLog, read_events
 from ledger.verify import verify_chain
+from tests._legacy_void import append_legacy_void
 
 PRINCIPALS = """\
 principals:
@@ -70,9 +85,27 @@ def _forged_space(tmp_path: Path):
     return space, path, body["seq"], h
 
 
+def _payload(seq: int, h: str) -> dict:
+    return {"log": "miles.jsonl", "seq": seq, "hash": h, "reason": "not mine to keep"}
+
+
 def _void(space: Path, actor: str, seq: int, h: str):
-    return EventLog(space, actor).append("ledger.void", {
-        "log": "miles.jsonl", "seq": seq, "hash": h, "reason": "not mine to keep"})
+    """A void written BEFORE the retirement (history), the way it was written then."""
+    return append_legacy_void(EventLog(space, actor), _payload(seq, h))
+
+
+@pytest.mark.parametrize("actor", ["miles", "gregor", "tris", "stranger"])
+def test_a_new_void_is_refused_for_every_actor(tmp_path, monkeypatch, actor):
+    _registry(tmp_path, monkeypatch, "voiders: [tris]\n")
+    space, path, seq, h = _forged_space(tmp_path)
+    before = {p.name: p.read_bytes() for p in sorted((space / ".datacore").rglob("*.jsonl"))}
+    with pytest.raises(ValueError) as exc:
+        EventLog(space, actor).append("ledger.void", _payload(seq, h))
+    assert type(exc.value).__name__ == "VoidRetired", f"{actor}: {exc.value!r}"
+    assert "ledger.compensate" in str(exc.value), exc.value
+    after = {p.name: p.read_bytes() for p in sorted((space / ".datacore").rglob("*.jsonl"))}
+    assert after == before, f"a void by {actor} was written"
+    assert "forged" in fold(read_events(space)).items
 
 
 def _space_errors(space: Path) -> list[str]:
@@ -84,7 +117,7 @@ def _void_reported(space: Path) -> bool:
     return any("void" in e.lower() for e in _space_errors(space))
 
 
-def test_a_self_void_has_no_effect_and_is_reported(tmp_path):
+def test_a_historic_self_void_has_no_effect_and_is_reported(tmp_path):
     space, path, seq, h = _forged_space(tmp_path)
     _void(space, "miles", seq, h)
     assert any("signature" in e for e in verify_chain(path))
@@ -92,7 +125,7 @@ def test_a_self_void_has_no_effect_and_is_reported(tmp_path):
     assert "forged" in fold(read_events(space)).items
 
 
-def test_a_void_by_an_unauthorised_agent_has_no_effect_and_is_reported(tmp_path):
+def test_a_historic_void_by_an_unauthorised_agent_has_no_effect_and_is_reported(tmp_path):
     space, path, seq, h = _forged_space(tmp_path)
     _void(space, "winston", seq, h)
     assert any("signature" in e for e in verify_chain(path))
@@ -100,14 +133,14 @@ def test_a_void_by_an_unauthorised_agent_has_no_effect_and_is_reported(tmp_path)
     assert "forged" in fold(read_events(space)).items
 
 
-def test_an_actor_outside_the_registry_cannot_void(tmp_path):
+def test_a_historic_void_by_an_actor_outside_the_registry_has_no_effect(tmp_path):
     space, path, seq, h = _forged_space(tmp_path)
     _void(space, "stranger", seq, h)
     assert any("signature" in e for e in verify_chain(path))
     assert _void_reported(space)
 
 
-def test_an_explicit_voider_agent_may_void_another_actors_event(tmp_path, monkeypatch):
+def test_a_historic_void_by_an_explicit_voider_of_another_actors_event_keeps_its_effect(tmp_path, monkeypatch):
     _registry(tmp_path, monkeypatch, "voiders: [tris]\n")
     space, path, seq, h = _forged_space(tmp_path)
     _void(space, "tris", seq, h)
@@ -115,7 +148,7 @@ def test_an_explicit_voider_agent_may_void_another_actors_event(tmp_path, monkey
     assert "forged" not in fold(read_events(space)).items
 
 
-def test_an_explicit_voider_still_cannot_void_its_own_event(tmp_path, monkeypatch):
+def test_a_historic_void_by_an_explicit_voider_of_its_own_event_has_no_effect(tmp_path, monkeypatch):
     _registry(tmp_path, monkeypatch, "voiders: [miles]\n")
     space, path, seq, h = _forged_space(tmp_path)
     _void(space, "miles", seq, h)
