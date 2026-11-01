@@ -223,6 +223,15 @@ def _materialize_locked(items, space_dir, actor, policy, transport=None) -> Mate
         assignee = item.get("assignee")
         if assignee:
             payload["assignee"] = assignee
+        # `runner` names the executor that takes the item (plan 2026-10-31,
+        # phase E: "nightshift" is Miles's hourly run; the claim loop leaves such
+        # an item to it). `spec` is the task's specification as the runner reads
+        # it (tags, properties such as DONE_WHEN and SURFACE, body), so a task a
+        # person adds to nightshift.org keeps it on the way into the ledger.
+        # Forwarded like the fields above: present only when supplied.
+        for key in ("runner", "spec"):
+            if item.get(key):
+                payload[key] = item[key]
 
         try:
             event = guarded_append(log, "item.create", payload, policy=policy, space_dir=space_dir)

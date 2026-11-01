@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import os
 import subprocess
 from process_run import run as run_process
@@ -545,45 +546,32 @@ def chain_follow_up(space: Path, actor: str, payload: dict) -> tuple[bool, str]:
 _FROM_ENV = object()
 
 
-def main(argv=None, *, transport=_FROM_ENV) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--space", required=True, type=Path)
-    ap.add_argument("--actor", default=None,
-                    help="writer name (default: this machine's declared actor, resolved strictly)")
-    ap.add_argument("--limit", type=int, default=3)
-    ap.add_argument("--execute", action="store_true",
-                    help="actually claim and run; without it, plan only and write nothing")
-    ap.add_argument("--hub-url", default=None,
-                    help="the hub to read first (default: $DATACORE_HUB_URL); its git copy when it does not answer")
-    ap.add_argument("--token-id", default=None,
-                    help="broker id of the hub's bearer token (default: $DATACORE_HUB_TOKEN_ID)")
-    args = ap.parse_args(argv)
-    # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
-    # here, naming identity.env and the registry, rather than dispatching as a
-    # guessed hostname (the default used to be evaluated non-strictly even
-    # when --actor was passed). An explicit --actor is not resolved at all.
-    if not args.actor:
-        from actor_identity import UndeclaredActor, this_actor
-        try:
-            args.actor = this_actor(strict=True)
-        except UndeclaredActor as exc:
-            print(f"REFUSED: {exc}", file=sys.stderr)
-            return 2
+@dataclass
+class Plan:
+    """What one dispatcher may take from one fold, and everything it may not, by reason."""
+    ready: list
+    exhausted: list
+    later: list
+    mirrored: int
+    ambiguous: list
+    addressed: list
+    siblings: list
+    unaddressed: list
+    left_to_runner: list
+    attempts: dict
+    last_error: dict
+    waiting: set
+    mine: str | None
 
-    space = args.space.resolve()
-    from ledger.hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
-    # THE HUB FIRST (plan 2026-10-31, phase D2): its admitted log when it
-    # answers -- a task delegated by day is claimable on the next tick with no
-    # git publish -- and this host's git copy when it does not. What the hub
-    # sends is admitted below by the same rule as the git copy; never trusted more.
-    from ledger.hub import task_events_hub_first, transport_from_env
-    if transport is _FROM_ENV:
-        transport = transport_from_env(space, "ledger-claim", hub_url=args.hub_url, token_id=args.token_id)
-    raw, source = task_events_hub_first(space, transport)  # task fold: no telemetry (phase C)
-    print("read from: " + ("hub (its admitted log)" if source == "hub" else "git copy"))
-    # The dead-letter and waiting scans below read the same admitted events (round 6).
-    events, _ = authoritative_events(space, raw)
-    state = authoritative_state(space, events)
+
+def plan(state, events, actor: str, runner: str | None = None) -> Plan:
+    """The dispatch rules, shared by the claim loop and a named runner (phase E).
+
+    Pure: reads the fold and the admitted events, writes nothing. `runner=None`
+    is the claim loop (items that name no runner); a runner name gives that
+    runner's items. Either way the same addressing, mirror, attempt and
+    start-time rules apply.
+    """
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 
     # A genesis-imported GTD task is a MIRROR of an org heading, not a work
@@ -625,9 +613,9 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
     ambiguous = [i for i in pending if dispatch_ambiguity((i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in ambiguous]
     addressed = [i for i in pending
-                 if not dispatchable_by(args.actor, (i.payload or {}).get("assignee"))]
+                 if not dispatchable_by(actor, (i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in addressed]
-    mine = principal_of(args.actor)[0]
+    mine = principal_of(actor)[0]
     siblings = [i for i in addressed if mine is not None
                 and principal_of(str((i.payload or {}).get("assignee")))[0] == mine]
     addressed = [i for i in addressed if i not in siblings]
@@ -648,6 +636,14 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
     # change: no space had one.
     unaddressed = [i for i in pending if not (i.payload or {}).get("assignee")]
     pending = [i for i in pending if i not in unaddressed]
+
+    # ONE ROUTE, ONE EXECUTOR PER ITEM (plan 2026-10-31, phase E). An item that
+    # names a `runner` belongs to that runner -- "nightshift" is Miles's hourly
+    # run, which executes a task spec through its own pipeline -- and the claim
+    # loop leaves it alone, counted and named. With `runner` given, the plan is
+    # that runner's: only the items that name it.
+    left_to_runner = [i for i in pending if (i.payload or {}).get("runner") != runner]
+    pending = [i for i in pending if i not in left_to_runner]
 
     # GIVE UP AFTER MAX_ATTEMPTS. `item.release` returns an item to `created`,
     # which is claimable, so a 15-minute timer re-claims it forever: item
@@ -704,7 +700,82 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             last_turn[iid] = (ev.payload or {}).get("kind") or "release"
     waiting = {iid for iid, kind in last_turn.items() if kind == "waiting_on_owner"}
 
+
     exhausted = [i for i in pending if attempts.get(i.id, 0) >= MAX_ATTEMPTS]
+    pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
+    # NOT BEFORE ITS TIME (2026-10-27, AGT-12): a post approved for 12:49 is
+    # delegated ahead and waits here. An unreadable time is held, never run.
+    later = [i for i in pending if not _start_time_reached((i.payload or {}).get("not_before"))]
+    pending = [i for i in pending if i not in later]
+    pending.sort(key=lambda i: i.id)
+    return Plan(ready=pending, exhausted=exhausted, later=later, mirrored=mirrored,
+                ambiguous=ambiguous, addressed=addressed, siblings=siblings,
+                unaddressed=unaddressed, left_to_runner=left_to_runner, attempts=attempts,
+                last_error=last_error, waiting=waiting, mine=mine)
+
+
+def runner_queue(space: Path, actor: str, runner: str, transport=None):
+    """(ready items, state, read-from) for `runner` writing as `actor` (phase E).
+
+    The same read as the claim loop -- the hub's admitted log first, the git copy
+    when it does not answer -- and the same rules (`plan`). `transport`: a hub
+    transport, None for none, or `_FROM_ENV` for DATACORE_HUB_URL.
+    """
+    from ledger.hub import (authoritative_events, authoritative_state,
+                            task_events_hub_first, transport_from_env)
+    if transport is _FROM_ENV:
+        transport = transport_from_env(space, "ledger-claim")
+    raw, source = task_events_hub_first(space, transport)
+    events, _ = authoritative_events(space, raw)
+    state = authoritative_state(space, events)
+    return plan(state, events, actor, runner=runner).ready, state, ("hub" if source == "hub" else "git")
+
+
+def main(argv=None, *, transport=_FROM_ENV) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--space", required=True, type=Path)
+    ap.add_argument("--actor", default=None,
+                    help="writer name (default: this machine's declared actor, resolved strictly)")
+    ap.add_argument("--limit", type=int, default=3)
+    ap.add_argument("--execute", action="store_true",
+                    help="actually claim and run; without it, plan only and write nothing")
+    ap.add_argument("--hub-url", default=None,
+                    help="the hub to read first (default: $DATACORE_HUB_URL); its git copy when it does not answer")
+    ap.add_argument("--token-id", default=None,
+                    help="broker id of the hub's bearer token (default: $DATACORE_HUB_TOKEN_ID)")
+    args = ap.parse_args(argv)
+    # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
+    # here, naming identity.env and the registry, rather than dispatching as a
+    # guessed hostname (the default used to be evaluated non-strictly even
+    # when --actor was passed). An explicit --actor is not resolved at all.
+    if not args.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            args.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 2
+
+    space = args.space.resolve()
+    from ledger.hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
+    # THE HUB FIRST (plan 2026-10-31, phase D2): its admitted log when it
+    # answers -- a task delegated by day is claimable on the next tick with no
+    # git publish -- and this host's git copy when it does not. What the hub
+    # sends is admitted below by the same rule as the git copy; never trusted more.
+    from ledger.hub import task_events_hub_first, transport_from_env
+    if transport is _FROM_ENV:
+        transport = transport_from_env(space, "ledger-claim", hub_url=args.hub_url, token_id=args.token_id)
+    raw, source = task_events_hub_first(space, transport)  # task fold: no telemetry (phase C)
+    print("read from: " + ("hub (its admitted log)" if source == "hub" else "git copy"))
+    # The dead-letter and waiting scans below read the same admitted events (round 6).
+    events, _ = authoritative_events(space, raw)
+    state = authoritative_state(space, events)
+    from actor_identity import dispatch_ambiguity
+    p = plan(state, events, args.actor)
+    mirrored, ambiguous, addressed, siblings = p.mirrored, p.ambiguous, p.addressed, p.siblings
+    unaddressed, attempts, last_error, waiting, mine = (p.unaddressed, p.attempts, p.last_error,
+                                                        p.waiting, p.mine)
+    exhausted = p.exhausted
     for item in exhausted:
         n = attempts.get(item.id, 0)
         title = (item.payload or {}).get("title", item.id)[:60]
@@ -728,14 +799,9 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             continue
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
         _outcome(item.payload or {}, "gave_up", last_error.get(item.id, ""), args.actor)
-    pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
-    # NOT BEFORE ITS TIME (2026-10-27, AGT-12): a post approved for 12:49 is
-    # delegated ahead and waits here. An unreadable time is held, never run.
-    later = [i for i in pending if not _start_time_reached((i.payload or {}).get("not_before"))]
-    for i in later:
+    for i in p.later:
         print(f"NOT YET  {((i.payload or {}).get('title') or i.id)[:70]} -- starts {(i.payload or {}).get('not_before')}")
-    pending = [i for i in pending if i not in later]
-    pending.sort(key=lambda i: i.id)
+    pending = p.ready
 
     mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
     if addressed:
@@ -754,6 +820,9 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
         mirror_note += (f"; {len(unaddressed)} addressed to NOBODY -- not dispatched, "
                         f"give each an assignee: "
                         + ", ".join((i.payload or {}).get("title", i.id)[:40] for i in unaddressed[:3]))
+    for runner in sorted({str((i.payload or {}).get("runner")) for i in p.left_to_runner}):
+        n = sum(1 for i in p.left_to_runner if str((i.payload or {}).get("runner")) == runner)
+        mirror_note += f"; {n} left to the {runner} runner"
     if not pending:
         print(f"nothing to dispatch: no delegated items awaiting claim{mirror_note}")
         return 0
