@@ -668,11 +668,17 @@ PLAN_PROGRESS = [
 # Changes whose rule you have ratified, though the code may still be to do.
 _RATIFIED = ("ratified", "DIP amendment merged 2026-11-01 (datacore-dips a6d3aad); the code follows in its plan phase")
 CHANGE_STATUS = {
-    ("task-lifecycle", 0): _RATIFIED,
     ("task-lifecycle", 3): _RATIFIED,
-    ("overnight-run", 0): _RATIFIED,
-    ("overnight-run", 2): _RATIFIED,
     ("delegation-safety", 0): ("ratified", "DIP-0009 amendment merged 2026-11-01: approval is an approval.grant event; code in phase E"),
+    # Phases D and E (2026-11-01): code done and checked; live where noted.
+    ("task-lifecycle", 0): ("waiting on you", "phase E code f681632b / nightshift bb81952: Miles takes his assigned items from the ledger; live once his checkout is updated"),
+    ("task-lifecycle", 1): ("waiting on you", "phase E: nightshift.org regenerated from the ledger each run, one task at a time (wip_limit on Miles); live once his checkout is updated"),
+    ("task-lifecycle", 2): ("waiting on you", "phase D2 b9a17fef, deployed: the hub serves its admitted log; claims use it once the hub token is in the broker"),
+    ("overnight-run", 0): ("waiting on you", "phase E: the timer file says hourly like the manifest; DIP-0011 example fixed in datacore-dips PR #13, open"),
+    ("overnight-run", 2): ("waiting on you", "phase E: the run's queue is Miles's ledger assignments; live once his checkout is updated"),
+    ("ledger-finality", 0): ("done", "box-ledger-seal-age live on the box since 2026-11-01 16:50; first scheduled run OK for all ten spaces"),
+    ("ledger-finality", 1): ("waiting on you", "phase D2, deployed: readers fold from the hub's admitted log when it answers; needs the hub token in the broker"),
+    ("sync-cycle", 0): ("waiting on you", "phase D2, deployed: claims and folds read the hub first, git stays for history and backup; needs the hub token in the broker"),
 }
 for (_flow, _i), _st in CHANGE_STATUS.items():
     _c = UPGRADES[_flow]["changes"][_i]
