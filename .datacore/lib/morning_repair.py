@@ -101,13 +101,29 @@ def v2_checklist(run: bool = True) -> list[dict]:
     except OSError as exc:
         return [{"id": "v2-verify-unreadable", "kind": "v2", "title": "v2-verify log unreadable",
                  "evidence": str(exc)}]
+    # ONE RUN, EACH CHECK ONCE (2026-11-01). The box's log held many runs, and every
+    # FAIL line of every run became a finding: the briefing listed one check 18 times.
+    # Only the newest run (after the last "=== ... v2 verify on" header) is today's.
+    lines = text.splitlines()
+    start = max((i for i, l in enumerate(lines) if l.startswith("=== ") and "v2 verify on" in l), default=0)
     out = []
-    for line in text.splitlines():
+    for line in lines[start:]:
         m = re.match(r"\s*FAIL\s+(.+?)\s{2,}(.*)$", line)
         if m:
             out.append({"id": f"v2-{_slug(m.group(1))}", "kind": "v2", "title": f"v2-verify: {m.group(1)}",
                         "evidence": m.group(2).strip()[:300]})
-    return out
+    return _unique(out)
+
+
+def _unique(found: list[dict]) -> list[dict]:
+    """Each finding id once, in first-seen order. The copy that carries a repair item
+    wins: it is the one the night handed over."""
+    by: dict[str, dict] = {}
+    for f in found:
+        fid = f.get("id")
+        if fid not in by or (f.get("item") and not by[fid].get("item")):
+            by[fid] = f
+    return list(by.values())
 
 
 def failed_units() -> list[dict]:
@@ -272,8 +288,8 @@ def venture_heartbeats() -> list[dict]:
 
 
 def findings(run_v2: bool = True) -> list[dict]:
-    return (v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations()
-            + undelivered() + venture_heartbeats())
+    return _unique(v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations()
+                   + undelivered() + venture_heartbeats())
 
 
 # ---- remediation, delegation, reporting ------------------------------------------------
@@ -349,11 +365,14 @@ def sweep() -> int:
     # restarted unit must not hand Miles another ten (MEM-66). What earlier
     # sweeps tonight already delegated is read back from tonight's state file.
     try:
-        earlier = json.loads((STATE / f"{day}.json").read_text()).get("findings") or []
+        earlier = _unique([e for e in json.loads((STATE / f"{day}.json").read_text()).get("findings") or []
+                           if isinstance(e, dict)])
     except (OSError, ValueError):
         earlier = []
     handed = {e["id"]: e["item"] for e in earlier if isinstance(e, dict) and e.get("item")}
-    found, delegated = findings(), 0
+    # Each finding once: a copy delegated on its own spent the night's budget on
+    # one finding and left the rest "nothing could be delegated" (2026-11-01).
+    found, delegated = _unique(findings()), 0
     for f in found:
         f["tried"] = remediate(f)
     # One re-check after the remediations; only what is still failing goes to Miles.
@@ -504,6 +523,8 @@ def recheck() -> int:
         swept = json.loads((STATE / f"{day}.json").read_text())["findings"]
     except (OSError, ValueError, KeyError):
         swept = None
+    if swept is not None:
+        swept = _unique(swept)   # a state file written before the fix may hold copies
     now = {f["id"]: f for f in findings()}
     if swept is None:
         # The sweep did not run: that is itself the first thing to report.
