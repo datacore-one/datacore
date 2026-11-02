@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Push a consistent snapshot of one SQLite database to a roster machine.
 
-    sqlite_push.py SRC MACHINE REMOTE_PATH
+    sqlite_push.py [--plain] SRC MACHINE REMOTE_PATH
 
 SRC          the live database on this machine (read; a hot journal left by a
              dead writer is rolled back, as any opener would)
+--plain      SRC is an ordinary file (the lens profile.json): copied as is,
+             then sent and verified the same way
 MACHINE      a roster machine name (jobs.manifest.ssh_alias resolves the route)
 REMOTE_PATH  where it lands, relative to the remote user's home
 
@@ -82,13 +84,13 @@ def _remote_path(raw: str) -> str | None:
     return str(p)
 
 
-def push(src: Path, machine: str, remote: str) -> str:
+def push(src: Path, machine: str, remote: str, plain: bool = False) -> str:
     """Snapshot, send, verify. Returns the ok line; raises RuntimeError on failure."""
     dest = _remote_path(remote)
     if dest is None:
         raise RuntimeError(f"remote path must be a file under the remote home, got {remote!r}")
     if not src.is_file():
-        raise RuntimeError("source database does not exist")
+        raise RuntimeError("source file does not exist" if plain else "source database does not exist")
     alias = _alias(machine)
     if not alias:
         raise RuntimeError(f"no ssh route to machine {machine!r} in the roster")
@@ -97,7 +99,11 @@ def push(src: Path, machine: str, remote: str) -> str:
     work = Path(tempfile.mkdtemp(prefix="snap-", dir=base))
     try:
         snap = work / PurePosixPath(dest).name
-        size = snapshot(src, snap)
+        if plain:
+            shutil.copyfile(src, snap)
+            size = snap.stat().st_size
+        else:
+            size = snapshot(src, snap)
         parent = str(PurePosixPath(dest).parent)
         steps = [
             ["ssh", *SSH_OPTS, alias, f"mkdir -p -- {shlex.quote(parent)}"],
@@ -119,13 +125,16 @@ def push(src: Path, machine: str, remote: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = sys.argv[1:] if argv is None else argv
+    args = list(sys.argv[1:] if argv is None else argv)
+    plain = "--plain" in args
+    if plain:
+        args.remove("--plain")
     if len(args) != 3:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     src = Path(os.path.expanduser(args[0]))
     try:
-        print(push(src, args[1], args[2]))
+        print(push(src, args[1], args[2], plain=plain))
         return 0
     except (RuntimeError, OSError, sqlite3.Error, subprocess.SubprocessError) as exc:
         print(f"sqlite_push: FAILED {src}: {exc}")

@@ -146,3 +146,26 @@ def test_the_destination_stays_inside_the_remote_home(monkeypatch, tmp_path, src
     remote = _Remote()
     assert _main(monkeypatch, tmp_path, src, remote, dest=dest) == 1
     assert remote.calls == [], "nothing is sent to a path outside the remote user's home"
+
+
+def test_plain_pushes_one_ordinary_file_with_the_same_proof(monkeypatch, tmp_path, capsys):
+    """The lens profile (plan 2026-10-31, phase H, lens 0): the Mac analyses its own
+    events and only profile.json crosses; it is a plain file, not a database."""
+    prof = tmp_path / "profile.json"
+    prof.write_text('{"window_days": 14}')
+    remote = _Remote(size=prof.stat().st_size)
+    monkeypatch.setattr(S, "_alias", lambda machine: {"box": "box-alias"}.get(machine))
+    monkeypatch.setattr(S, "_run", remote)
+    monkeypatch.setenv("SQLITE_PUSH_TMP", str(tmp_path / "work"))
+    assert S.main(["--plain", str(prof), "box", ".datacore/cos/lens/profile.json"]) == 0
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    assert line.startswith("sqlite_push: ok ") and f"remote_bytes={prof.stat().st_size}" in line
+    flat = [" ".join(c) for c in remote.calls]
+    assert any(c.startswith("rsync ") and c.endswith("box-alias:.datacore/cos/lens/profile.json") for c in flat)
+
+
+def test_plain_on_a_missing_file_fails(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(S, "_alias", lambda machine: "box-alias")
+    monkeypatch.setattr(S, "_run", _Remote())
+    assert S.main(["--plain", str(tmp_path / "nope.json"), "box", ".datacore/x.json"]) == 1
+    assert "FAILED" in capsys.readouterr().out

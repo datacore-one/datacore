@@ -1890,13 +1890,17 @@ jobs:
   # Neutral here; this install's exact lines are in manifest.local.yaml.
   - name: mac-lens-push
     scope: local
-    why_local: "pushes this machine's lens observations to the box's lens reader"
+    why_local: "analyses this machine's lens observations here and pushes only the profile to the box"
     machine: mac
     # Owner decision 2026-10-02: the mac is a visitor; its duties run when the
     # owner arrives, never on a clock.
     trigger: join
     schedule: "on join: visitor_join.py runs it after every converged join"
-    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/lens-push.log -- python3 ~/Data/.datacore/lib/sqlite_push.py ~/.datacore/lens/observations.db box .datacore/lens/observations.db"
+    # Raw events never leave the device (lens module rule; plan 2026-10-31, phase H,
+    # lens 0): the analysis runs here and only profile.json crosses. Until this
+    # install's manifest.local.yaml line says the same, the box keeps its own
+    # analysis (box-lens-analyze); retire that job once the profile arrives.
+    cmd: "python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/lens_analyze.py --profile-out ~/.datacore/cos/lens/profile.json >/dev/null && ~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/lens-push.log -- python3 ~/Data/.datacore/lib/sqlite_push.py --plain ~/.datacore/cos/lens/profile.json box .datacore/cos/lens/profile.json"
     on_fail: telegram
     artifacts:
       - path: "~/.datacore/state/lens-push.log"
