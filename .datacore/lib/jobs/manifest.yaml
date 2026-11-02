@@ -679,7 +679,9 @@ jobs:
     # 06:15 UTC, held by the health gate until 08:15 Ljubljana (owner, 2026-10-29).
     schedule: "15 6 * * *"
     cmd: "~/Data/.datacore/lib/cos_morning.sh"
-    # Staleness gate: 0-personal holds the journal file asserted below.
+    # Staleness gate: 0-personal holds the journal page the briefing writes (judged
+    # by cadence-firm-cos-briefing since 2026-11-01; kept so a stale checkout is
+    # named rather than read).
     # If Winston's checkout is behind upstream, the journal on disk may be
     # days old (observed 2026-08-20 through 2026-08-24: 0-personal was 318
     # commits behind; Winston read a 439-byte stub and reported "content
@@ -698,62 +700,13 @@ jobs:
       - path: "~/.datacore/cos/morning.log"
         check: no_crash
         max_age_hours: 26
-      # A heading is not a briefing. This must match a section that only a
-      # populated briefing produces -- "Your Agenda" is written from
-      # calendar+GTD state, so it is absent when generation fails partway.
-      # Matching just "^##\\s+(Daily Briefing|Good Morning)" is too weak: a
-      # file containing nothing but that heading would pass.
-      #
-      # HEADING LEVEL, fixed 2026-09-02: this said "^###\\s+Your Agenda" (H3)
-      # from 2026-08-10. There are TWO briefing generators and they disagree.
-      # The nightshift orchestrator writes H3 -- verified in the 06:00 run in
-      # 0-personal/notes/journals/2026-09-02.md, which carries "### Good
-      # Morning" / "### The World" / "### Your Agenda". The interactive
-      # /today writes H2, matching its own command spec and the prompt
-      # template at today_orchestrator.py:1281 and :2167. So the H3 form
-      # matched the overnight run and missed every interactive one, and
-      # box-briefing FAILED on complete briefings (08-27, 09-01, 09-02
-      # confirmed) whenever the interactive briefing was the one on disk.
-      # The sibling check in cos_verify_morning.py:check_journal_briefing was
-      # RETIRED 2026-08-27 (datacore#54) for the same class of false alarm;
-      # its own docstring is the rule: "A verifier stricter than the pipeline
-      # it verifies produces false alarms, and false alarms are how a real one
-      # gets ignored." This copy was missed in that retirement.
-      # {2,3} accepts either level so a future heading change cannot silently
-      # re-break it.
-      # GLOB, not {today}: this job runs at 04:00 and the file it asserts is
-      # the file it WRITES, so between midnight and 04:00 the contract demanded
-      # a journal that cannot exist yet and reported box-briefing FAILED. The
-      # scheduled verifier runs at 08:00 and never saw it; anyone running
-      # job_verify by hand in those four hours did. checks.py already documents
-      # this exact shape -- "a {today} path therefore fails every night between
-      # midnight and that first event ... a nightly false alarm is one people
-      # learn to ignore" -- and resolves a glob to its NEWEST match for it.
-      # Freshness is the liveness signal; the filename is not.
-      #
-      # Dated names only: `*.md` would also match tomorrow-priorities.md, which
-      # lives in this directory and carries no briefing block. The pattern must
-      # contain a literal `*` -- expand_path() only globs when it sees one, so
-      # a character class alone comes back as the literal pattern and reads as
-      # "does not exist".
-      # Ends in the day of month: `20*-*-*.md` also matched the weekly plan page
-      # (2026-10-19-weekly-plan.md), which as the newest match was the file
-      # checked, and a complete briefing read as failed (2026-10-19).
-      - path: "~/Data/0-personal/notes/journals/20*-*-[0-3][0-9].md"
-        check: regex
-        # ASSERT WHAT THE PRODUCER GUARANTEES, NOT A TITLE THE MODEL CHOSE.
-        # "Your Agenda" was a section in nightshift's /today template. When
-        # the briefing moved to Winston on 2026-09-08 (one producer per
-        # artifact) the journal block became a render of the MODEL's own
-        # sections — Good Morning, The World, The Ask, Focus — and this
-        # contract began failing on a heading nothing emits any more. It had
-        # already failed this way once before, on 2026-08-16.
-        #
-        # The heading is the structural guarantee: cos_journal.py always
-        # writes "## Daily Briefing" and replaces that block in place. A
-        # section title is a model's choice and will change again.
-        arg: '^##\s+Daily Briefing'
-        max_age_hours: 26
+      # THE JOURNAL PAGE IS JUDGED BY THE BRIEFING CADENCE ALONE (plan 2026-10-31,
+      # phase H): cadence-firm-cos-briefing below asserts '## Daily Briefing' on
+      # the newest daily page. This job asserted the same page until 2026-11-01,
+      # so one missing page opened two repair tasks. The morning check
+      # (cos_verify_morning.check_journal_page) reads the page through that
+      # cadence's contract. The history of the check (heading level, glob, the
+      # weekly plan page) is in git and in tests/test_jobs_journal_glob_daily_only.py.
       # cos_verify_morning.py:check_audio -- AUDIO_STAMP, written by
       # winston_audio.sh only after Telegram accepts the voice message.
       - path: "~/.datacore/cos/audio-last-ok"

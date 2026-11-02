@@ -15,7 +15,7 @@ import yaml
 from jobs.checks import expand_path
 
 MANIFEST = Path(__file__).resolve().parent.parent / "jobs" / "manifest.yaml"
-JOBS = ("box-briefing", "cadence-firm-cos-briefing")
+JOBS = ("cadence-firm-cos-briefing",)   # the one judge of the journal page since 2026-11-01 (plan phase H)
 
 
 def _journal_patterns():
