@@ -31,6 +31,7 @@ contract is a regex on `^sqlite_push: ok `. Exit 0 only on ok.
 """
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -84,6 +85,17 @@ def _remote_path(raw: str) -> str | None:
     return str(p)
 
 
+def row_counts(db: Path) -> dict:
+    """Rows per table of a (snapshot) database, read-only."""
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        names = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        return {n: con.execute(f'SELECT count(*) FROM "{n}"').fetchone()[0] for n in names}
+    finally:
+        con.close()
+
+
 def push(src: Path, machine: str, remote: str, plain: bool = False) -> str:
     """Snapshot, send, verify. Returns the ok line; raises RuntimeError on failure."""
     dest = _remote_path(remote)
@@ -109,6 +121,13 @@ def push(src: Path, machine: str, remote: str, plain: bool = False) -> str:
             ["ssh", *SSH_OPTS, alias, f"mkdir -p -- {shlex.quote(parent)}"],
             ["rsync", "-az", "--timeout=900", "-e", "ssh " + " ".join(SSH_OPTS), str(snap), f"{alias}:{dest}"],
         ]
+        if not plain:
+            # The source's row counts at push time travel beside the copy, so a
+            # restore check can open the copy and compare (phase H, backups 0).
+            counts = work / (snap.name + ".counts.json")
+            counts.write_text(json.dumps({"tables": row_counts(snap), "bytes": size}))
+            steps.insert(1, ["rsync", "-az", "--timeout=900", "-e", "ssh " + " ".join(SSH_OPTS),
+                          str(counts), f"{alias}:{dest}.counts.json"])
         for argv in steps:
             p = _run(argv, timeout=7200)
             if p.returncode != 0:

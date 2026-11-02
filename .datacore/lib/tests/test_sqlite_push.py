@@ -169,3 +169,24 @@ def test_plain_on_a_missing_file_fails(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(S, "_run", _Remote())
     assert S.main(["--plain", str(tmp_path / "nope.json"), "box", ".datacore/x.json"]) == 1
     assert "FAILED" in capsys.readouterr().out
+
+
+def test_a_database_push_sends_its_row_counts_beside_it(monkeypatch, tmp_path, src):
+    """The restore check compares a copy with the source as it was at push time
+    (plan 2026-10-31, phase H, backups 0), so the counts travel with the copy."""
+    sent = {}
+    remote = _Remote()
+    real = remote.__call__
+
+    def answer(argv, **kw):
+        if argv[0] == "rsync":
+            p = __import__("pathlib").Path(argv[-2])
+            sent[argv[-1]] = p.read_text() if p.suffix == ".json" else None
+            if p.suffix != ".json":
+                remote.size = p.stat().st_size
+        return real(argv, **kw)
+
+    assert _main(monkeypatch, tmp_path, src, answer) == 0
+    side = sent.get("box-alias:.datacore/lens/observations.db.counts.json")
+    assert side is not None, sent
+    assert __import__("json").loads(side)["tables"] == {"t": 3}
