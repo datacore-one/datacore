@@ -439,8 +439,8 @@ FLOWS += [{'slug': 'overnight-run',
             "loop').",
             'Not verified: whether the evening review actually moves tasks into nightshift.org on an unattended run (the command asks for '
             'confirmation), and whether it marks tasks it creates as agent-made. Neither could be confirmed from code.',
-            "Not verified: the evening review's ledger record. cos_tomorrow.sh calls cos_ledger_event.sh, which does not exist in this repository, "
-            'so that call may do nothing.']},
+            "The evening review's ledger record: cos_tomorrow.sh calls cos_ledger_event.sh, the chief-of-staff module's own writer, which "
+            'the deploy links beside it; ok and failed runs are both recorded (pinned by a test, chief-of-staff 1b95e40).']},
  {'slug': 'deploy-config',
   'group': 'Fleet operations',
   'title': 'Deploy and configuration: pushed, pulled, kept true',

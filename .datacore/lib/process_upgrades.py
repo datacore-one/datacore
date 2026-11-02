@@ -662,7 +662,7 @@ PLAN_PROGRESS = [
      "code done and checked: datacore f681632b, nightshift bb81952 (an item names its runner; Miles's hourly run takes his assigned items from the ledger; nightshift.org is regenerated from the ledger each run; a hand-added entry is imported as a ledger item; wip_limit is data on Miles). Live once you merge DIP PR #13 and update Miles's checkout; trial one space first, since the first run imports every NEXT entry in nightshift.org"),
     ("F", "One way in: org lists read-only", "waiting on you", "code done and checked (29bf0acd): a per-space setting makes next_actions.org a read-only view, the adapter writes events then regenerates, an editor hook turns hand edits into commands or refuses and saves them, a trial checker (9-practice today: 35 tasks, 0 lost, 0 doubled). The week-long trial on 9-practice starts when you switch it on"),
     ("G", "One ledger", "waiting on you", "paused on your question: the fold already merges every writer; choose (a) one view by folding the ten spaces together, keyed by space and id (recommended; no migration), or (b) the full merge under a genesis you sign. Comparison in the plan's Phase G section; 696 task ids exist in more than one space, so either way items are keyed by space and id"),
-    ("H", "The remaining process upgrades", "not started", "per item, as tagged on this page"),
+    ("H", "The remaining process upgrades", "in progress", "8 changes built and tested (5 done, 3 wait on the box's checkout); the board of 15 decisions is yours; 6 more to build"),
 ]
 
 # Changes whose rule you have ratified, though the code may still be to do.
@@ -679,6 +679,15 @@ CHANGE_STATUS = {
     ("ledger-finality", 0): ("done", "box-ledger-seal-age live on the box since 2026-11-01 16:50; first scheduled run OK for all ten spaces"),
     ("ledger-finality", 1): ("waiting on you", "phase D2, deployed: readers fold from the hub's admitted log when it answers; needs the hub token in the broker"),
     ("sync-cycle", 0): ("waiting on you", "phase D2, deployed: claims and folds read the hub first, git stays for history and backup; needs the hub token in the broker"),
+    # Phase H (2026-11-01/02): built and tested; live where noted.
+    ("morning", 0): ("waiting on you", "built 3a79e48b: only the briefing cadence judges the journal page; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
+    ("memory", 1): ("done", "87fcf6a3: the guard has been live since 2026-08-20; a test now pins it"),
+    ("memory", 2): ("done", "6c43836d: wrap-up.yaml says the sweep has no schedule and how to run it"),
+    ("ledger-daily", 0): ("waiting on you", "built abb98889: the daily check gains a seal step; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
+    ("ledger-hygiene", 1): ("waiting on you", "built f6bdfb7a: nightly invariants flag hub events missing from git; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
+    ("scheduled-job", 0): ("done", "6b84db9a: the installer refuses a job without evidence and the schedule scan flags lines outside the manifest; applies at the next install"),
+    ("evening-handoff", 2): ("done", "chief-of-staff 1b95e40: the script exists in the module and the deploy links it beside cos_tomorrow.sh; the page was wrong, a test now pins the record"),
+    ("promise-scoreboard", 0): ("waiting on you", "built eebba864: the merge and the console reading it; no job installed yet, and where it runs decides how it reaches the pods (from dayshift it cannot)"),
 }
 for (_flow, _i), _st in CHANGE_STATUS.items():
     _c = UPGRADES[_flow]["changes"][_i]
