@@ -662,7 +662,7 @@ PLAN_PROGRESS = [
      "code done and checked: datacore f681632b, nightshift bb81952 (an item names its runner; Miles's hourly run takes his assigned items from the ledger; nightshift.org is regenerated from the ledger each run; a hand-added entry is imported as a ledger item; wip_limit is data on Miles). Live once you merge DIP PR #13 and update Miles's checkout; trial one space first, since the first run imports every NEXT entry in nightshift.org"),
     ("F", "One way in: org lists read-only", "waiting on you", "code done and checked (29bf0acd): a per-space setting makes next_actions.org a read-only view, the adapter writes events then regenerates, an editor hook turns hand edits into commands or refuses and saves them, a trial checker (9-practice today: 35 tasks, 0 lost, 0 doubled). The week-long trial on 9-practice starts when you switch it on"),
     ("G", "One ledger", "waiting on you", "paused on your question: the fold already merges every writer; choose (a) one view by folding the ten spaces together, keyed by space and id (recommended; no migration), or (b) the full merge under a genesis you sign. Comparison in the plan's Phase G section; 696 task ids exist in more than one space, so either way items are keyed by space and id"),
-    ("H", "The remaining process upgrades", "in progress", "8 changes built and tested (5 done, 3 wait on the box's checkout); the board of 15 decisions is yours; 6 more to build"),
+    ("H", "The remaining process upgrades", "in progress", "11 changes built and tested (5 done, 6 wait on the box's checkouts); 7 code fixes still to build; 5 installs, 2 DIP amendments and the board of 15 decisions are yours"),
 ]
 
 # Changes whose rule you have ratified, though the code may still be to do.
@@ -687,6 +687,9 @@ CHANGE_STATUS = {
     ("ledger-hygiene", 1): ("waiting on you", "built f6bdfb7a: nightly invariants flag hub events missing from git; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
     ("scheduled-job", 0): ("done", "6b84db9a: the installer refuses a job without evidence and the schedule scan flags lines outside the manifest; applies at the next install"),
     ("evening-handoff", 2): ("done", "chief-of-staff 1b95e40: the script exists in the module and the deploy links it beside cos_tomorrow.sh; the page was wrong, a test now pins the record"),
+    ("morning", 1): ("waiting on you", "built chief-of-staff 64f1e2f: the briefing page's Fleet block (scoreboard and GitHub lines, no model writes them); live when the box's module checkout updates"),
+    ("intake-triage", 0): ("waiting on you", "built chief-of-staff 64f1e2f: one line per GitHub board with its first 'do first' item and decision count, checked on the real boards; live when the box's module checkout updates"),
+    ("promise-scoreboard", 1): ("waiting on you", "built ahead of your board answer (chief-of-staff 64f1e2f): the Fleet block names reds that stayed red with their dated failure line; drop it on the board if you do not want it"),
     ("promise-scoreboard", 0): ("waiting on you", "built eebba864: the merge and the console reading it; no job installed yet, and where it runs decides how it reaches the pods (from dayshift it cannot)"),
 }
 for (_flow, _i), _st in CHANGE_STATUS.items():

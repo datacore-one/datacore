@@ -75,6 +75,27 @@ End-of-day command that closes out today, celebrates accomplishments, and builds
 
 Execute the evening shutdown sequence with a focus on accomplishment and anticipation.
 
+## Unattended mode
+
+Run with the argument `unattended` (the evening job on the box does: "Run the /tomorrow
+evening review via datacore_command_run with arguments 'unattended'") when no one is
+there to answer. In this mode:
+
+- **Never ask.** No prompt is shown and none is waited for: not "Confirm queue for
+  nightshift? [Y/n]", not "Add more tasks to delegate?", not the coaching questions
+  (step 5 is ticked `not-applicable (unattended)`). Every place that asks takes its
+  stated default and the report lists what was done instead.
+- **Every task this run creates is agent-made.** It carries `:ORIGIN: agent` in its
+  properties. That is what the delegation gate reads (nightshift `task_queue`,
+  `MACHINE_ORIGINS`): an agent-made task runs only after Winston's review approves it.
+- **The owner's tasks keep their origin.** Delegating an existing task never changes
+  or adds its `:ORIGIN:`; a task the owner wrote and tagged `:AI:` stays the owner's.
+- **Only what is already delegated is queued.** The run assigns tasks the owner
+  already tagged `:AI:` and tasks it creates itself (marked as above); it never adds
+  `:AI:` to an owner's task on its own judgment.
+- **Questions go to the approval queue.** Anything that needs the owner is written
+  as a question in the output; the evening job turns each into an Approve/Dismiss item.
+
 ## Step 0: Create Tracked Checklist (MANDATORY FIRST STEP)
 
 **Before doing anything else**, start the run's checklist with the Datacore step tracker. This prevents step skipping in end-of-day processing, and it works in every harness because the checklist lives in today's personal journal:
