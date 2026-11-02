@@ -662,7 +662,7 @@ PLAN_PROGRESS = [
      "code done and checked: datacore f681632b, nightshift bb81952 (an item names its runner; Miles's hourly run takes his assigned items from the ledger; nightshift.org is regenerated from the ledger each run; a hand-added entry is imported as a ledger item; wip_limit is data on Miles). Live once you merge DIP PR #13 and update Miles's checkout; trial one space first, since the first run imports every NEXT entry in nightshift.org"),
     ("F", "One way in: org lists read-only", "waiting on you", "code done and checked (29bf0acd): a per-space setting makes next_actions.org a read-only view, the adapter writes events then regenerates, an editor hook turns hand edits into commands or refuses and saves them, a trial checker (9-practice today: 35 tasks, 0 lost, 0 doubled). The week-long trial on 9-practice starts when you switch it on"),
     ("G", "One ledger", "waiting on you", "paused on your question: the fold already merges every writer; choose (a) one view by folding the ten spaces together, keyed by space and id (recommended; no migration), or (b) the full merge under a genesis you sign. Comparison in the plan's Phase G section; 696 task ids exist in more than one space, so either way items are keyed by space and id"),
-    ("H", "The remaining process upgrades", "in progress", "11 changes built and tested (5 done, 6 wait on the box's checkouts); 7 code fixes still to build; 5 installs, 2 DIP amendments and the board of 15 decisions are yours"),
+    ("H", "The remaining process upgrades", "in progress", "every code fix that needs no decision of yours is built and tested: 15 changes (5 done; 10 wait on a deploy, an install or PR #38); 3 held on your board rows; 5 installs, 2 DIP amendments and the board are yours"),
 ]
 
 # Changes whose rule you have ratified, though the code may still be to do.
@@ -690,6 +690,13 @@ CHANGE_STATUS = {
     ("morning", 1): ("waiting on you", "built chief-of-staff 64f1e2f: the briefing page's Fleet block (scoreboard and GitHub lines, no model writes them); live when the box's module checkout updates"),
     ("intake-triage", 0): ("waiting on you", "built chief-of-staff 64f1e2f: one line per GitHub board with its first 'do first' item and decision count, checked on the real boards; live when the box's module checkout updates"),
     ("promise-scoreboard", 1): ("waiting on you", "built ahead of your board answer (chief-of-staff 64f1e2f): the Fleet block names reds that stayed red with their dated failure line; drop it on the board if you do not want it"),
+    ("evening-handoff", 0): ("waiting on you", "built: /tomorrow states its unattended mode (core, pinned by tests) and the evening job passes it (chief-of-staff); every task it creates is :ORIGIN: agent; live when the box's checkouts update"),
+    ("ledger-hygiene", 0): ("waiting on you", "built in datacore-app PR #38 (open, yours to merge): app edits to inbox.org reach the ledger when made; the core adapter already did"),
+    ("lens", 0): ("waiting on you", "built: sqlite_push --plain and the neutral mac-lens-push line; live when the Mac's manifest.local.yaml line says the same, then box-lens-analyze retires"),
+    ("backups", 0): ("waiting on you", "built: copies carry their source row counts; sqlite_restore_check.py opens them (checked on a real index); the weekly job on Miles is an install"),
+    ("owner-decisions", 1): ("waiting on you", "held: which store records decisions is your board row owner-decisions 0"),
+    ("owner-decisions", 2): ("waiting on you", "held: queue items need the single decision store, your board row owner-decisions 0"),
+    ("cadence-run", 1): ("waiting on you", "held: a cadence's own job contract needs cadences in the manifest, your board row cadence-run 0"),
     ("promise-scoreboard", 0): ("waiting on you", "built eebba864: the merge and the console reading it; no job installed yet, and where it runs decides how it reaches the pods (from dayshift it cannot)"),
 }
 for (_flow, _i), _st in CHANGE_STATUS.items():
