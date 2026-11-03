@@ -283,6 +283,50 @@ def _generated_target(file_path) -> bool:
     return phase(space) == 1 and Path(file_path).resolve() == (space / ORG).resolve()
 
 
+def _readonly_space(args):
+    """The space whose read-only list `args.file` is (phase F), else None.
+
+    In such a space the adapter never writes the list: it applies the change to
+    a scratch copy of the ledger's own rendering, records the difference as
+    events (`org_readonly.commit_text`) and regenerates the list.
+    """
+    if getattr(args, "_generated_scratch", False) or not getattr(args, "file", None):
+        return None
+    if not _generated_target(args.file):
+        return None
+    from org_space import ledger_space_for_file
+    import org_readonly
+    space = ledger_space_for_file(args.file)
+    return space if space is not None and org_readonly.enabled(space) else None
+
+
+def _via_ledger(command, args, space, observe=()):
+    import copy
+    import tempfile
+    import org_readonly
+    real = Path(args.file).resolve()
+    with tempfile.TemporaryDirectory(prefix="org-readonly-") as d:
+        scratch = Path(d) / space.name / "org" / real.name
+        scratch.parent.mkdir(parents=True)
+        scratch.write_text(org_readonly.ledger_text(space), encoding="utf-8")
+        scratch_args = copy.copy(args)
+        scratch_args.file = str(scratch)
+        scratch_args._generated_scratch = True
+        out = command(scratch_args)
+        if not isinstance(out, dict) or out.get("error"):
+            return out
+        creates = {}
+        if out.get("_create_payload"):
+            creates[out["id"]] = out.pop("_create_payload")
+        ledger = org_readonly.commit_text(space, scratch.read_text(encoding="utf-8"), creates=creates)
+    out.pop("observed", None)
+    out["ledger"] = ledger
+    out["file"] = str(real)
+    if observe and out.get("id"):
+        out["observed"] = _observed(real, out["id"], set(observe))
+    return out
+
+
 def _ledger_emit_close(file_path, node, reason):
     """Dismiss the ledger item iff the org task ACTUALLY closed.
 
@@ -399,6 +443,9 @@ def _observed(file_path, task_id, keys):
 
 def cmd_add(args):
     """Add a new task to an org file."""
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_add, args, space)
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -461,7 +508,7 @@ def cmd_add(args):
                 break
         if parent_node is None:
             return {"error": f"Parent heading not found: {args.parent}"}
-    elif not generated:
+    elif not generated and not getattr(args, "_generated_scratch", False):
         # Default: first level-1 heading. Not in a generated file: it has no
         # sections, and its first heading is just some task.
         for n in ws.all_nodes():
@@ -542,6 +589,10 @@ def cmd_add(args):
         _create_payload["assignee"] = _assignee
     if generated:
         return _add_to_generated(file_path, generated_before, _create_payload, node_id, args.heading)
+    if getattr(args, "_generated_scratch", False):
+        # A read-only list (phase F): the caller records this payload.
+        return {"added": True, "id": node_id, "heading": args.heading,
+                "_create_payload": _create_payload}
     emitted = _ledger_emit(file_path, "item.create", _create_payload)
     return {"added": True, "id": node_id, "heading": args.heading,
             "ledger_actor": emitted}
@@ -578,6 +629,9 @@ def _add_to_generated(file_path, before, payload, node_id, heading):
 
 def cmd_complete(args):
     """Mark a task DONE, matched by title substring or ID."""
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_complete, args, space, observe=("STATE",))
     ws = _load_ws(args.file)
 
     if not getattr(args, 'id', None) and not getattr(args, 'title', None):
@@ -1057,6 +1111,9 @@ def cmd_ensure_ids(args):
 def cmd_write_clock(args):
     """Write a CLOCK entry to a task's LOGBOOK, matched by title or ID."""
     from org_workspace.log import add_clock_entry
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_write_clock, args, space)
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -1271,6 +1328,10 @@ def cmd_show(args):
 
 def cmd_update(args):
     """Update fields on an existing task."""
+    space = _readonly_space(args)
+    if space is not None:
+        keys = {"STATE", "SCHEDULED", "DEADLINE"} | {p.split("=", 1)[0] for p in (getattr(args, "property", None) or []) if "=" in p}
+        return _via_ledger(cmd_update, args, space, observe=tuple(keys))
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -1329,6 +1390,19 @@ def cmd_update(args):
             ws.set_scheduled(node, sched_dt)
             changes.append(f"scheduled→{args.scheduled}")
 
+    # Deadline, same rules as scheduled ("none" clears it).
+    if getattr(args, 'deadline', None):
+        if args.deadline.strip().lower() == "none":
+            ws.set_deadline(node, None)
+            changes.append("deadline→(cleared)")
+        else:
+            try:
+                deadline_dt = datetime.strptime(args.deadline, "%Y-%m-%d").date()
+            except ValueError:
+                return {"error": f"Invalid date: '{args.deadline}'. Use YYYY-MM-DD or 'none'."}
+            ws.set_deadline(node, deadline_dt)
+            changes.append(f"deadline→{args.deadline}")
+
     # Heading
     if getattr(args, 'new_heading', None):
         ws.set_heading(node, args.new_heading)
@@ -1355,6 +1429,8 @@ def cmd_update(args):
         _payload['effective_tags'] = current['effective_tags']
     if args.scheduled:
         _payload['scheduled'] = current['scheduled']
+    if getattr(args, 'deadline', None):
+        _payload['deadline'] = current['deadline']
     if getattr(args, 'property', None):
         _payload['org'] = {'properties': _props}
     emitted = _ledger_emit(file_path, "item.update", _payload)
@@ -1494,6 +1570,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "REVIEW | DONE, DEFERRED, CANCELLED)")
     p.add_argument("--tags", help="Replace tags (:tag1:tag2: format)")
     p.add_argument("--scheduled", help="YYYY-MM-DD")
+    p.add_argument("--deadline", help="YYYY-MM-DD, or 'none' to clear it")
     p.add_argument("--heading", dest="new_heading", help="New heading text")
     p.add_argument("--property", action="append", metavar="KEY=VALUE",
                    help="Set property (repeatable)")

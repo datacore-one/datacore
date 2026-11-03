@@ -25,6 +25,17 @@ from tests.test_ledger_hub_round7 import _logs_only_replica
 from ledger import hub as H
 from ledger.events import to_line
 from ledger.log import EventLog, read_events
+from tests._legacy_void import legacy_void_rules
+
+
+@pytest.fixture(autouse=True)
+def _voids_judged_as_before_the_retirement():
+    """HISTORY. These tests pin how a reversal written and admitted BEFORE voids
+    were retired (DIP-0034 amendment of 2026-10-31, in force 2026-11-01) is
+    judged; that history keeps its rule. Today's rule (no new voids) is pinned
+    by test_promise_LED15_corrections_are_forward_only.py."""
+    with legacy_void_rules():
+        yield
 
 
 def _rejected(h):
@@ -215,7 +226,6 @@ def test_r7b_an_unanswered_stale_request_is_replaced_by_a_fresh_one(env):
     wa._pending_path("lease.request", "t").write_text(json.dumps(req, sort_keys=True))
     env.clock.advance(H.REQUEST_WINDOW_MS / 1000 + 1)
     assert wa.request_lease("t")["status"] == "granted"
-
 
 
 # ── the round-7 re-check (Codex, targeted): N1-N5 ───────────────────────────

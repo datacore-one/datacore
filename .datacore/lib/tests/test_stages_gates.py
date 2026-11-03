@@ -118,7 +118,7 @@ def test_signing_switch_is_read_from_the_identity_file(tmp_path, monkeypatch):
     assert log.sign is True
     log.append("item.create", {"id": "s2", "title": "signed by declaration"})
     assert json.loads((sd / ".datacore" / "events" / "miles.jsonl").read_text().splitlines()[-1])["sig"]
-    ident.write_text("DATACORE_ACTOR=miles\n")
+    ident.write_text("DATACORE_ACTOR=miles\nDATACORE_LEDGER_SIGN=0\n")   # signing is on unless declared off (2026-10-31)
     assert EventLog(sd, "miles", keys_dir=tmp_path / "k", registry_path=tmp_path / "r.yaml").sign is False
 
 

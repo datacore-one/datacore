@@ -13,11 +13,15 @@ registry (round 5 C5) and the local clock (round 5 H1). (Formal counterpart:
 `LED14_*` theorems in the Lean model, specs/datacore-lean.)
 
 Promise, as evals: a hub space with an admitted dismissal of another agent's
-task, a reversal inside the window, a rejected proposal and a handover to a
-second hub; replicas rebuilt from the published logs -- in a different file
-order, with different local policy files, and without the hub's private
-state -- give the same state root, the same task states and the same receipt
-for every event as the hub.
+task, a reversal the owner made inside the window BEFORE voids were retired
+(history, written by the legacy fixture helper `tests/_legacy_void.py`), a
+reversal written after the retirement that the hub refused (DIP-0034
+amendment of 2026-10-31: no new voids; owner approval of this rewrite
+2026-11-01), a forward correction (`ledger.compensate`) of a sealed event, a
+rejected proposal and a handover to a second hub; replicas rebuilt from the
+published logs -- in a different file order, with different local policy
+files, and without the hub's private state -- give the same state root, the
+same task states and the same receipt for every event as the hub.
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ import pytest
 from tests import test_ledger_hub as T
 from tests.test_ledger_hub_round5 import _replica, env  # noqa: F401
 from ledger import hub as H
+from tests._legacy_void import legacy_void_rules
 
 
 def _local_policies():
@@ -52,9 +57,22 @@ def history(env, monkeypatch):
     dismissal, _ = wa.append("item.dismiss", {"id": "t1"})
     own.append("item.create", {"id": "t2", "assignee": "wa"})
     claim, _ = wa.append("item.claim", {"id": "t2"})
-    v, _ = owner.append("ledger.void", {"log": "wa", "seq": claim.seq, "hash": claim.hash, "reason": "eval"})
+    with legacy_void_rules():                          # history: admitted before the retirement
+        v, _ = owner.append("ledger.void", {"log": "wa", "seq": claim.seq, "hash": claim.hash, "reason": "eval"})
     rejected = T._signed_into(env, wb, "item.claim", {"id": "t2"})
     h.append(wb._submission(rejected, rejected=True))
+    h.seal()
+    # after the retirement: a reversal is refused (kept as a rejected proposal),
+    # and the sealed dismissal is corrected forward instead
+    retired = T._signed_into(env, owner, "ledger.void",
+                             {"log": "wa", "seq": dismissal.seq, "hash": dismissal.hash, "reason": "eval"})
+    assert h.append(owner._submission(retired, rejected=True))["status"] == "rejected"
+    assert [e.payload.get("code") for e in h._state()[0] if e.type == "ledger.reject"
+            and (e.payload.get("event") or {}).get("hash") == retired.hash] == ["void_retired"]
+    T.git_pull(env.hub_dir, owner.space_dir)
+    correction, answer = owner.append("ledger.compensate", {"log": "wa", "seq": dismissal.seq,
+                                                            "hash": dismissal.hash, "reason": "eval"})
+    assert answer["status"] == "accepted", answer
     h.seal()
     h.fence("eval handover")
     H.promote(env.hub_dir, "hubb", by=T.OWNER, reason="eval handover", keys_dir=env.keys_dir,
@@ -63,7 +81,8 @@ def history(env, monkeypatch):
     own.append("item.create", {"id": "t3"})
     h2.seal()
     return {"h": h2, "writers": {"own": own, "wa": wa, "wb": wb, T.OWNER: owner},
-            "events": {"dismissal": dismissal, "claim": claim, "void": v, "rejected": rejected}}
+            "events": {"dismissal": dismissal, "claim": claim, "void": v, "rejected": rejected,
+                       "retired-void": retired, "correction": correction}}
 
 
 def _view(state):
@@ -86,6 +105,7 @@ def test_every_replica_works_out_the_same_state_and_receipts(env, history):
     hub_state = h._state()[1]
     hub_receipts = _receipts(env, history, env.hub_dir, T.TEST_POLICY, "hub")
     assert hub_receipts["dismissal"] == "confirmed" and hub_receipts["rejected"] != "confirmed", hub_receipts
+    assert hub_receipts["correction"] == "confirmed" and hub_receipts["retired-void"] != "confirmed", hub_receipts
     differences = []
     for pname, policy in _local_policies().items():
         replica = _replica(env, env.hub_dir)           # rebuilt line by line, files in reverse order

@@ -18,6 +18,10 @@ checked anywhere:
   declared      every writer belongs to a declared principal
   unforked      no (actor, seq) disagrees with origin
   published     nothing sits unpublished past the grace window
+  delivered     the hub's admitted log and the git copy agree: no event the
+                hub admitted is missing from git, and none in git is missing
+                from the hub, past the grace window (hub spaces only; a hub
+                that does not answer, or is not named, is could-not-tell)
 
 WHY NOT IN v2_verify. That file checks THIS host's installation, per DIP, and
 is already 36 checks long. This asks one question -- is the RECORD sound -- and
@@ -41,6 +45,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
@@ -60,6 +65,83 @@ class Finding:
 def _spaces(root: Path) -> list[Path]:
     return [p for p in sorted(root.glob("[0-9]-*"))
             if (p / ".datacore" / "events").is_dir()]
+
+
+#: How long an event may sit on one side of the hub/git boundary before it is
+#: a finding: the same 90-minute grace as `published` (ledger_transport.gaps).
+DELIVERY_GRACE_MS = 90 * 60 * 1000
+
+
+def delivered(space: Path, transport, *, now_ms: int | None = None, grace_ms: int = DELIVERY_GRACE_MS,
+              registry_path=None) -> list[Finding]:
+    """The hub's admitted log against this git copy (plan 2026-10-31, phase H).
+
+    Once the hub is the delivery path the git copy must be checked against it,
+    both ways, for events older than `grace_ms`:
+      * an event the hub admitted that never reached git -- what the hub sends
+        beyond this copy's heads, through the readers' own path
+        (`ledger.hub.task_events_hub_first`), so the same chain rule applies;
+      * an event this copy admits that the hub never admitted -- above the
+        hub's admitted watermark for its chain (`status()["watermarks"]`).
+    Task logs only (telemetry is not delivered through the hub, phase C).
+    A space without a hub: nothing to compare. A hub space with no transport
+    (no hub named, the broker served no token) or a hub that does not answer:
+    one could-not-tell finding -- never a pass."""
+    from ledger import hub as hubmod
+    from ledger.log import TELEMETRY_SUFFIX, read_task_events
+
+    name = Path(space).name
+    if hubmod.load_config(space) is None:
+        return []
+    if transport is None:
+        return [Finding("delivered", name, "could not tell: no hub named for this host (DATACORE_HUB_URL / "
+                        "DATACORE_HUB_TOKEN_ID) or the broker served no token -- not compared, not a pass", True)]
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+
+    def old(e) -> bool:
+        ms = hubmod._physical_ms(e.hlc)
+        return ms is not None and now - ms > grace_ms
+
+    def chain(e) -> str:
+        return getattr(e, "log", None) or e.actor
+
+    def summary(events, what: str) -> str:
+        by: dict[str, list[int]] = {}
+        for e in events:
+            by.setdefault(chain(e), []).append(e.seq)
+        parts = [f"{c} seq {min(v)}" + (f"-{max(v)}" if len(v) > 1 else "") for c, v in sorted(by.items())]
+        return f"{len(events)} event(s) {what}: {', '.join(parts)}"
+
+    local = read_task_events(space)
+    held = {e.hash for e in local}
+    merged, source = hubmod.task_events_hub_first(space, transport)
+    if source != "hub":
+        return [Finding("delivered", name, "could not tell: the hub did not answer -- not compared, not a pass",
+                        True)]
+    try:
+        marks = transport.status().get("watermarks")
+    except (hubmod.HubError, ValueError, TypeError, OSError, AttributeError):
+        marks = None
+    if not isinstance(marks, dict):
+        return [Finding("delivered", name, "could not tell: the hub did not report its admitted watermarks "
+                        "-- not compared, not a pass", True)]
+
+    findings = []
+    missing = [e for e in merged if e.hash not in held and old(e)]
+    if missing:
+        findings.append(Finding("delivered", name, summary(missing, "the hub admitted never reached git")))
+    admitted, _ = hubmod.authoritative_events(space, local, registry_path=registry_path, now_ms=now)
+    unseen = [e for e in admitted if not chain(e).endswith(TELEMETRY_SUFFIX) and type(e.seq) is int
+              and e.seq > (marks.get(chain(e)) if type(marks.get(chain(e))) is int else -1) and old(e)]
+    if unseen:
+        findings.append(Finding("delivered", name, summary(unseen, "in git the hub never admitted")))
+    return findings
+
+
+def _hub_transport(space: Path):
+    """The hub transport for this space, from the environment (phase D2)."""
+    from ledger import hub as hubmod
+    return hubmod.transport_from_env(space, "ledger-invariants")
 
 
 def sweep(root: Path, quick: bool = False) -> list[Finding]:
@@ -147,6 +229,12 @@ def sweep(root: Path, quick: bool = False) -> list[Finding]:
                                             f"{len(stranded)} log(s) unpublished past the grace window"))
             except Exception as exc:  # noqa: BLE001
                 findings.append(Finding("published", space.name, f"could not tell: {exc}", True))
+
+            try:
+                findings.extend(delivered(space, _hub_transport(space)))
+            except Exception as exc:  # noqa: BLE001 -- the comparison breaking is could-not-tell
+                findings.append(Finding("delivered", space.name, f"could not tell: {type(exc).__name__}: {exc}",
+                                        True))
 
     return findings
 

@@ -63,7 +63,7 @@ def test_every_flow_has_an_upgrade_entry():
         if up.get("keep"):
             continue
         assert up["changes"], f["slug"]
-        for what, why, needs in up["changes"]:
+        for what, why, needs, *_status in up["changes"]:
             assert what and why, f["slug"]
             assert needs in NEEDS, (f["slug"], needs)
         pv.svg_flow(pv.upgrade_flow(f))   # raises on long labels and unknown marks
@@ -110,3 +110,71 @@ def test_every_diagram_has_zoom_and_fit():
     drawn = html.count('<svg viewBox=')
     for act in ("out", "in", "fit", "full"):
         assert html.count(f'data-zoom="{act}"') == drawn, act
+
+
+# ---- 2026-11-01: the page shows what the rebuild has done ----
+
+def test_the_page_shows_the_rebuild_plan_progress():
+    from process_upgrades import PLAN_PROGRESS
+    assert [p[0] for p in PLAN_PROGRESS] == list("ABCDEFGH")
+    html = pv.page(pv.load_inventory())
+    assert 'id="rebuild"' in html
+    for phase, title, status, _note in PLAN_PROGRESS:
+        assert f'data-phase="{phase}"' in html and status in pv.STATUS_ICON
+
+
+def test_a_change_that_is_done_or_ratified_carries_its_status():
+    from process_upgrades import UPGRADES
+    with_status = [c for u in UPGRADES.values() for c in u.get("changes", []) if len(c) == 4]
+    assert with_status, "no change records what has already happened"
+    html = pv.page(pv.load_inventory())
+    assert 'class="status ' in html
+
+
+def test_signing_is_drawn_as_always_on():
+    assert "always" in pv.MARKS["S"][2].lower() and "DATACORE_LEDGER_SIGN=0" in pv.MARKS["S"][2]
+
+
+def test_corrections_have_a_forward_only_proposal():
+    from process_upgrades import UPGRADES
+    up = UPGRADES["ledger-corrections"]
+    assert not up.get("keep")
+    assert any("ledger.compensate" in (s[4] if len(s) > 4 else "") for s in up["steps"])
+    assert not any("ledger.void" in s[4] for s in up["steps"])
+
+
+# ---- 2026-11-01: phase B shipped (cfec20b5) ----
+
+def test_the_current_corrections_drawing_has_no_reversal():
+    cur = next(p for p in pv.FLOWS if p["slug"] == "ledger-corrections")
+    assert not any(s[4] == "ledger.void" and "refused" not in s[3].lower() for s in cur["steps"])
+    assert any("void_retired" in s[4] for s in cur["steps"])
+    assert "REVERSAL_MAX_AGE_MS" not in cur["source"]
+
+
+def test_phase_b_is_done():
+    from process_upgrades import PLAN_PROGRESS
+    b = next(p for p in PLAN_PROGRESS if p[0] == "B")
+    assert b[2] == "done" and "cfec20b5" in b[3]
+
+
+# ---- 2026-11-01: owner -- every process shows previous, current and desired ----
+
+def test_every_process_has_previous_current_and_desired():
+    html = pv.page(pv.load_inventory())
+    for f in pv.FLOWS:
+        s = f["slug"]
+        for v, label in (("prev", "Previous"), ("cur", "Current"), ("up", "Desired")):
+            assert f'id="{s}-{v}"' in html and f'for="{s}-{v}">{label}<' in html, (s, v)
+        assert f'id="{s}-prev-pane"' in html
+    for v in ("prev", "cur", "up"):
+        assert f'data-all="{v}"' in html
+
+
+def test_previous_is_frozen_before_the_rebuild_and_differs_where_the_rebuild_changed_it():
+    from process_previous import PREVIOUS, AS_OF
+    assert AS_OF == "2026-10-31"
+    assert "ledger-corrections" in PREVIOUS
+    assert any(s[4] == "ledger.void" for s in PREVIOUS["ledger-corrections"]["steps"])
+    html = pv.page(pv.load_inventory())
+    assert 'id="ledger-corrections-prev-pane"' in html and "Reverse it" in html

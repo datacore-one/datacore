@@ -305,8 +305,8 @@ def compensation_problem(c: Event, events: list[Event], *, owner: str, sealers) 
         return "bad_compensate", "only the space's owner or the original's writer corrects it"
     if not any(s.type == "ledger.seal" and s.actor in set(sealers or ()) and _covered(s.payload, orig)
                and not _covered(s.payload, c) for s in events):
-        return "bad_compensate", ("the original is not sealed yet: it is still inside the correction window, "
-                                  "where a reversal (ledger.void) corrects it")
+        return "bad_compensate", ("the original is not sealed yet: compensate it once it is sealed, or correct "
+                                  "a task with a new forward item event (item.update, item.reopen)")
     return None
 
 

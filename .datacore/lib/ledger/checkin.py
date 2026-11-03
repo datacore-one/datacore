@@ -42,7 +42,7 @@ class Offline:
     def _down(self, *_a, **_k):
         raise hubmod.HubUnavailable("no hub named for this writer")
 
-    append = request_lease = renew_lease = status = presence = seal_request = reconcile = _down
+    append = request_lease = renew_lease = status = presence = seal_request = reconcile = events = _down
 
 
 def broker_token(cred_id: str, consumer: str = CONSUMER) -> str:
@@ -58,7 +58,8 @@ def broker_token(cred_id: str, consumer: str = CONSUMER) -> str:
     return r.stdout.strip()
 
 
-def transport_for(hub_url: str | None, token_id: str | None, space_name: str, consumer: str = CONSUMER):
+def transport_for(hub_url: str | None, token_id: str | None, space_name: str, consumer: str = CONSUMER,
+                  *, timeout_s: float = 10.0):
     """HttpTransport to the hub, or Offline when none is named or no token is served."""
     if not hub_url or not token_id:
         return Offline()
@@ -66,7 +67,7 @@ def transport_for(hub_url: str | None, token_id: str | None, space_name: str, co
         token = broker_token(token_id, consumer)
     except hubmod.HubUnavailable:
         return Offline()
-    return hubmod.HttpTransport(hub_url, token, space_name)
+    return hubmod.HttpTransport(hub_url, token, space_name, timeout_s=timeout_s)
 
 
 def send(space_dir, *, agent: str, interval_s: int, transport, actor: str | None = None,

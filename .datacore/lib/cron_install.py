@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 
 MARKER = '# datacore-job:'
 KEY = re.compile(r'[a-z0-9][a-z0-9-]*\Z')
@@ -128,6 +129,34 @@ def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (
     return output
 
 
+def contract_problems(entries: dict[str, str], manifest: Path, machine: str) -> list[str]:
+    """Why each entry may not be installed on `machine`, [] when every one may.
+
+    A scheduled job needs a contract that declares evidence (processes page,
+    "A scheduled job", 2026-10-31: 33 scheduled scripts had none, so their
+    silent failures stayed silent). An entry's contract is the job in
+    `manifest` (with the install's manifest.local.yaml laid over it) on
+    `machine` named KEY or <machine>-KEY, or running the same invocation. It
+    must declare at least one artifact: no success without evidence."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from jobs.manifest import effective_doc
+    jobs = [j for j in (effective_doc(Path(manifest)).get('jobs') or [])
+            if isinstance(j, dict) and j.get('machine') == machine]
+    problems = []
+    for key, line in entries.items():
+        wanted = invocation(line)
+        found = [j for j in jobs if j.get('name') in (key, f'{machine}-{key}')]
+        if not found:
+            found = [j for j in jobs if wanted and invocation('* * * * * ' + str(j.get('cmd') or '')) == wanted]
+        if not found:
+            problems.append(f'{key}: no manifest entry on {machine} runs it -- add its job contract '
+                            '(with the artifact that proves a run) to jobs/manifest.yaml first')
+        elif not any(j.get('artifacts') for j in found):
+            problems.append(f"{key}: its manifest entry ({found[0].get('name')}) declares no evidence -- "
+                            'add an artifact that proves a run')
+    return problems
+
+
 def settled(current: str, desired: str) -> bool:
     """The same lines, in any order. Two installers share one crontab (the
     host setup and the jobs manifest) and each appends its own entries at the
@@ -189,9 +218,25 @@ def main() -> int:
     parser.add_argument('--retire-key', action='append', default=[])
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--state', type=Path, required=True)
+    # Refuse any entry without a job contract that declares evidence on this
+    # machine (plan 2026-10-31, phase H). Both or neither.
+    parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--machine')
     args = parser.parse_args()
     if (not args.entry and not args.retire_key) or len(dict(args.entry)) != len(args.entry):
         parser.error('provide distinct managed entry keys')
+    if bool(args.manifest) != bool(args.machine):
+        parser.error('--manifest and --machine go together')
+    if args.manifest and not args.verify:
+        try:
+            problems = contract_problems(dict(args.entry), args.manifest, args.machine)
+        except Exception as exc:  # noqa: BLE001 -- an unreadable manifest refuses, never waves through
+            problems = [f'the manifest could not be read ({type(exc).__name__}: {exc})']
+        if problems:
+            print('cron installation REFUSED: nothing written')
+            for p in problems:
+                print(f'  {p}')
+            return 1
     try:
         good = install(dict(args.entry), args.state, verify=args.verify, retire=tuple(args.retire),
                        retire_keys=tuple(args.retire_key))

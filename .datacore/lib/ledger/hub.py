@@ -830,10 +830,15 @@ def authoritative_state(space_dir, events=None, *, registry_path=None, policy=No
     events, verified with the same inputs; an unverified seal raises
     `ValueError`, like `seal.settled_events`."""
     from .fold import fold
+    if events is None and not settled:
+        # The live state folds task events only (plan phase C): telemetry has
+        # no effect on it. A settled read keeps every event for the seal check.
+        from .log import read_task_events
+        events = read_task_events(Path(space_dir))
     admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
                                           now_ms=now_ms)
     if not settled:
-        return fold(admitted, **kw)
+        return fold(live_events(admitted, _grantors_of(kw)) if sealer is not None else admitted, **kw)
     from .seal import _covered_events, as_sequencer, latest_seal, settled as plain_settled, verify_seal
     if sealer is None:
         return plain_settled(admitted)
@@ -854,13 +859,32 @@ def seal_status(space_dir, events=None, *, registry_path=None, policy=None,
     and the grantor as the only sealer (Codex round 4: `ledger_seal status`
     verified raw events and printed ok over an unsigned, rehashed creation).
     A space without a hub verifies exactly as before."""
-    from .seal import as_sequencer, verify_seal
+    r = seal_report(space_dir, events, registry_path=registry_path, policy=policy, now_ms=now_ms)
+    return r["ok"], r["detail"]
+
+
+def seal_report(space_dir, events=None, *, registry_path=None, policy=None, now_ms: int | None = None) -> dict:
+    """`seal_status` with what it judged: {ok, detail, sealer, seal}. `sealer`
+    is the active grantor whose seals count (None without a hub); `seal` is its
+    newest seal over admitted events (`ledger.seal.Seal`, None if it never
+    sealed). `current`: the newest seal covers every admitted event (a seal
+    made now would be the hub's `unchanged`), None without one. For the hub's
+    seal-age contract (plan phase D2)."""
+    from .seal import _event_set_hash, as_sequencer, latest_seal, verify_seal
     admitted, kw, sealer = _authoritative(space_dir, events, registry_path=registry_path, policy=policy,
                                           now_ms=now_ms)
     if sealer is None:
-        return verify_seal(admitted)
+        ok, detail = verify_seal(admitted)
+        return {"ok": ok, "detail": detail, "sealer": None, "seal": None, "current": None}
     with as_sequencer(sealer):
-        return verify_seal(admitted, kw)
+        ok, detail = verify_seal(admitted, kw)
+        try:
+            seal = latest_seal(admitted)
+        except ValueError:
+            seal = None
+    current = None if seal is None else (
+        seal.event_set_hash == _event_set_hash([e for e in admitted if e.type != "ledger.seal"]))
+    return {"ok": ok, "detail": detail, "sealer": sealer, "seal": seal, "current": current}
 
 
 #: The incident a correction after a seal records: the original event should
@@ -895,6 +919,72 @@ def incidents(space_dir, events=None, *, registry_path=None, policy=None) -> lis
                     "log": log_stem(str(p.get("log"))), "correction": c.hash, "by": c.actor,
                     "reason": p.get("reason"), "gate": _GATE.format(type=orig.type)})
     return sorted(out, key=lambda r: (r["original"], r["correction"]))
+
+
+def sealed_late(candidates, events, grantors) -> dict:
+    """{hash: why} for each candidate that would reorder a SEALED decision:
+    not covered by any grantor's latest seal, yet stamped at or before a
+    sealed event about the same item (see `Hub._sealed_late`). A pure
+    function of the events held, so the hub and every reader agree."""
+    from .seal import as_sequencer, latest_seal
+    seals = []
+    for g in sorted(grantors):
+        try:
+            with as_sequencer(g):
+                seal = latest_seal(events)
+        except ValueError:
+            continue
+        if seal is not None:
+            seals.append(seal)
+    if not seals:
+        return {}
+
+    def sealed_by_any(e):
+        return any(seal.includes(e) for seal in seals)
+
+    top: dict = {}
+    for e in events:
+        item = e.payload.get("id") if isinstance(e.payload, dict) else None
+        if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and sealed_by_any(e):
+            top[item] = max(top.get(item, ""), e.hlc)
+    out = {}
+    for e in candidates:
+        item = e.payload.get("id") if isinstance(e.payload, dict) else None
+        # AT or before (round-7 audit): an equal stamp ties with the sealed
+        # event and may fold before it, so it reorders a sealed decision too.
+        if (isinstance(item, str) and isinstance(e.hlc, str) and not sealed_by_any(e)
+                and item in top and e.hlc <= top[item]):
+            out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
+                           "a sealed decision is final")
+    return out
+
+
+def _grantors_of(kw: dict) -> frozenset:
+    """Every grantor the fold inputs name ({hub: {grantor: epoch}})."""
+    out: set = set()
+    for v in (kw.get("lease_grantors") or {}).values():
+        out |= set(v)
+    return frozenset(out)
+
+
+def live_events(admitted, grantors) -> list:
+    """The admitted events the LIVE state folds (round-8 GLM re-check, C2):
+    without an event that reached this copy by git after a seal and would
+    reorder what that seal decided. The grantor rejects it at its next seal
+    (`sealed_late`); until then every reader already treats it as having no
+    effect, so a confirmed claim never shows another owner, not even for one
+    seal period. One the grantor already rejected stays in (a no-op, as
+    recorded). The settled view and seals fold their own events, unchanged."""
+    grantors = frozenset(grantors)
+    if not grantors:
+        return list(admitted)
+    gev = [e for e in admitted if (getattr(e, "log", None) or e.actor) in grantors]
+    recorded = {h for (_, _, h) in rejected_proposals(gev)}
+    pending = [e for e in admitted if e.actor not in grantors and e.hash not in recorded]
+    late = sealed_late(pending, admitted, grantors)
+    if not late:
+        return list(admitted)
+    return [e for e in admitted if e.hash not in late]
 
 
 def predecessor_seal_marks(events, auth: Authority, grantor: str) -> tuple[dict, str | None]:
@@ -951,7 +1041,7 @@ def resolve_attempt(space_dir, item_id: str, attempt: str, *, by: str, reason: s
 
 def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None, registry_path=None,
             attest_stopped: bool = False, clock: Callable[[], int] | None = None,
-            never_served: bool = False) -> HubConfig:
+            never_served: bool = False, last_seal: str | None = None) -> HubConfig:
     """The owner's one command that moves lease granting to another hub (H).
 
     Explicit by design: nothing in this module calls it. It is recorded in the
@@ -963,6 +1053,13 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
         -- when it cannot be reached -- `attest_stopped=True`, the owner's
         statement that it is stopped, with the frontier the owner's copy
         holds. Neither: refused (`unfenced`); leases stay paused, on purpose;
+      * when only attested, the owner also names the old grantor's LAST SEAL
+        (`last_seal`: its hash, e.g. the seal a writer's receipt names, or
+        "none" when it never sealed), and this copy must hold exactly that
+        seal as its latest one. A copy cannot know whether it lost the old
+        hub's last seal, so without the owner's word it refuses
+        (`last_seal_unknown`, round-8 GLM re-check C1): a floor below what
+        the old hub sealed would let a rival reorder a confirmed claim;
       * the new grantor grants nothing before `not_before_ms`: the last expiry
         of any old-epoch lease within the frontier (and, when only attested,
         now plus one lease period) plus the clock uncertainty. A higher epoch
@@ -1023,6 +1120,26 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
                              "served (its start record or the leases held results name); restore it before "
                              "promoting, or the promotion would cut off what it sealed (if it truly never "
                              "served, say so: --never-served)")
+        # THE OLD HUB'S LAST SEAL IS THE OWNER'S WORD (round-8 GLM re-check,
+        # C1): a copy cut short after an earlier seal looks complete. The
+        # owner names the last seal; the copy must hold it as its latest.
+        held = [e for e in admitted if e.type == "ledger.seal"]
+        if last_seal is None and never_served and not held:
+            last_seal = "none"
+        if not isinstance(last_seal, str) or not last_seal:
+            raise HubRefused("last_seal_unknown", f"this copy cannot tell whether it holds {old.grantor}'s last "
+                             "seal; name it (`last_seal=` / --last-seal <hash>, the seal a writer's receipt "
+                             "names, or 'none' if it never sealed) and make sure this copy holds it")
+        if last_seal == "none":
+            if held:
+                raise HubRefused("last_seal_unknown", f"the owner says {old.grantor} never sealed, but this copy "
+                                 f"holds its seal {held[-1].hash}; name its last seal (--last-seal)")
+        elif not any(e.hash == last_seal for e in held):
+            raise HubRefused("behind_predecessor", f"this copy does not hold {old.grantor}'s last seal "
+                             f"{last_seal}; restore its log before promoting")
+        elif held[-1].hash != last_seal:
+            raise HubRefused("last_seal_unknown", f"this copy holds a later seal of {old.grantor} "
+                             f"({held[-1].hash}) than the one named ({last_seal}); check which seal was its last")
     upto = admitted[: admitted.index(last) + 1] if last is not None else []
     expiries = [e.payload["expires_ms"] for e in upto if e.type in ("item.lease", "item.lease.renew")
                 and type((e.payload or {}).get("expires_ms")) is int]
@@ -1361,7 +1478,9 @@ class Hub:
         self.config()                                   # a space that opted out has no hub state
         events, kw = authoritative_events(self.space_dir, registry_path=self.registry_path, policy=self.policy,
                                           now_ms=self.clock())
-        return events, fold(events, **kw)
+        # The live fold leaves out what would reorder a sealed decision
+        # (`live_events`, C2); the events stay whole for sealing and judging.
+        return events, fold(live_events(events, _grantors_of(kw)), **kw)
 
     def _fold_kwargs(self, cfg: HubConfig) -> dict:
         return self._authority(cfg).fold_inputs(self.policy)
@@ -1812,7 +1931,8 @@ class Hub:
                           "actor": bad.actor, "type": bad.type}}, after=floor).hlc
 
     # ── leases ─────────────────────────────────────────────────────────────
-    def _verify_request(self, req: dict, kind: str, cfg: HubConfig, *, replay: bool = False) -> str:
+    def _verify_request(self, req: dict, kind: str, cfg: HubConfig, *, replay: bool = False,
+                        answered_ms: int | None = None) -> str:
         from .keys import verify
         if not isinstance(req, dict) or req.get("kind") != kind:
             raise HubRefused("malformed", f"expected a signed {kind}")
@@ -1824,7 +1944,12 @@ class Hub:
         # A FRESH request is judged by the key the writer holds NOW (audit
         # finding 5): a key rotated out stays valid for the history it signed,
         # never for new requests.
-        if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=now):
+        # An EXACT retry of an answered request is judged by the key that was
+        # valid when the hub answered it (round-8 GLM re-check, C4): its bytes,
+        # signature included, are the ones verified then, so a rotation since
+        # never turns a stored answer into `bad_signature`.
+        at = answered_ms if replay and type(answered_ms) is int else now
+        if not verify(actor, _unsigned(req), sig, registry_path=self.registry_path, at_ms=at):
             raise HubRefused("bad_signature", f"the {kind} is not signed with {actor!r}'s current key")
         # An EXACT retry of an answered request (same nonce, same digest) is
         # not a fresh request: it gets its stored answer however late it comes
@@ -2056,7 +2181,8 @@ class Hub:
         """Verify, then answer `req` exactly once: a retry gets the stored answer."""
         rec = self._answers.get(req.get("nonce")) if isinstance(req, dict) else None
         replay = rec is not None and rec.get("digest") == request_digest(req)
-        actor = self._verify_request(req, kind, cfg, replay=replay)
+        actor = self._verify_request(req, kind, cfg, replay=replay,
+                                     answered_ms=rec.get("ts_ms") if replay else None)
         cached = self._answered(req)
         if cached is not None:
             return cached
@@ -2162,7 +2288,14 @@ class Hub:
             # The day's budget (amendment G): a stop-on-recorded-spend
             # threshold, not a hard cap (see `pool_budget`).
             from .fold import pool_budget, pool_spent
-            cap = pool_budget(state, cfg.hub_id, self.actor, str(role))
+            # A HAND-OVER KEEPS THE BUDGET (round-8 GLM re-check, C3): the
+            # newest record of any grantor in the chain, the active one first,
+            # each predecessor's admitted only up to its fence.
+            cap = None
+            for g in [self.actor, *(ep.grantor for ep in reversed(self._authority(cfg).epochs))]:
+                cap = pool_budget(state, cfg.hub_id, g, str(role))
+                if cap is not None:
+                    break
             spent = pool_spent(state, str(role), now)
             if cap is not None and spent >= cap:
                 raise HubRefused("budget_reached", f"the {role!r} pool has spent {spent} of its {cap} "
@@ -2354,54 +2487,34 @@ class Hub:
         an earlier-stamped claim, delivered between the promotion and the new
         grantor's first seal, reorder (and fail) a claim its predecessor had
         sealed as confirmed. Sealed means final whoever sealed it."""
-        from .seal import as_sequencer, latest_seal
         try:
             cfg = self._writable(grant=True)
         except HubError:
             return {}                               # a standby rejects nothing
         if events is None:
             events, state = self._state()
-        grantors = sorted(self._authority(cfg).grantors | {self.actor})
-        seals = []
-        for g in grantors:
-            try:
-                with as_sequencer(g):
-                    seal = latest_seal(events)
-            except ValueError:
-                continue
-            if seal is not None:
-                seals.append(seal)
-        if not seals:
-            return {}
-
-        def sealed_by_any(e):
-            return any(seal.includes(e) for seal in seals)
-
-        top: dict = {}
-        for e in events:
-            item = e.payload.get("id") if isinstance(e.payload, dict) else None
-            if e.type != "ledger.seal" and isinstance(item, str) and isinstance(e.hlc, str) and sealed_by_any(e):
-                top[item] = max(top.get(item, ""), e.hlc)
-        out = {}
-        for e in candidates:
-            item = e.payload.get("id") if isinstance(e.payload, dict) else None
-            # AT or before (round-7 audit): an equal stamp ties with the sealed
-            # event and may fold before it, so it reorders a sealed decision too.
-            if (isinstance(item, str) and isinstance(e.hlc, str) and not sealed_by_any(e)
-                    and item in top and e.hlc <= top[item]):
-                out[e.hash] = (f"stamped {e.hlc}, before {item}'s sealed history (sealed up to {top[item]}); "
-                               "a sealed decision is final")
-        return out
+        return sealed_late(candidates, events, self._authority(cfg).grantors | {self.actor})
 
     def _correction_problem(self, event: Event, events, cfg: HubConfig):
         """(code, why) when correction `event` may not take effect, else None --
         the one rule (ledger.finality), judged now by this hub's clock. A
-        reversal already admitted here is judged at ITS admission time."""
+        reversal already admitted here is judged at ITS admission time.
+
+        NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B): a
+        reversal this hub had not admitted before `voids.VOID_RETIRED_MS` (by
+        its own admission clock, never a writer's stamp) is refused,
+        `void_retired` -- one signed by a host still on older code, by the
+        network or by git, included. One admitted before keeps being judged
+        exactly as it was, and one already decided is never judged again
+        (`_judge_corrections`), so the history does not change."""
+        from . import voids as _voids
         from .finality import compensation_problem, reversal_problem
         from .voids import VOID_TYPE
         auth = self._authority(cfg)
         if event.type == VOID_TYPE:
             at = self._admitted_ms(event)
+            if (self.clock() if at is None else at) >= _voids.VOID_RETIRED_MS:
+                return "void_retired", _voids.VOID_RETIRED_WHY
             return reversal_problem(event, events, owner=auth.owner, sealers=auth.grantors,
                                     admitted_ms=self._admitted_ms, now_ms=self.clock() if at is None else at)
         return compensation_problem(event, events, owner=auth.owner, sealers=auth.grantors)
@@ -2859,6 +2972,32 @@ class Hub:
         return {"hub": cfg.hub_id, "now_ms": now,
                 "agents": presence(events, now, agents=agents, registry_path=self.registry_path)}
 
+    def events(self, since=None) -> dict:
+        """The hub's ADMITTED task events after `since` (GET /ledger/hub/{space}/events;
+        plan 2026-10-31, phase D part 2): what `authoritative_events` gives on
+        this hub's own copy, task logs only (no telemetry, phase C).
+
+        `since`: {chain: highest seq the reader already holds}; only events
+        beyond it are sent. A reader re-admits what it gets exactly as it would
+        events that came by git (`task_events_hub_first`), so this answer adds
+        no trust, only speed. The admitted list is reused while no log changes,
+        for at most STATUS_CACHE_MS, like `status`."""
+        from .log import TELEMETRY_SUFFIX, read_task_events
+        cfg = self.config()
+        heads = _since_heads(since)
+        now = self.clock()
+        sig = self._logs_signature()
+        cached = getattr(self, "_events_cache", None)
+        if cached is None or cached[0] != sig or now - cached[1] > self.STATUS_CACHE_MS:
+            admitted, _ = authoritative_events(self.space_dir, read_task_events(self.space_dir),
+                                               registry_path=self.registry_path, policy=self.policy, now_ms=now)
+            rows = [((getattr(e, "log", None) or e.actor), e.seq, to_line(e)) for e in admitted]
+            cached = (sig, now, rows)
+            self._events_cache = cached
+        out = [{"chain": chain, "event": json.loads(line)} for chain, seq, line in cached[2]
+               if not chain.endswith(TELEMETRY_SUFFIX) and type(seq) is int and seq > heads.get(chain, -1)]
+        return {"hub": cfg.hub_id, "space": cfg.space_id, "actor": self.actor, "now_ms": now, "events": out}
+
     def _policy_status(self, events) -> dict:
         """Which policy is in force (the ledger's) and whether the policy this
         hub was started with differs from it: a policy file edited without the
@@ -2985,6 +3124,9 @@ class LocalTransport:
     def reconcile(self, req: dict) -> dict:
         return self._hub().reconcile(req)
 
+    def events(self, since=None) -> dict:
+        return self._hub().events(since)
+
 
 class HttpTransport:
     """datacored's `/ledger/hub` API (stdlib urllib). Not exercised against a
@@ -3039,12 +3181,131 @@ class HttpTransport:
     def reconcile(self, req: dict) -> dict:
         return self._call("POST", self.prefix + "/reconcile", req)
 
+    def events(self, since=None) -> dict:
+        """The hub's admitted task events after `since` ({chain: seq})."""
+        import urllib.parse
+        query = "?" + urllib.parse.urlencode({"since": json.dumps(_since_heads(since), sort_keys=True)})
+        return self._call("GET", self.prefix + "/events" + query)
+
+
+# ── reads: the hub first, the git copy when it does not answer (phase D2) ───
+
+#: How long a reader waits for the hub before it reads its git copy instead.
+READ_TIMEOUT_S = 3.0
+
+
+def _since_heads(since) -> dict:
+    """{chain: seq} from a reader's `since`, malformed entries dropped."""
+    if isinstance(since, str):
+        try:
+            since = json.loads(since)
+        except ValueError:
+            since = None
+    if not isinstance(since, dict):
+        return {}
+    return {str(k): v for k, v in since.items() if isinstance(k, str) and type(v) is int and v >= -1}
+
+
+def transport_from_env(space_dir, consumer: str, *, hub_url: str | None = None, token_id: str | None = None,
+                       timeout_s: float = READ_TIMEOUT_S):
+    """The hub transport a reader or writer of `space_dir` uses, or None.
+
+    None for a space without a hub, and when no hub is named: the URL and the
+    broker id of its bearer token come from the caller or from
+    DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID, the same pair `ledger.checkin`
+    and agent_presence_check use. The token is asked of the credentials broker
+    (`creds get <id> --consumer <consumer>`), never read from a file, never
+    printed; a broker that serves nothing is an unreachable hub (None)."""
+    if load_config(space_dir) is None:
+        return None
+    hub_url = hub_url or os.environ.get("DATACORE_HUB_URL")
+    token_id = token_id or os.environ.get("DATACORE_HUB_TOKEN_ID")
+    if not hub_url or not token_id:
+        return None
+    from .checkin import Offline, transport_for
+    t = transport_for(hub_url, token_id, Path(space_dir).name, consumer, timeout_s=timeout_s)
+    return None if isinstance(t, Offline) else t
+
+
+def task_events_hub_first(space_dir, transport=None) -> tuple[list, str]:
+    """(task events, "hub" | "git") for every reader that claims or folds.
+
+    The git copy's task events (`read_task_events`), extended by what the hub
+    has ADMITTED beyond them when the space has a hub and `transport` answers;
+    the git copy alone when it does not (HubUnavailable, a refusal, a timeout,
+    a malformed answer) or when no hub is named.
+
+    The result is RAW, exactly like `read_task_events`: the caller passes it to
+    `authoritative_events` / `authoritative_state`, which admit the hub's
+    events by the same rule as events that came by git (signatures, signing
+    domain, chains, grantor authority). A hub answer is never trusted more than
+    the git copy, and never replaces it: an event is taken only where it
+    extends a chain of this copy (next seq, linked to its head) or starts one
+    this copy does not have; anything else is dropped."""
+    from .log import TELEMETRY_SUFFIX, read_task_events
+    space = Path(space_dir)
+    local = read_task_events(space)
+    if transport is None or load_config(space) is None:
+        return local, "git"
+    tails: dict = {}
+    for e in local:
+        chain = getattr(e, "log", None) or e.actor
+        if type(e.seq) is int and e.seq > tails.get(chain, (-1, GENESIS))[0]:
+            tails[chain] = (e.seq, e.hash)
+    try:
+        answer = transport.events({c: t[0] for c, t in sorted(tails.items())})
+    except (HubError, ValueError, TypeError, OSError):
+        return local, "git"
+    rows = answer.get("events") if isinstance(answer, dict) else None
+    if not isinstance(rows, list):
+        return local, "git"
+    added, broken = [], set()
+    for row in rows:
+        chain = row.get("chain") if isinstance(row, dict) else None
+        raw = row.get("event") if isinstance(row, dict) else None
+        if not isinstance(chain, str) or chain.endswith(TELEMETRY_SUFFIX) or chain in broken \
+                or not isinstance(raw, dict):
+            continue
+        try:
+            e = Event(**raw)
+        except TypeError:
+            broken.add(chain)
+            continue
+        seq, head = tails.get(chain, (-1, GENESIS))
+        if type(e.seq) is not int or e.seq != seq + 1 or e.prev != head:
+            # Not the next link of this copy's chain: a gap, a rival at a seq
+            # this copy holds, or a fork. The git copy stands.
+            broken.add(chain)
+            continue
+        e.log = chain
+        added.append(e)
+        tails[chain] = (e.seq, e.hash)
+    return sorted([*local, *added], key=lambda ev: ev.hlc), "hub"
+
+
+def send_own_log(space_dir, actor: str, transport, *, keys_dir=None, registry_path=None, state_dir=None,
+                 clock=None) -> str:
+    """Send `actor`'s local log to the hub (whatever it does not yet hold):
+    "sent", "buffered" (unreachable: git carries it as before), "refused: <code>",
+    or "off" (no hub space or no hub named). Never raises for the hub's answer:
+    the local append already landed."""
+    if transport is None or load_config(space_dir) is None:
+        return "off"
+    try:
+        HubWriter(space_dir, actor, transport, keys_dir=keys_dir, registry_path=registry_path,
+                  state_dir=state_dir, clock=clock).replay()
+    except HubUnavailable:
+        return "buffered"
+    except HubRefused as exc:
+        return f"refused: {exc.code}"
+    return "sent"
+
 
 # ── the writer's side ───────────────────────────────────────────────────────
 
 #: Refusals of an event for what it IS: already in a signed writer log, such an
 #: event is kept by the hub as a rejected proposal (finding 11).
-REJECTABLE = PROPOSAL_CODES | {"not_authorized", "reversal_closed", "bad_compensate"}
+REJECTABLE = PROPOSAL_CODES | {"not_authorized", "reversal_closed", "bad_compensate", "void_retired"}
 
 
 class HubWriter:
@@ -3191,6 +3452,14 @@ class HubWriter:
             if why:
                 raise HubRefused("bad_checkin", f"not a check-in: {why}; not appended")
         if type == "ledger.void":
+            # NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B):
+            # refused before the local append, so no signed reversal enters my
+            # log; the hub refuses one from older code too (`_correction_problem`).
+            from . import voids as _voids
+            try:
+                _voids.refuse_new_void(type)
+            except _voids.VoidRetired as exc:
+                raise HubRefused("void_retired", f"{exc}; not appended") from None
             # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): refused
             # before the local append when this copy holds the target, so no
             # signed reversal of one ever enters my log. (The hub refuses it
@@ -3690,6 +3959,9 @@ def main(argv=None) -> int:
                     help="the old grantor cannot fence itself; the owner states it is stopped")
     pr.add_argument("--never-served", action="store_true",
                     help="with --attest-stopped: the old grantor never started serving this space")
+    pr.add_argument("--last-seal", default=None, metavar="HASH",
+                    help="with --attest-stopped: the old grantor's last seal (its hash, e.g. the seal a "
+                         "writer's receipt names, or 'none' if it never sealed); this copy must hold it")
     rd = sub.add_parser("ready", help="this writer's host speaks the hub protocol (run before `enable`)")
     rd.add_argument("space")
     rd.add_argument("--actor", required=True)
@@ -3724,7 +3996,7 @@ def main(argv=None) -> int:
         cfg = enable_pools(a.space, on=not a.off)
     elif a.cmd == "promote":
         cfg = promote(a.space, a.grantor, by=a.by, reason=a.reason, attest_stopped=a.attest_stopped,
-                      never_served=a.never_served)
+                      never_served=a.never_served, last_seal=a.last_seal)
     elif a.cmd == "ready":
         print(json.dumps(declare_ready(a.space, a.actor), indent=2, sort_keys=True))
         return 0

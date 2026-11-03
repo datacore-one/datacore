@@ -259,9 +259,31 @@ UPGRADES = {
         ],
     },
     "ledger-corrections": {
-        "summary": "No change proposed.",
-        "keep": ("These rules are your own decisions of 2026-10-23 (reversal within one hour on the hub's clock, nothing reversed "
-                 "after a seal, control records never reversible), and the drawing matches the code. Nothing to simplify."),
+        "summary": ("Forward only, like a chain: nothing is cancelled after the fact. A mistake is fixed by a new event that undoes "
+                    "its effect (a refund, not an erasure), and the original stays on the record. The one-hour window goes with the voids."),
+        "lanes": ["ANY WRITER", "YOU · MAC", "HUB ON THE BOX"],
+        "steps": [
+            ("bad", 0, 0, "A mistaken event", "admitted like any other", "", "", "S"),
+            ("ref", 0, 1, "A void is refused", "refused: void_retired", "", "new", ""),
+            ("comp", 1, 2, "You write a correction", "ledger.compensate", "", "new", "O"),
+            ("adm", 2, 3, "Admitted at once", "ledger.admit · compensation", "", "", "S"),
+            ("fold", 2, 4, "The fold applies it", "original stays on record", "", "focal", ""),
+        ],
+        "edges": [("bad", "ref", "VOID?"), ("bad", "comp", "TO FIX"), ("comp", "adm", ""), ("adm", "fold", "")],
+        "changes": [
+            ("A new void is refused when it is written (library, command line, hub), with a pointer to the forward correction.",
+             "You ruled that voids should never happen: a chain cannot make an event not have happened.",
+             F, ("done", "plan phase B, cfec20b5 (2026-11-01)")),
+            ("The reversal window and 'nothing reversed after a seal' retire: you correct by a new event at any time.",
+             "With nothing reversed, a window has nothing to bound, and seals stop gating corrections.",
+             A, ("ratified", "DIP-0034 and DIP-0042 amendments merged 2026-11-01 (datacore-dips a6d3aad)")),
+            ("The three old voids (one in 5-plur, two in 6-meridian) keep exactly their effect.",
+             "History is never rewritten; the replay of every space must give the same state root before and after.",
+             F, ("done", "state roots identical before and after in all ten spaces (cfec20b5)")),
+            ("A forward correction also for an event not yet sealed, so one way fixes every mistake.",
+             "Today ledger.compensate needs a sealed original (LED-16), so an unsealed mistake is fixed by a task update instead: two ways.",
+             F, ("waiting on you", "changing it means changing the LED-16 promise eval, which needs your approval")),
+        ],
     },
     "ledger-daily": {
         "summary": "The daily check also verifies the seals and the hub's health, so the hub contract and the daily ledger check report together.",
@@ -622,3 +644,61 @@ UPGRADES = {
         ],
     },
 }
+
+
+# ---- what has already happened (2026-11-01) ---------------------------------------
+# (phase, what, status, evidence). Status is one of process_views.STATUS_ICON.
+PLAN_PROGRESS = [
+    ("A", "Rules ratified, signing always on, fds-id identity", "in progress",
+     "A1 DIP amendments merged 2026-11-01 (datacore-dips a6d3aad) · A2 signing always on (d71851c7) · "
+     "A3 fds-id wallets: Web3 v3 keystores per the FDS spec; each machine needs its keystore password in the broker"),
+    ("B", "Forward-only corrections: no new voids", "done",
+     "cfec20b5: voids refused by library, command line and hub; same state roots in all ten spaces; nine evals rewritten, LED-15 retired"),
+    ("C", "Telemetry out of the task fold", "done",
+     "067b5291: same state root in all ten spaces; fold 3.9 s to 1.6 s (1-datafund), 5.0 s to 1.7 s (2-datacore)"),
+    ("D", "The hub as the front door", "waiting on you",
+     "deployed 2026-11-01: PR #37 merged (9e53c33), datacored restarted on the new library and serves GET /events, seal-age job live on the box. Waiting on you: the hub token into the broker (then claims read the hub, not git). Four spaces left unsealed this morning were resealed by the restart; the seal-age job passes all ten. Open: and the seal-age line still to be added to 8-firm values-firm.yaml from a firm session"),
+    ("E", "One delegation route", "waiting on you",
+     "code done and checked: datacore f681632b, nightshift bb81952 (an item names its runner; Miles's hourly run takes his assigned items from the ledger; nightshift.org is regenerated from the ledger each run; a hand-added entry is imported as a ledger item; wip_limit is data on Miles). Live once you merge DIP PR #13 and update Miles's checkout; trial one space first, since the first run imports every NEXT entry in nightshift.org"),
+    ("F", "One way in: org lists read-only", "waiting on you", "code done and checked (29bf0acd): a per-space setting makes next_actions.org a read-only view, the adapter writes events then regenerates, an editor hook turns hand edits into commands or refuses and saves them, a trial checker (9-practice today: 35 tasks, 0 lost, 0 doubled). The week-long trial on 9-practice starts when you switch it on"),
+    ("G", "One ledger", "waiting on you", "paused on your question: the fold already merges every writer; choose (a) one view by folding the ten spaces together, keyed by space and id (recommended; no migration), or (b) the full merge under a genesis you sign. Comparison in the plan's Phase G section; 696 task ids exist in more than one space, so either way items are keyed by space and id"),
+    ("H", "The remaining process upgrades", "in progress", "every code fix that needs no decision of yours is built and tested: 15 changes (5 done; 10 wait on a deploy, an install or PR #38); 3 held on your board rows; 5 installs, 2 DIP amendments and the board are yours"),
+]
+
+# Changes whose rule you have ratified, though the code may still be to do.
+_RATIFIED = ("ratified", "DIP amendment merged 2026-11-01 (datacore-dips a6d3aad); the code follows in its plan phase")
+CHANGE_STATUS = {
+    ("task-lifecycle", 3): _RATIFIED,
+    ("delegation-safety", 0): ("ratified", "DIP-0009 amendment merged 2026-11-01: approval is an approval.grant event; code in phase E"),
+    # Phases D and E (2026-11-01): code done and checked; live where noted.
+    ("task-lifecycle", 0): ("waiting on you", "phase E code f681632b / nightshift bb81952: Miles takes his assigned items from the ledger; live once his checkout is updated"),
+    ("task-lifecycle", 1): ("waiting on you", "phase E: nightshift.org regenerated from the ledger each run, one task at a time (wip_limit on Miles); live once his checkout is updated"),
+    ("task-lifecycle", 2): ("waiting on you", "phase D2 b9a17fef, deployed: the hub serves its admitted log; claims use it once the hub token is in the broker"),
+    ("overnight-run", 0): ("waiting on you", "phase E: the timer file says hourly like the manifest; DIP-0011 example fixed in datacore-dips PR #13, open"),
+    ("overnight-run", 2): ("waiting on you", "phase E: the run's queue is Miles's ledger assignments; live once his checkout is updated"),
+    ("ledger-finality", 0): ("done", "box-ledger-seal-age live on the box since 2026-11-01 16:50; first scheduled run OK for all ten spaces"),
+    ("ledger-finality", 1): ("waiting on you", "phase D2, deployed: readers fold from the hub's admitted log when it answers; needs the hub token in the broker"),
+    ("sync-cycle", 0): ("waiting on you", "phase D2, deployed: claims and folds read the hub first, git stays for history and backup; needs the hub token in the broker"),
+    # Phase H (2026-11-01/02): built and tested; live where noted.
+    ("morning", 0): ("waiting on you", "built 3a79e48b: only the briefing cadence judges the journal page; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
+    ("memory", 1): ("done", "87fcf6a3: the guard has been live since 2026-08-20; a test now pins it"),
+    ("memory", 2): ("done", "6c43836d: wrap-up.yaml says the sweep has no schedule and how to run it"),
+    ("ledger-daily", 0): ("waiting on you", "built abb98889: the daily check gains a seal step; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
+    ("ledger-hygiene", 1): ("waiting on you", "built f6bdfb7a: nightly invariants flag hub events missing from git; reaches the box once its checkout can sync again (an untracked .scratch_weeklyplan folder in the pod blocks it; not ours to remove)"),
+    ("scheduled-job", 0): ("done", "6b84db9a: the installer refuses a job without evidence and the schedule scan flags lines outside the manifest; applies at the next install"),
+    ("evening-handoff", 2): ("done", "chief-of-staff 1b95e40: the script exists in the module and the deploy links it beside cos_tomorrow.sh; the page was wrong, a test now pins the record"),
+    ("morning", 1): ("waiting on you", "built chief-of-staff 64f1e2f: the briefing page's Fleet block (scoreboard and GitHub lines, no model writes them); live when the box's module checkout updates"),
+    ("intake-triage", 0): ("waiting on you", "built chief-of-staff 64f1e2f: one line per GitHub board with its first 'do first' item and decision count, checked on the real boards; live when the box's module checkout updates"),
+    ("promise-scoreboard", 1): ("waiting on you", "built ahead of your board answer (chief-of-staff 64f1e2f): the Fleet block names reds that stayed red with their dated failure line; drop it on the board if you do not want it"),
+    ("evening-handoff", 0): ("waiting on you", "built: /tomorrow states its unattended mode (core, pinned by tests) and the evening job passes it (chief-of-staff); every task it creates is :ORIGIN: agent; live when the box's checkouts update"),
+    ("ledger-hygiene", 0): ("waiting on you", "built in datacore-app PR #38 (open, yours to merge): app edits to inbox.org reach the ledger when made; the core adapter already did"),
+    ("lens", 0): ("waiting on you", "built: sqlite_push --plain and the neutral mac-lens-push line; live when the Mac's manifest.local.yaml line says the same, then box-lens-analyze retires"),
+    ("backups", 0): ("waiting on you", "built: copies carry their source row counts; sqlite_restore_check.py opens them (checked on a real index); the weekly job on Miles is an install"),
+    ("owner-decisions", 1): ("waiting on you", "held: which store records decisions is your board row owner-decisions 0"),
+    ("owner-decisions", 2): ("waiting on you", "held: queue items need the single decision store, your board row owner-decisions 0"),
+    ("cadence-run", 1): ("waiting on you", "held: a cadence's own job contract needs cadences in the manifest, your board row cadence-run 0"),
+    ("promise-scoreboard", 0): ("waiting on you", "built eebba864: the merge and the console reading it; no job installed yet, and where it runs decides how it reaches the pods (from dayshift it cannot)"),
+}
+for (_flow, _i), _st in CHANGE_STATUS.items():
+    _c = UPGRADES[_flow]["changes"][_i]
+    UPGRADES[_flow]["changes"][_i] = (*_c[:3], _st)

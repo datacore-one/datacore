@@ -523,6 +523,9 @@ def cmd_meta() -> dict:
         "date": m["date"],
         "turns": m.get("turns"),
         "user_turns": m.get("user_turns"),
+        # The §10 narrative's `phases` must cover every one of these days.
+        "owner_days": m.get("owner_days"),
+        "compactions": m.get("compactions"),
         "tool_calls": m.get("tool_call_total"),
         "tool_breakdown": dict(list((m.get("tool_calls") or {}).items())[:10]),
         "agents_spawned": m.get("agents_spawned"),

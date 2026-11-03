@@ -464,11 +464,14 @@ class EventLog:
         # The switch lives with the identity (DIP-0044 §6): a cron or a unit
         # rarely exports it, and on 2026-09-06 three hosts had declared signing
         # in identity.env while every event they appended stayed unsigned.
+        # Signing is always on (owner, 2026-10-31; DIP-0034 amendment): only an
+        # explicit "0", in the environment or identity.env, turns it off, and a
+        # hub space refuses an unsigned writer regardless (append, below).
         if sign is None:
             env = os.environ.get("DATACORE_LEDGER_SIGN")
             if env is None:
                 env = _identity_file_value("DATACORE_LEDGER_SIGN")
-            sign = env == "1"
+            sign = env != "0"
         self.sign = sign
         # VALIDATE THE ACTOR NAME. It becomes a filename, so "../x" writes
         # <space>/x.jsonl — inside the space, but OUTSIDE events/, where
@@ -541,6 +544,8 @@ class EventLog:
             Where it says `2`, the edit is written as type-strict version 2
             (decision L7; see `ledger.edits`). The caller's dict is not mutated.
           * an unsigned event in a space served by a hub (`HubSigningRequired`).
+          * a new `ledger.void` (`ledger.voids.VoidRetired`, DIP-0034 amendment
+            of 2026-10-31: no voids; the message names the forward correction).
 
         `after`: an HLC this event must sort after, beyond the causal floor read
         from disk -- a writer passes the stamp of a hub lease it was granted but
@@ -569,6 +574,12 @@ class EventLog:
                     "missing; restore it before writing (every event of a hub space is signed and names its hub)")
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
+        # NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B): every
+        # correction is a new forward event. `ledger.void` stays a known type
+        # so the voids already in the history still read and fold. Looked up
+        # on the module at call time (one rule, one place).
+        from . import voids as _voids
+        _voids.refuse_new_void(type)
         if type == "ledger.void" and self.hub_required:
             # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): no writer
             # of a hub space signs a reversal of one into its log when it holds
@@ -797,6 +808,16 @@ def _parse_prefix(raw: bytes) -> list[Event]:
     return events
 
 
+def read_task_events(space_dir: Path) -> list[Event]:
+    """`read_events` without the telemetry logs: what the task fold reads.
+
+    `fold()` ignores telemetry types, so the state is identical; the reader
+    just stops parsing them (plan phase C, owner 2026-10-31: 155k telemetry
+    lines against 26k task lines in one space). Readers that need telemetry
+    (job checker, presence, scoreboard) keep `read_events` (LED-8)."""
+    return _read_logs(space_dir, telemetry=False)
+
+
 def read_events(space_dir: Path) -> list[Event]:
     """Merge every writer's `*.jsonl` file under `space_dir` into one list,
     sorted by `hlc` (ascending). Returns `[]` if the events dir is missing
@@ -810,6 +831,10 @@ def read_events(space_dir: Path) -> list[Event]:
     policy for the WHOLE space (LED-7, audit A#15). Nothing is repaired: the
     damage stays for verify_chain to report and an operator to address.
     """
+    return _read_logs(space_dir, telemetry=True)
+
+
+def _read_logs(space_dir: Path, *, telemetry: bool) -> list[Event]:
     # A hub space this host's code does not support is refused, never mis-read
     # (DIP-0034 amendment I; audit finding 17).
     from .hub_admission import check_space_protocol
@@ -819,7 +844,7 @@ def read_events(space_dir: Path) -> list[Event]:
     events: list[Event] = []
     # Task logs, then the telemetry logs folded in at read time (LED-8).
     paths = [*(sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []),
-             *(sorted(telemetry_dir.glob("*.jsonl")) if telemetry_dir.is_dir() else [])]
+             *(sorted(telemetry_dir.glob("*.jsonl")) if telemetry and telemetry_dir.is_dir() else [])]
     for path in paths:
         raw = path.read_bytes()
         try:

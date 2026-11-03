@@ -164,6 +164,11 @@ class Transaction:
         return self.files[name]
 
     def write(self, path, content):
+        if Path(path).name == "next_actions.org":
+            # Phase F: in a space with read-only lists only the projector writes
+            # the list; everyone else is refused with the adapter command.
+            from org_readonly import check_write
+            check_write(path)
         try:
             entry = self.watch(path)
             if digest(read_text(path)) != entry["current"]:

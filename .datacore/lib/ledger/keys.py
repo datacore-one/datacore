@@ -32,7 +32,11 @@ DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 # DATACORE_KEYS_DIR lets a test suite give every process it starts a scratch key
 # folder (a module patch reaches only its own process; 2026-10-27).
 DEFAULT_KEYS_DIR = Path(os.environ.get("DATACORE_KEYS_DIR") or Path.home() / ".datacore" / "keys")
-DEFAULT_REGISTRY_PATH = DATACORE_ROOT / ".datacore" / "keys" / "registry.yaml"
+# The scratch folder takes the registry with it: otherwise a test subprocess,
+# signing by default since 2026-10-31, registered its test actors in the real
+# registry of the machine running the suite.
+DEFAULT_REGISTRY_PATH = (Path(os.environ["DATACORE_KEYS_DIR"]) / "registry.yaml" if os.environ.get("DATACORE_KEYS_DIR")
+                         else DATACORE_ROOT / ".datacore" / "keys" / "registry.yaml")
 
 
 def validate_actor_name(actor: str) -> None:

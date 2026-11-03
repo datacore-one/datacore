@@ -144,6 +144,9 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
     # Remove only our generated prefix. Comments in task bodies are data.
     body = text.removeprefix(GENERATED_HEADER).splitlines()
     note = "# Generated from the ledger (Phase 1, DIP-0046). Edits here are ingested hourly; the ledger is the record."
+    import org_readonly
+    if org_readonly.enabled(space):
+        note = org_readonly.NOTE
     return "\n".join(header + [note] + body) + "\n"
 
 
@@ -220,8 +223,12 @@ def project_space(space: Path, force: bool = False, adopt_org: bool = False) -> 
         guard_projection(space, before, text)
     except ProjectionConflict as exc:
         return f"REFUSED — {exc}"
-    write_org_text(target, text)
+    import org_readonly
+    with org_readonly.regenerating():
+        write_org_text(target, text)
     write_org_text(space / STATE, base_document(text))
+    if org_readonly.enabled(space):
+        org_readonly.lock(target)  # phase F: the list is a read-only view
     return f"generated {ORG} ({text.count(chr(10))} lines)"
 
 

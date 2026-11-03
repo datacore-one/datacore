@@ -531,6 +531,10 @@ def probe_vessel(key: str, today: str, since: str) -> dict:
         kv.update(_run(pl, BOX_HOST, timeout=60))
     if key == "box@pod":
         kv.update(_run(pl, f"test -d ~/.datacore/cos/briefings/{today} && echo briefing=yes || echo briefing=no", 60))
+        r = fleet_reach.run_at(pl, "d=~/.datacore/state/promise-scoreboard; cat $d/fleet-latest.json 2>/dev/null; echo; echo '@@PREV@@'; "
+                                   "ls -t $d/fleet-20*.json 2>/dev/null | sed -n 2p | xargs -r cat", timeout=60)
+        cur, _, prev = r.stdout.partition("@@PREV@@")
+        kv["_promises"], kv["_promises_prev"] = cur.strip(), prev.strip()
     if key == "nightshift":
         r = fleet_reach.run_at(pl, "d=~/.datacore/state/promise-scoreboard; cat $d/latest.json; echo; echo '@@PREV@@'; "
                                    "ls -t $d/board-*.json 2>/dev/null | sed -n 2p | xargs -r cat", timeout=60)
@@ -564,6 +568,18 @@ def _counts(raw: str) -> dict:
         out[st] = out.get(st, 0) + 1
         out["total"] += 1
     return out
+
+
+def promise_counts(raw: dict) -> tuple[dict, dict, str]:
+    """(current, previous, source): the box's fleet promise board when it has one
+    (promise_fleet_board.py), else Miles's own board, which is all the console read before."""
+    for key in ("box@pod", "box"):
+        v = raw.get(key) or {}
+        cur = _counts(v.get("_promises") or "")
+        if cur.get("total"):
+            return cur, _counts(v.get("_promises_prev") or ""), "fleet"
+    ns = raw.get("nightshift") or {}
+    return _counts(ns.get("_promises") or ""), _counts(ns.get("_promises_prev") or ""), "nightshift"
 
 
 def open_prs() -> list:
@@ -635,8 +651,7 @@ def collect() -> dict:
     rows, crew_rows = apply_saved(rows, saved_answers(), now.strftime("%Y-%m-%dT%H:%M:%SZ"))
     handled += [{"label": r.get("machine") or "CREW", "title": r["title"],
                  "note": f"crew has it since {r['since']} (your call: {r['choice']})", "first": r["since"]} for r in crew_rows]
-    cur = _counts((raw.get("nightshift") or {}).get("_promises") or "")
-    prev = _counts((raw.get("nightshift") or {}).get("_promises_prev") or "")
+    cur, prev, promise_source = promise_counts(raw)
     size, used = float(box.get("disk_size") or 0), float(box.get("disk_used") or 0)
     vitals = {
         "backup_days": _days(box.get("bk_newest"), today), "backup_ok": box.get("bk_result") == "success",
@@ -645,6 +660,7 @@ def collect() -> dict:
         "disk_free_gb": round((size - used) / 1048576) if size else None,
         "briefing": (raw.get("box@pod") or {}).get("briefing"),
         "tools": dcd.get("tools"), "app": dcd.get("status"),
+        "promise_board": promise_source,
         "kept": cur.get("green"), "broken": cur.get("red"), "untested": cur.get("could-not-run"), "total": cur.get("total"),
         "kept_delta": (cur.get("green", 0) - prev.get("green", 0)) if prev else None,
         "broken_delta": (cur.get("red", 0) - prev.get("red", 0)) if prev else None,
@@ -842,7 +858,7 @@ const vit=[
  ["zap","TOOLS",`${tup}/2`,V.app!=="ok"?"red":tup===2?"green":"red",
   `Winston's app server: ${V.app||"?"}\nDatacore link: ${tl.datacore||"?"}\nPLUR link: ${tl.plur||"?"}`,""],
  ["shield","PROMISES",pk!=null?pk+"%":"?",pk>=90?"green":"amber",
-  V.total?`${V.kept} kept${sgn(V.kept_delta)}\n${V.broken} broken${sgn(V.broken_delta)}\n${V.untested} could not be tested\nof ${V.total} promises (last night's scoreboard)`:"No scoreboard.",
+  V.total?`${V.kept} kept${sgn(V.kept_delta)}\n${V.broken} broken${sgn(V.broken_delta)}\n${V.untested} could not be tested\nof ${V.total} promises (last night's ${V.promise_board==="fleet"?"fleet ":"Miles's "}scoreboard)`:"No scoreboard.",
   V.total?`<div class="meter"><i style="width:${100*V.kept/V.total}%;background:var(--ok)"></i><i style="width:${100*V.broken/V.total}%;background:var(--red)"></i></div>`:""],
 ];
 $("vitals").innerHTML=vit.map(([ic,k,v,c,t,m])=>`<div class="vital ${c}"${tipAttr(t)}><div class="ic">${I(ic)}</div><div class="v">${esc(v)}</div>${m}<div class="k">${k}</div></div>`).join("");

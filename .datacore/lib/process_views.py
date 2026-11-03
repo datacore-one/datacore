@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import html
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -50,8 +51,8 @@ def esc(s: str) -> str:
 # code -> (always|optional, letter, hover text). Lower-case codes are optional and
 # drawn dashed; the letter is what the badge shows.
 MARKS = {
-    "S": ("always", "S", "Signed by the writer's own key. In a hub space (all ten since activation) an unsigned event is not admitted."),
-    "O": ("always", "O", "Signed by the owner (the Mac's key): hub.enable, policy.set, reversals and forward corrections."),
+    "S": ("always", "S", "Signed by the writer's own key, always (since 2026-11-01): only an explicit DATACORE_LEDGER_SIGN=0 turns it off, and never in a hub space, where an unsigned event is not admitted."),
+    "O": ("always", "O", "Signed by the owner (the Mac's key): hub.enable, policy.set and forward corrections (ledger.compensate)."),
     "c": ("optional", "C", "Needs your co-sign (approval.grant) only when the task has a side effect such as email.send, payment or prod.deploy (ledger/policy.py)."),
     "r": ("optional", "R", "Provenance receipt on Swarm: fingerprints only, signed by the gateway's notary. Only where the receipt hook (agent turns) or the git commit hook is installed."),
 }
@@ -142,34 +143,35 @@ FLOWS = [
             "Admission is one rule for every path an event takes, HTTP or a git copy or a rebuild: signed by its writer with a known key, chained onto its log, a sane clock, and an allowed transition (assignee, approver, co-sign, lease). The first refused event ends what is admitted of that log.",
             "The fold is a pure function: the same events give the same state on every machine. When two agents race for one task, the earliest HLC wins and the later claim is recorded as a no-op.",
             "A seal names each writer's highest included event and the folded state root, so anyone can recompute it offline. Only the sequencer's (Winston's) seals count; another writer's seal is ignored. Sealed means final.",
-            "The hub is datacored, the Datacore app's daemon, running in Winston's pod on the box. It seals every hub space it serves every 15 minutes (DATACORE_HUB_SEAL_INTERVAL_S, default 900 s; checked 2026-10-31: the latest 2-datacore seal is Winston's and verifies). The hub process still has no job contract, so no checker watches that it keeps running (a gap).",
+            "The hub is datacored, the Datacore app's daemon, running in Winston's pod on the box. It seals every hub space it serves every 15 minutes (DATACORE_HUB_SEAL_INTERVAL_S, default 900 s; checked 2026-10-31: the latest 2-datacore seal is Winston's and verifies). Since 2026-11-01 a job contract watches it: box-ledger-seal-age runs at :50 and passes a space only when its newest seal is Winston's, verifies, and is under an hour old or covers everything admitted. Its first hand run found 0-personal, 1-datafund, 5-plur and 6-meridian unsealed for 10-13 hours; a restart of the hub resealed them, and the first scheduled run (16:50) passed all ten. Since the same day the hub also serves its admitted log to readers (GET /events); claims use it once the hub token is in the broker, until then they read the git copy.",
         ],
     },
     {
         "slug": "ledger-corrections",
         "group": "Ledger",
         "title": "Correcting a wrong event",
-        "lede": ("History is never rewritten. Inside the correction window an event can be reversed; "
-                 "after its seal, or after one hour, only a new forward event can correct it."),
-        "source": "ledger/finality.py (one rule for every reader) · ledger/voids.py REVERSAL_MAX_AGE_MS = 1 h · ledger.void · ledger.compensate · "
-                  "ledger.admit / ledger.reject · owner decisions 2026-10-23",
-        "lanes": ["YOU · INSIDE THE WINDOW", "HUB · WINSTON", "YOU · AFTER THE SEAL", "EVERY READER"],
+        "lede": ("Forward only, like a chain: since 2026-11-01 nothing is cancelled. A wrong task is fixed by its next "
+                 "update; a wrong sealed event by a forward correction. The original always stays on the record."),
+        "source": "ledger/voids.py refuse_new_void (retired 2026-11-01T00:00Z) · ledger/log.py · hub.py void_retired · ledger_cli void exits 1 · "
+                  "ledger.compensate · finality.py (one rule for every reader) · plan phase B (cfec20b5)",
+        "lanes": ["ANY WRITER", "YOU · OWNER", "HUB · WINSTON", "EVERY READER"],
         "steps": [
             ("bad", 0, 0, "A wrong event is found", "a task, spend or owner", "", "", ""),
-            ("win", 1, 1, "Sealed, or over 1 hour?", "hub's admission clock", "", "focal", ""),
-            ("void", 0, 2, "Reverse it", "ledger.void", "", "", "O"),
-            ("comp", 2, 2, "Forward correction", "ledger.compensate", "", "", "O"),
-            ("adm", 1, 3, "Hub admits it, once", "ledger.admit", "", "", "S"),
-            ("inc", 2, 3, "Incident recorded", "names the missing gate", "", "", ""),
-            ("eff", 3, 4, "Takes effect everywhere", "finality.py · one rule", "", "", ""),
+            ("ref", 0, 1, "A void is refused", "void_retired · exit 1", "", "", ""),
+            ("seal", 1, 1, "Sealed yet?", "hub's seal", "", "focal", ""),
+            ("upd", 0, 2, "Fix the task itself", "item.update / item.reopen", "", "", "S"),
+            ("comp", 1, 2, "Forward correction", "ledger.compensate", "", "", "O"),
+            ("adm", 2, 3, "Hub admits it, once", "ledger.admit", "", "", "S"),
+            ("eff", 3, 4, "Takes effect everywhere", "finality.py · original kept", "", "", ""),
         ],
-        "edges": [("bad", "win", ""), ("win", "void", "NO"), ("win", "comp", "YES"), ("void", "adm", ""),
-                  ("comp", "adm", ""), ("comp", "inc", ""), ("adm", "eff", "")],
+        "edges": [("bad", "ref", "VOID?"), ("bad", "seal", "TO FIX"), ("seal", "upd", "NOT YET"), ("seal", "comp", "SEALED"),
+                  ("upd", "adm", ""), ("comp", "adm", ""), ("adm", "eff", "")],
         "notes": [
-            "Who may reverse is the space owner named in the owner's own ledger records, never the local principal file. The window runs on the hub's clock (when it admitted the event), never on a time the writer chose.",
-            "A reversal outside the window, or of a sealed event, gets ledger.reject and has no effect. A sealed outcome never changes meaning; the original stays confirmed and the correction points to it.",
-            "Control records are never reversible: admits, rejects, seals, hub.enable, key changes, approvals and grants.",
-            "A malformed event (a hash that never matched its body) is voided by a human or a named voider, never by the event's own writer (voids.py).",
+            "A new void is refused in three places: the library, the command line and the hub, which also refuses a void arriving by git from a machine on old code, judged by its own admission clock.",
+            "The three old voids (one in 5-plur, two in 6-meridian) keep their effect: every space's state root was replayed before and after the change and is identical.",
+            "A forward correction still needs a sealed original (the promise on corrections after the seal, LED-16). Before the seal, the fix is the task's own next update or reopen.",
+            "Control records are never corrected: admits, rejects, seals, hub.enable, key changes, approvals and grants.",
+            "Gap: a space without a hub would still let an old-code void take effect. All ten spaces are hub spaces today.",
         ],
     },
     {
@@ -437,8 +439,8 @@ FLOWS += [{'slug': 'overnight-run',
             "loop').",
             'Not verified: whether the evening review actually moves tasks into nightshift.org on an unattended run (the command asks for '
             'confirmation), and whether it marks tasks it creates as agent-made. Neither could be confirmed from code.',
-            "Not verified: the evening review's ledger record. cos_tomorrow.sh calls cos_ledger_event.sh, which does not exist in this repository, "
-            'so that call may do nothing.']},
+            "The evening review's ledger record: cos_tomorrow.sh calls cos_ledger_event.sh, the chief-of-staff module's own writer, which "
+            'the deploy links beside it; ok and failed runs are both recorded (pinned by a test, chief-of-staff 1b95e40).']},
  {'slug': 'deploy-config',
   'group': 'Fleet operations',
   'title': 'Deploy and configuration: pushed, pulled, kept true',
@@ -1092,13 +1094,51 @@ def upgrade_flow(f: dict) -> dict:
 NEED_CLASS = {"your decision": "dec", "DIP amendment": "dip", "code fix": "fix", "install": "ins"}
 
 
+#: What has already happened to a proposal or a plan phase (2026-11-01).
+STATUS_ICON = {"done": "✓", "ratified": "§", "in progress": "◐", "waiting on you": "⏸", "next": "→", "not started": "○"}
+STATUS_CLASS = {"done": "sdone", "ratified": "srat", "in progress": "sprog", "waiting on you": "swait", "next": "snext",
+                "not started": "snot"}
+
+
+def status_pill(status: str, note: str = "") -> str:
+    return (f'<span class="status {STATUS_CLASS[status]}" title="{esc(note)}">{STATUS_ICON[status]} {esc(status)}</span>')
+
+
+def rebuild_section() -> str:
+    """The rebuild plan's phases and where each stands, above the processes."""
+    from process_upgrades import PLAN_PROGRESS
+    rows = "".join(f'<li data-phase="{ph}">{status_pill(st, note)}<b>{ph}</b> {esc(title)}'
+                   f'<span class="why">{esc(note)}</span></li>' for ph, title, st, note in PLAN_PROGRESS)
+    return (f'<section id="rebuild" class="rebuild"><h2>Tasks and ledger rebuild: where it stands</h2>'
+            f'<p class="lede">The plan you approved on 31 October, phase by phase, in order. Hover a status for its evidence. '
+            f'Plan: 2-datacore/1-tracks/dev/superpowers/plans/2026-10-31-tasks-and-ledger-rebuild-plan.md</p>'
+            f'<ol class="phases">{rows}</ol></section>')
+
+
+def previous_pane(f: dict) -> str:
+    """How the process ran before the rebuild began (process_previous.py, frozen 2026-10-31)."""
+    from process_previous import PREVIOUS, AS_OF, COMMIT
+    old = PREVIOUS.get(f["slug"])
+    head = f'<p class="proposed prev">Before the rebuild · {AS_OF}</p>'
+    if old is None:
+        return f'{head}<p class="lede">Not drawn before the rebuild: this process was added to the page later.</p>'
+    if all(old[k] == f[k] for k in ("lanes", "steps", "edges")):
+        return (f'{head}<p class="lede">Unchanged: before the rebuild it ran as the Current drawing shows.</p>')
+    notes = "".join(f"<li>{esc(n)}</li>" for n in old["notes"])
+    flow = {"slug": f["slug"] + "-prev", "title": old["title"], "lede": old["lede"],
+            "lanes": old["lanes"], "steps": old["steps"], "edges": old["edges"]}
+    return (f'{head}<p class="lede">{esc(old["lede"])}</p>{fig(svg_flow(flow))}<ul class="notes">{notes}</ul>'
+            f'<p class="src">As drawn from the code on {AS_OF} (commit {COMMIT}): {esc(old["source"])}</p>')
+
+
 def upgrade_pane(f: dict) -> str:
     up = UPGRADES[f["slug"]]
-    head = '<p class="proposed">Proposed, not running</p>'
+    head = '<p class="proposed">Desired · Proposed, not running</p>'
     if up.get("keep"):
         return f'{head}<p class="lede"><b>{esc(up["summary"])}</b> {esc(up["keep"])}</p>'
-    items = "".join(f'<li><span class="need {NEED_CLASS[n]}">{esc(n)}</span> {esc(w)}<br><span class="why">{esc(y)}</span></li>'
-                    for w, y, n in up["changes"])
+    items = "".join(f'<li><span class="need {NEED_CLASS[c[2]]}">{esc(c[2])}</span>'
+                    f'{status_pill(*c[3]) if len(c) == 4 else ""} {esc(c[0])}<br><span class="why">{esc(c[1])}</span></li>'
+                    for c in up["changes"])
     return (f'{head}<p class="lede">{esc(up["summary"])}</p>{fig(svg_flow(upgrade_flow(f)))}'
             f'<h3 class="ch">What changes, and what each change needs</h3><ol class="changes">{items}</ol>')
 
@@ -1107,8 +1147,8 @@ def upgrades_markdown() -> str:
     """The proposals as a report, in page order (process_views.py --report)."""
     out = ["# Process upgrades: proposals for every process (2026-10-31)", "",
            "Owner, 2026-10-31: review the diagrams, suggest improvements in processes, and give each process a "
-           "Current / Upgrade toggle. Each proposal is drawn on the processes page "
-           "(`1-tracks/dev/architecture/processes.html`, switch to Upgrade). Nothing has been changed in the running fleet.", "",
+           "Previous / Current / Desired switch. Each proposal is drawn on the processes page "
+           "(`1-tracks/dev/architecture/processes.html`, switch to Desired). Nothing has been changed in the running fleet.", "",
            "Each change names what it needs: **your decision**, a **DIP amendment** for you to ratify, a **code fix**, "
            "or an **install** (the code exists; nothing schedules or wires it).", ""]
     group = None
@@ -1121,8 +1161,9 @@ def upgrades_markdown() -> str:
         if up.get("keep"):
             out += [up["keep"], ""]
             continue
-        for w, y, n in up["changes"]:
-            out.append(f"- **{n}**: {w} *Why:* {y}")
+        for c in up["changes"]:
+            st = f" ({STATUS_ICON[c[3][0]]} {c[3][0]}: {c[3][1]})" if len(c) == 4 else ""
+            out.append(f"- **{c[2]}**{st}: {c[0]} *Why:* {c[1]}")
         out.append("")
     return "\n".join(out)
 
@@ -1215,7 +1256,12 @@ svg .box.new{stroke:var(--accent);stroke-width:2;stroke-dasharray:7 5}
 .switch label+input+label{border-left:1px solid var(--rule-solid)}
 .switch input:checked+label{background:var(--accent-tint);color:var(--accent);font-weight:600}
 .switch input:focus-visible+label{outline:2px solid var(--accent);outline-offset:-2px}
-.pane.up{display:none}
+.pane.up,.pane.prev{display:none}
+section.flow-sec[data-view="prev"] .pane.cur{display:none} section.flow-sec[data-view="prev"] .pane.prev{display:block}
+section.flow-sec:has(input[value="prev"]:checked) .pane.cur{display:none}
+section.flow-sec:has(input[value="prev"]:checked) .pane.prev{display:block}
+section.flow-sec:has(input[value="prev"]:checked) .pane.up{display:none}
+.proposed.prev{color:var(--muted);border-color:var(--muted)}
 section.flow-sec[data-view="up"] .pane.cur{display:none} section.flow-sec[data-view="up"] .pane.up{display:block}
 section.flow-sec:has(input[value="up"]:checked) .pane.cur{display:none}
 section.flow-sec:has(input[value="up"]:checked) .pane.up{display:block}
@@ -1227,6 +1273,12 @@ ol.changes .why{color:var(--muted);font-size:15px}
 .need{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;
 border-radius:4px;border:1px solid currentColor;margin-right:6px;white-space:nowrap}
 .need.dec{color:var(--sig)} .need.dip{color:var(--prov)} .need.fix{color:var(--accent)} .need.ins{color:var(--soft)}
+.status{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;margin:0 6px 0 4px;border:1px solid currentColor;border-radius:4px;white-space:nowrap;cursor:help}
+.status.sdone{color:#34d399} .status.srat{color:var(--prov)} .status.sprog{color:#f0a050} .status.swait{color:#e8695f} .status.snext{color:#22d3ee} .status.snot{color:var(--soft)}
+.rebuild{margin:8px 0 36px;padding:16px 20px;border:1px solid var(--rule-solid);border-radius:10px;background:var(--paper-2)}
+.rebuild h2{margin:0 0 6px;font-size:20px;font-weight:500} .rebuild .lede{font-size:15px;margin-bottom:10px}
+.phases{list-style:none;margin:0;padding:0} .phases li{padding:6px 0;border-top:1px solid var(--rule);font-size:15px}
+.phases li b{font-family:'JetBrains Mono',monospace;margin-right:6px} .phases .why{display:block;margin-left:2px;font-size:13px;color:var(--soft)}
 header.top .all{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:13px;color:var(--soft)}
 header.top .all button{font:inherit;font-size:14px;color:var(--ink);background:none;border:1px solid var(--rule-solid);border-radius:6px;
 padding:4px 10px;cursor:pointer}
@@ -1269,7 +1321,7 @@ function all(v){secs.forEach(function(s){show(s,v)});btns.forEach(function(b){b.
 try{localStorage.setItem('processes-view',v)}catch(e){}}
 secs.forEach(function(s){s.querySelectorAll('.switch input').forEach(function(r){r.addEventListener('change',function(){show(s,r.value)})})});
 btns.forEach(function(b){b.addEventListener('click',function(){all(b.dataset.all)})});
-var saved=null;try{saved=localStorage.getItem('processes-view')}catch(e){}if(saved==='up')all('up')})();
+var saved=null;try{saved=localStorage.getItem('processes-view')}catch(e){}if(saved==='up'||saved==='prev')all(saved)})();
 (function(){var b=document.getElementById('side-toggle');if(!b)return;
 function set(off){document.body.classList.toggle('side-off',off);b.setAttribute('aria-expanded',String(!off));
 try{localStorage.setItem('processes-side',off?'off':'on')}catch(e){}}
@@ -1312,7 +1364,7 @@ def sidebar() -> str:
                    f'{" <i>(optional)</i>" if how == "optional" else ""}</span></div>')
     key.append('<div>Dashed ring: happens only in some cases.</div>')
     key.append('<div><svg width="28" height="20" aria-hidden="true"><rect x="1" y="1" width="26" height="18" rx="4" '
-               'style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 3"/></svg>Upgrade view: new or changed step</div></div>')
+               'style="fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:5 3"/></svg>Desired view: new or changed step</div></div>')
     return f'<nav class="side" id="side" aria-label="Processes">{"".join(out)}{"".join(key)}</nav>'
 
 
@@ -1321,13 +1373,15 @@ def page(inv: dict) -> str:
     for f in FLOWS:
         notes = "".join(f"<li>{esc(n)}</li>" for n in f["notes"])
         s = f["slug"]
-        switch = (f'<div class="switch" role="radiogroup" aria-label="Current or proposed upgrade">'
+        switch = (f'<div class="switch" role="radiogroup" aria-label="Previous, current or desired flow">'
+                  f'<input type="radio" name="view-{s}" id="{s}-prev" value="prev"><label for="{s}-prev">Previous</label>'
                   f'<input type="radio" name="view-{s}" id="{s}-cur" value="cur" checked><label for="{s}-cur">Current</label>'
-                  f'<input type="radio" name="view-{s}" id="{s}-up" value="up"><label for="{s}-up">Upgrade</label></div>')
+                  f'<input type="radio" name="view-{s}" id="{s}-up" value="up"><label for="{s}-up">Desired</label></div>')
         body.append(f'<section class="flow-sec" data-view="cur"><h2 id="{s}">{esc(f["title"])}</h2>{switch}'
                     f'<div class="pane cur" id="{s}-cur-pane"><p class="lede">{esc(f["lede"])}</p>'
                     f'{fig(svg_flow(f))}<ul class="notes">{notes}</ul>'
                     f'<p class="src">From the code: {esc(f["source"])}</p></div>'
+                    f'<div class="pane prev" id="{s}-prev-pane">{previous_pane(f)}</div>'
                     f'<div class="pane up" id="{s}-up-pane">{upgrade_pane(f)}</div></section>')
         if f["slug"] == "task-lifecycle":
             rows = "".join(f"<tr><td><b>{a}</b></td><td><code>{esc(b)}</code></td><td>{esc(c)}</td><td>{esc(d)}</td></tr>"
@@ -1344,12 +1398,18 @@ def page(inv: dict) -> str:
 <meta name="description" content="How work moves through Datacore: tasks, the morning, the ledger (admit, fold, seal, corrections, daily checks), sync, scheduled jobs, cadences, repairs, and where processes overlap.">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Literata:ital,wght@0,300;0,400;1,300;1,400&family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
 <style>{CSS}</style></head><body>
-<header class="top"><button type="button" id="side-toggle" class="sidebtn" aria-controls="side" aria-expanded="true" title="Hide or show the list of processes">☰ List</button><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Upgrade</button></span></header>
+<header class="top"><button type="button" id="side-toggle" class="sidebtn" aria-controls="side" aria-expanded="true" title="Hide or show the list of processes">☰ List</button><span class="eyebrow">DATACORE</span><a href="datacore.html">Architecture map</a><a class="on" href="processes.html">Processes</a><span class="all">Show every process as <button type="button" data-all="prev" aria-pressed="false">Previous</button><button type="button" data-all="cur" aria-pressed="true">Current</button><button type="button" data-all="up" aria-pressed="false">Desired</button></span></header>
 <div class="wrap">{sidebar()}
 <main><h1>Processes and workflows</h1>
-<p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has a Current / Upgrade switch: Upgrade shows a proposal, with what each change needs, and nothing in it is running.</p>
+<p class="lede">The architecture map shows what exists. This page shows how work moves through it: who runs each step, on which machine, what it writes, and where a step is signed or leaves a provenance receipt. Drawn from the code and the schedules; the overlap list is generated. Hover a step or a mark for its full text. Each process has three views: Previous is how it ran before the rebuild began on 31 October, Current is how it runs now, and Desired is the target, with what each change needs and what has already happened to it.</p>
+{rebuild_section()}
 {"".join(body)}
 </main></div><script>{JS}</script></body></html>"""
+
+
+def load_inventory(path=None) -> dict:
+    p = Path(path) if path else ARCH / "processes.yaml"
+    return yaml.safe_load(p.read_text()) if p.exists() else {}
 
 
 def main(argv=None) -> int:
@@ -1359,14 +1419,16 @@ def main(argv=None) -> int:
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--report", help="also write the upgrade proposals as a markdown report to this path")
     a = ap.parse_args(argv)
-    inv = yaml.safe_load(Path(a.inventory).read_text()) if Path(a.inventory).exists() else {}
+    inv = load_inventory(a.inventory)
     Path(a.out).write_text(page(inv))
     print(a.out)
     if a.report:
         Path(a.report).write_text(upgrades_markdown() + "\n")
         print(a.report)
     if a.open:
-        subprocess.run(["open", a.out], check=False)
+        # dayshift has no screen: mac-open shows it on the Mac while `ds` is attached.
+        opener = "open" if sys.platform == "darwin" else "mac-open"
+        subprocess.run([opener, a.out], check=False)
     return 0
 
 
