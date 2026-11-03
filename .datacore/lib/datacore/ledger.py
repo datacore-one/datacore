@@ -59,6 +59,8 @@ EGRESS_KINDS = frozenset({
     # A post published through a multi-platform scheduler (getlate.dev): the
     # platform is chosen per call, so no single-platform kind is true of it.
     "social.post",
+    # A post on LinkedIn, as a person or a company page (comms linkedin_post.py).
+    "linkedin.post",
 })
 
 # Credential access. NOT egress — none of it reaches a third party — which is
