@@ -652,6 +652,26 @@ jobs:
         arg: "^OK \\d+ hub space"
         max_age_hours: 2
 
+  # WINSTON CATCHES DELEGATION GAPS (owner, 2026-11-03). A delegated task whose
+  # agent never runs leaves no failure and no record, and nothing read results.
+  # delegation_watch.py names, across every ledger space, agent tasks not picked
+  # up 2 h after their start, claims unfinished for 24 h, tasks given up after
+  # three failures and delegations addressed to nobody, and alerts the owner
+  # once per gap (and once when it clears). It never writes to the ledger. This
+  # contract judges that the watcher ran and read every space; the gaps
+  # themselves are its alerts, not this job's failure.
+  - name: box-delegation-watch
+    machine: box
+    schedule: "40 * * * *"
+    cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/delegation-watch.log -- python3 ~/Data/.datacore/lib/delegation_watch.py check"
+    on_fail: telegram
+    delegate: false
+    artifacts:
+      - path: "~/.datacore/state/delegation-watch.log"
+        check: last_line_regex
+        arg: "\"errors\": \\{\\}, \"gaps\": \\d+"
+        max_age_hours: 2
+
   # Agent registry integrity. registry_gc.py existed and was never scheduled --
   # capability with no runner. Contracted on "duplicate keys (0)", an
   # unambiguous corruption signal that is TRUE today, rather than on
