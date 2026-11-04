@@ -122,6 +122,9 @@ HOST_STATE_MARKERS = (
     "permission denied",
     "stalelogerror", "already wrote seq",   # a rewound ledger: owner-only recovery
     "differs from the deployed", "deploy drift",
+    # A ledger seal the hub refuses: a fork or a lost log needs the owner, and
+    # 24 agent runs against it on 2026-11-03 changed nothing but the bill.
+    "not freshly sealed", "behind the seal", "behind_seal",
 )
 
 #: Failed repair attempts on one job and fingerprint, summed across every item
@@ -262,6 +265,27 @@ def reset_breaker(root: Path, job: str, *, reason: str, actor: str | None = None
 def _state_dir() -> Path:
     import os
     return Path(os.environ.get("DATACORE_STATE") or Path.home() / ".datacore" / "state")
+
+
+def open_repair(root: Path, job: str, fp: str, since_ms: float | None = None) -> str | None:
+    """The id of a repair for this job and fingerprint not yet finished, or None.
+
+    `since_ms` is when the job last passed (or the owner reset it): a repair left
+    open from before that was about an earlier failure and blocks nothing."""
+    from ledger.fold import fold
+    from ledger.hub import authoritative_events
+    try:
+        events, kw = authoritative_events(_space(root))
+        items = fold(events, **kw).items
+    except Exception:  # noqa: BLE001 -- an unreadable ledger keeps today's behaviour
+        return None
+    filed = {(e.payload or {}).get("id"): _hlc_ms(e.hlc) for e in events if e.type == "item.create"}
+    for iid, item in sorted(items.items()):
+        payload = item.payload or {}
+        if (payload.get("autofix") and payload.get("job") == job and payload.get("fingerprint") == fp
+                and item.status in ("created", "claimed") and filed.get(iid, 0.0) > (since_ms or 0.0)):
+            return iid
+    return None
 
 
 def escalate_once(job: str, key: str) -> bool:
@@ -471,6 +495,14 @@ def delegate(job, failures: list[str], rec: dict, *, root: Path,
         return "escalate", (f"{job.name}: {gate['attempts']} repair attempts have failed since it last "
                             f"passed; no new repair until its contract or code changes "
                             f"(fingerprint {fp}) or it passes again -- it needs the owner")
+
+    # ONE OPEN REPAIR PER JOB AND FINGERPRINT. The breaker counts failed attempts,
+    # and a paused dispatcher makes none, so a new item a day stacked up during
+    # the pause and all of them ran when credit returned (2026-11-03: three items
+    # for one job). An open item is the repair; a new day adds nothing to it.
+    waiting = open_repair(root, job.name, fp, gate.get("since"))
+    if waiting:
+        return "exists", f"{waiting} is still open for {job.name}; no second repair is filed"
 
     space = _space(root)
     actor = this_actor()

@@ -111,8 +111,13 @@ def test_two_failed_repairs_still_delegate(unit):
     """Control: the breaker is not a hair trigger."""
     job = _job(unit.root)
     fp = unit.autofix.fingerprint(job, unit.root)
+    from ledger.log import EventLog
     for day in ("20261021", "20261022"):
         _failed_repair(unit, f"autofix-box-x-{day}", fp)
+        # Finished items: an open one now blocks a second repair (2026-11-04,
+        # test_autofix_wasted_repairs), so the count is what is under test here.
+        EventLog(unit.space, "winston").append("item.dismiss", {
+            "id": f"autofix-box-x-{day}", "reason": "closed for this test"})
     state, why = _delegate(unit, job)
     assert state == "delegated", why
     assert unit.appended[0][1].get("fingerprint") == fp, "the repair item does not carry the fingerprint"
