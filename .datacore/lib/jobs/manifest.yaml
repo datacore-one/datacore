@@ -613,6 +613,9 @@ jobs:
   # has an event log and writes this artifact, last line OK / FAIL / NONE.
   - name: box-ledger-verify
     machine: box
+    # Reports the ledger's state (signatures, seals). No agent commit changes
+    # that: 26 failed runs and 0 successes up to 2026-11-03.
+    repair: host
     schedule: "35 5 * * *"
     cmd: "~/Data/.datacore/lib/ledger_daily.sh"
     on_fail: telegram
@@ -1430,6 +1433,9 @@ jobs:
   # artifact, and silent absence is the case that hid everything.
   - name: bridge-v2-verify
     machine: box
+    # A checklist over the whole fleet: its failures belong to other jobs and
+    # hosts. 45 failed runs and 1 success up to 2026-11-03.
+    repair: host
     schedule: "0 6,18 * * *"
     cmd: "~/Data/.datacore/lib/v2_verify_run.sh"
     on_fail: telegram

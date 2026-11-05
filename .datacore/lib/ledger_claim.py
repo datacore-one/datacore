@@ -280,15 +280,19 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
 #: "this task did not work". The distinction decides whether an item counts
 #: down towards being dead-lettered, so it is kept narrow and literal: every
 #: marker below is produced by the executor layer itself, never by a task.
+#:
+#: "timed out after" IS NOT ONE (2026-11-04). A run that hits the timeout reached
+#: the model and spent ten minutes of it, so it is an attempt. Listing it let one
+#: repair item run 14 times and helped burn $29 of credit in 8 hours on 2026-11-03.
 INFRASTRUCTURE_MARKERS = (
     "binary not found",
     "not installed",
-    "timed out after",
     "unknown executor",
     "auth rejected",
     "returned no output",
     "returned an invalid result",
     "execution failed (exit",
+    "incomplete provider result",   # hermes_oneshot: the model never answered (OPS-18)
 )
 
 
