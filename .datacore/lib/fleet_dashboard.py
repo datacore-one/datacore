@@ -39,16 +39,42 @@ MANIFEST = Path(__file__).resolve().parent / "jobs" / "manifest.yaml"
 DATACORED = os.environ.get("DATACORED_HEALTH_URL", "http://cos-server:8787/health")
 REPAIR_FRESH_DAYS = 2  # an agent repair older than this that has not fixed it is stuck
 
-VESSELS = [
-    ("mac", "MAC", "Owner's workstation", "visitor"),
-    ("dayshift", "DAYSHIFT", "Owner's day host", "host"),
-    ("box", "BOX HOST", "Cluster host", "host"),
-    ("box@pod", "WINSTON", "Chief of Staff", "pod"),
-    ("hermes", "TRIS", "Research & memory", "pod"),
-    ("plur-claw", "DATA", "Operations", "pod"),
-    ("nightshift", "MILES", "Engineering", "user"),
-]
-POD_DEPLOY = {"box@pod": "winston", "hermes": "tris", "plur-claw": "data"}
+def _build_vessels() -> tuple[list, dict]:
+    """Build VESSELS and POD_DEPLOY from fleet.local.yaml config only."""
+    import yaml
+    config_path = Path(__file__).resolve().parent.parent / "config" / "fleet.local.yaml"
+    if not config_path.exists():
+        return [], {}
+    try:
+        config = yaml.safe_load(config_path.read_text()) or {}
+    except Exception:
+        return [], {}
+    m = config.get("machines", {})
+    u = config.get("users", {})
+    if not m or not u:
+        return [], {}
+    pods = m.get("pods", {})
+    agents = u.get("agents", {})
+    primary = m.get("primary") or "mac"
+    dayshift = m.get("dayshift") or "dayshift"
+    box = m.get("box") or "box"
+    vessels = [
+        (primary, primary.upper(), "Owner's workstation", "visitor"),
+        (dayshift, dayshift.upper(), "Owner's day host", "host"),
+        (box, box.upper(), "Cluster host", "host"),
+        (pods.get("winston", ""), agents.get("miles", "").upper() or "CHIEF", "Chief of Staff", "pod"),
+        (pods.get("tris", ""), agents.get("tris", "").upper() or "RESEARCH", "Research & memory", "pod"),
+        (pods.get("data", ""), agents.get("data", "").upper() or "OPS", "Operations", "pod"),
+        (agents.get("miles", ""), u.get("owner", "").upper() or "OWNER", "Engineering", "user"),
+    ]
+    pod_deploy = {
+        pods.get("winston", ""): agents.get("miles", ""),
+        pods.get("tris", ""): agents.get("tris", ""),
+        pods.get("data", ""): agents.get("data", ""),
+    }
+    return [(v[0], v[1], v[2], v[3]) for v in vessels if v[0]], {k: v for k, v in pod_deploy.items() if k}
+
+VESSELS, POD_DEPLOY = _build_vessels()
 
 TITLES = {
     "backup": "Agent backup (old job)", "knowledge-lint": "Knowledge link check", "phase1-cycle": "Repo sync cycle",
