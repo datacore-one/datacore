@@ -660,9 +660,12 @@ jobs:
   # once per gap (and once when it clears). It never writes to the ledger. This
   # contract judges that the watcher ran and read every space; the gaps
   # themselves are its alerts, not this job's failure.
+  # Every 15 minutes since 2026-11-05 (AGT-14): it also tells the owner, for each
+  # request he gave Winston, who has it within 15 minutes, the result or the
+  # reason, and a request still unchecked 24 h after he asked.
   - name: box-delegation-watch
     machine: box
-    schedule: "40 * * * *"
+    schedule: "*/15 * * * *"
     cmd: "~/Data/.datacore/lib/atomic_out.sh ~/.datacore/state/delegation-watch.log -- python3 ~/Data/.datacore/lib/delegation_watch.py check"
     on_fail: telegram
     delegate: false

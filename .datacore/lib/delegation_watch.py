@@ -340,23 +340,62 @@ def _outcome_line(space, iid, it) -> str:
     return f"{ENDED[it.status]}: {it.title[:100]} [{who}, {space} {iid}]{why}"
 
 
-def report_requests(folded: dict, *, state_path=DEFAULT_REQUESTS_STATE,
+#: The bar (owner, 2026-11-05): within 15 minutes the owner hears who has it;
+#: within 24 hours something other than the doer has checked it.
+WHO_HAS_IT_MS = 15 * 60 * 1000
+CHECKED_BY_MS = 24 * 3600 * 1000
+
+
+def _stages_due(it, now_ms: int) -> list[tuple[str, str]]:
+    """(stage, message tail) the request has reached by `now_ms`. Each stage is
+    told once. Pattern: a durable workflow with timers, kept as level-triggered
+    state (the ledger) plus a record of what was told; a missed timer is the
+    next step (tell the owner), never a silent wait."""
+    p = it.payload or {}
+    who = p.get("assignee") or p.get("runner") or "nobody"
+    created = _event_ms(it, "item.create")
+    out = []
+    if it.status in ENDED:
+        out.append((it.status, ENDED[it.status]))
+    elif it.status == "claimed":
+        out.append(("has", f"🗂️ {who} has it"))
+    elif created is not None and now_ms - created > WHO_HAS_IT_MS:
+        out.append(("late_pickup", f"⏳ Not picked up {_hours(now_ms - created)} after you asked "
+                                   f"(waiting for {who})"))
+    if it.status not in ("verified", "dismissed"):
+        # The bar counts from when the owner asked, not from when the doer finished.
+        if created is not None and now_ms - created > CHECKED_BY_MS:
+            out.append(("late_check", "⚠️ 24 h and not checked by anyone other than the doer"))
+    return out
+
+
+def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAULT_REQUESTS_STATE,
                     send: Callable[[str], bool] | None = None) -> dict:
-    """Tell the owner each finished request once per outcome. {reported, unsent}."""
+    """Tell the owner each stage of each request once. {reported, unsent}."""
     send = send or _send_default
+    now = int(time.time() * 1000) if now_ms is None else now_ms
     st = _load(state_path)
-    seen = st.get("reported") or {}
-    due = [(space, iid, it) for space, iid, it in _requests(folded)
-           if it.status in ENDED and seen.get(f"{space}/{iid}") != it.status]
+    seen = st.get("told") or {}
+    due = []
+    for space, iid, it in _requests(folded):
+        k = f"{space}/{iid}"
+        for stage, head in _stages_due(it, now):
+            if stage not in (seen.get(k) or []):
+                due.append((k, stage, head, space, iid, it))
     if not due:
         return {"reported": [], "unsent": []}
-    text = "Your requests to Winston:\n" + "\n".join(_outcome_line(*d) for d in due)
-    keys = [f"{space}/{iid}" for space, iid, _ in due]
-    if not send(text[:3400]):
+    lines = []
+    for k, stage, head, space, iid, it in due:
+        p = it.payload or {}
+        why = f": {str(it.closed_reason)[:200]}" if stage == "dismissed" and it.closed_reason else ""
+        lines.append(f"{head}: {it.title[:100]} [{p.get('assignee') or p.get('runner') or 'nobody'}, "
+                     f"{space} {iid}]{why}")
+    keys = sorted({d[0] for d in due})
+    if not send(("Your requests to Winston:\n" + "\n".join(lines))[:3400]):
         return {"reported": [], "unsent": keys}
-    for (space, iid, it), k in zip(due, keys):
-        seen[k] = it.status
-    _save(state_path, {"reported": seen})
+    for k, stage, *_ in due:
+        seen.setdefault(k, []).append(stage)
+    _save(state_path, {"told": seen})
     return {"reported": keys, "unsent": []}
 
 

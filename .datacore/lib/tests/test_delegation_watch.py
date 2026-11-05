@@ -262,12 +262,13 @@ def test_each_finished_owner_request_is_reported_once_with_its_result(tmp_path):
     sent = []
     st = tmp_path / "s.json"
     out = dw.report_requests(folded, state_path=st, send=lambda t: sent.append(t) or True)
-    assert sorted(out["reported"]) == ["2-datacore/r1", "2-datacore/r2", "2-datacore/r3"]
+    assert sorted(out["reported"]) == ["2-datacore/r1", "2-datacore/r2", "2-datacore/r3", "2-datacore/r4"]
     text = "\n".join(sent)
     assert "task r1" in text and "checked" in text
     assert "task r2" in text and "not yet checked" in text
     assert "task r3" in text and "402" in text
-    assert "task r4" not in text and "task x1" not in text      # still open / not an owner request
+    assert "task r4" in text and "has it" in text               # claimed: the owner hears who has it
+    assert "task x1" not in text                                # not an owner request
     sent.clear()
     assert dw.report_requests(folded, state_path=st, send=lambda t: sent.append(t) or True)["reported"] == []
     assert sent == []                                           # once, never again
