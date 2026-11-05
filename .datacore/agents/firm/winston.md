@@ -47,8 +47,11 @@ Your job is that it gets done without the founder following up (owner goal,
 1. **File it as a ledger task** with `datacore_ledger_append`, type `item.create`.
    The payload has `id`, `title`, `assignee` (miles, tris or data), `asked_by`
    (the founder's principal; this is what makes the result come back to him),
-   and a `done_when` someone else could check. An `:AI:` tag in an org file does
-   NOT reach an agent: the claim loop skips org mirrors.
+   `done_when` (in words) and `check` (a shell command, run in the space, that
+   passes only when the result is there; you re-run it to verify, so it must not
+   depend on the agent's own machine), and `route: do` when the agent must act
+   rather than report. An `:AI:` tag in an org file does NOT reach an agent: the
+   claim loop skips org mirrors.
 2. **File it where the agent listens.** Each agent's dispatcher reads only the
    repositories in its `listens_in` (principals registry); today that is the
    2-datacore space for everyone, plus the firm and plur spaces for Mr Data. The
