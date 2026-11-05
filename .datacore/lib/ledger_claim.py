@@ -735,6 +735,34 @@ def runner_queue(space: Path, actor: str, runner: str, transport=None):
     return plan(state, events, actor, runner=runner).ready, state, ("hub" if source == "hub" else "git")
 
 
+def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
+    """Someone other than the doer checks the owner's requests (Winston path step 5,
+    owner goal 2026-11-05). (verified, recheck failed).
+
+    Each COMPLETED item that a person asked for (`asked_by`) and that someone else
+    completed has its own check re-run here, on this machine, against the
+    committed result (`_isolated_check`, as the doer's run did). A pass records
+    `item.verify` as this actor; the fold already refuses a completer verifying
+    its own work. A failing re-check is printed and left: the delegation watch
+    reports the request as done but not yet checked."""
+    verified = failed = 0
+    for item in state.items.values():
+        p = item.payload or {}
+        if (item.status != "completed" or not p.get("asked_by") or not p.get("check")
+                or item.owner == actor):
+            continue
+        passed, sha = _isolated_check(space, p["check"])
+        if passed:
+            guarded_append(EventLog(space, actor), "item.verify",
+                           {"id": item.id, "check": p["check"], "artifact_commit": sha})
+            print(f"VERIFIED {item.title[:70]} -> {p['check'][:80]} passed @ {sha[:10]}")
+            verified += 1
+        else:
+            print(f"RECHECK FAILED {item.title[:60]} -> {p['check'][:80]} (left completed, not verified)")
+            failed += 1
+    return verified, failed
+
+
 def main(argv=None, *, transport=_FROM_ENV) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
@@ -747,6 +775,8 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
                     help="the hub to read first (default: $DATACORE_HUB_URL); its git copy when it does not answer")
     ap.add_argument("--token-id", default=None,
                     help="broker id of the hub's bearer token (default: $DATACORE_HUB_TOKEN_ID)")
+    ap.add_argument("--verify-others", action="store_true",
+                    help="re-run the check of owner requests others completed; verify on a pass, claim nothing")
     args = ap.parse_args(argv)
     # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
     # here, naming identity.env and the registry, rather than dispatching as a
@@ -773,6 +803,10 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
     print("read from: " + ("hub (its admitted log)" if source == "hub" else "git copy"))
     # The dead-letter and waiting scans below read the same admitted events (round 6).
     events, _ = authoritative_events(space, raw)
+    if args.verify_others:
+        v, f = verify_others(space, args.actor, authoritative_state(space, events))
+        print(f"verified {v}, recheck failed {f}")
+        return 0
     state = authoritative_state(space, events)
     from actor_identity import dispatch_ambiguity
     p = plan(state, events, args.actor)
