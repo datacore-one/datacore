@@ -268,7 +268,7 @@ def test_registration_wires_both_hooks_and_the_tool(as_tris):
 
     hp.register(Ctx())
     assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "on_session_start"]
-    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 4
+    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 5
 
 
 def test_registered_tools_accept_the_hermes_calling_convention(as_tris, monkeypatch):
@@ -495,7 +495,7 @@ def test_approval_tools_say_so_on_a_host_without_the_script(as_tris, monkeypatch
     assert "not available on this host" in hp.approval_decide_handler(id="a1", decision="approve")
 
 
-def test_all_four_tools_register(as_tris):
+def test_all_five_tools_register(as_tris):
     names = []
 
     class Ctx:
@@ -504,7 +504,8 @@ def test_all_four_tools_register(as_tris):
 
     hp.register(Ctx())
     assert names == ["datacore_whoami", "datacore_approvals_pending",
-                     "datacore_approval_decide", "datacore_ledger_append"]
+                     "datacore_approval_decide", "datacore_ledger_append",
+                     "datacore_who_has_what"]
 
 
 
@@ -546,3 +547,18 @@ def test_the_ledger_tool_refuses_a_delegation_where_the_agent_does_not_listen(as
     out = hp.ledger_append_handler(space="8-firm", type="item.create",
                                    payload={"id": "p1", "title": "post", "assignee": "data"})
     assert out.startswith("Refused:") and "does not listen" in out and not wrote
+
+
+def test_who_has_what_is_a_read_tool_over_every_space(as_tris, monkeypatch):
+    """Winston path step 3 (2026-11-05): asked "what is Data doing?", Winston reads
+    the ledger across spaces instead of answering from memory. It writes nothing."""
+    import types
+    seen = {}
+    fake = types.SimpleNamespace(
+        states=lambda root: (seen.setdefault("root", root), ({"2-datacore": "S"}, {}))[1],
+        who_has_what=lambda folded, now_ms: [{"assignee": "data", "folded": folded}],
+        who_text=lambda rows, errors: f"data: {len(rows)} open")
+    monkeypatch.setitem(sys.modules, "delegation_watch", fake)
+    monkeypatch.setattr(hp, "_lib", lambda: True)
+    assert hp.who_has_what_handler() == "data: 1 open"
+    assert seen["root"] == hp._root()
