@@ -27,6 +27,7 @@ def run_sweep(tmp_path, monkeypatch, existing, findings=(V2,)):
     monkeypatch.setattr(M, "findings", lambda run_v2=True: [dict(f) for f in findings])
     monkeypatch.setattr(M, "_repair_items", lambda: existing)
     monkeypatch.setattr(M, "_alert_group", lambda t: None)
+    monkeypatch.setattr(M, "_repairer", lambda: "miles")   # CI has no private principals registry
     wrote = []
     import ledger.policy
     monkeypatch.setattr(ledger.policy, "guarded_append", lambda log, kind, payload: wrote.append((kind, payload)))
