@@ -106,6 +106,18 @@ def load_intents():
     return [n for n in nodes if n["id"]]
 
 
+def intent_chips(nodes, idx):
+    """An intent's direct goals and constraints. Free depth means a constraint may
+    sit several levels down; only the intent's own children belong on its card."""
+    n, kids = nodes[idx], []
+    for m in nodes[idx + 1:]:
+        if m["kind"] == "intent" or m["depth"] <= n["depth"]:
+            break
+        if m["depth"] == n["depth"] + 1 and m["kind"] in ("goal", "constraint"):
+            kids.append(m)
+    return kids
+
+
 def public_items(r):
     """Items with embargoed notes stripped."""
     out = []
@@ -1017,12 +1029,7 @@ def render_intents():
     for idx, n in enumerate(nodes):
         if n["kind"] != "intent":
             continue
-        kids = []
-        for m in nodes[idx + 1:]:
-            if m["kind"] == "intent" or m["depth"] <= n["depth"]:
-                break
-            if m["kind"] in ("goal", "constraint"):
-                kids.append(m)
+        kids = intent_chips(nodes, idx)
         chips = "".join(
             f'<span class="goal{" cons" if k["kind"] == "constraint" else ""}">'
             f'{"✕ " if k["kind"] == "constraint" else ""}{e(k["id"])}</span>' for k in kids)
