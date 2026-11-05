@@ -63,6 +63,7 @@ principals:
     budget_monthly_usd: null
     permission_mode: propose     # proposes; a human approves anything that leaves
     wip_limit: 1                 # tasks held in progress at once; the agent's run reads it (nightshift lib/assignment_queue.py); unset = 1
+    listens_in: [team-space]     # repositories its dispatcher claims from (by repo name, not folder); a delegation filed elsewhere is refused at filing (delegation_watch.listening_problem); unset = not judged
 
 # Settings that list this installation's own agents. Shipped code names no
 # agent (INS-3); it reads these through roster.section(). Every section is

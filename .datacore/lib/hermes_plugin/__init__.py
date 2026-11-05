@@ -434,6 +434,31 @@ LEDGER_APPEND_SCHEMA = {
 }
 
 
+WHO_HAS_WHAT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_who_has_what",
+        "description": ("Who has what: every open delegated task across all spaces, by assignee "
+                        "and status (waiting or working, and for how long). Read only. Use it "
+                        "before answering what an agent is doing, and to follow up stuck work."),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def who_has_what_handler(**_kw) -> str:
+    """Winston path step 3 (owner goal 2026-11-05): the ledger, read across spaces."""
+    if not _lib():
+        return "Not available: the fleet lib is not on this host."
+    try:
+        import time as _time  # noqa: PLC0415
+        import delegation_watch as dw  # noqa: PLC0415
+        folded, errors = dw.states(_root())
+        return dw.who_text(dw.who_has_what(folded, now_ms=int(_time.time() * 1000)), errors)
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not read the ledgers ({type(exc).__name__}: {exc})."
+
+
 def approvals_pending_handler(**_kw) -> str:
     cq = _cos_questions()
     if cq is None:
@@ -498,6 +523,16 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
             return "Refused: directory is not a space under the configured data root."
     except (OSError, RuntimeError, ValueError):
         return "Refused: directory is not a space under the configured data root, or discovery is invalid."
+    if etype == "item.create":
+        # Winston path step 4 (2026-11-05): a delegation is filed only where the
+        # assignee's dispatcher listens, or it waits forever (AGT-12's wrong space).
+        try:
+            from delegation_watch import listening_problem  # noqa: PLC0415
+            why = listening_problem(space_dir, payload)
+        except Exception:  # noqa: BLE001 -- the check never blocks on its own failure
+            why = None
+        if why:
+            return f"Refused: {why}"
     try:
         # No actor argument by design: it comes from the registry, never the model.
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
@@ -711,6 +746,8 @@ def register(ctx) -> None:
          "Approve or dismiss one approval the principal decided explicitly.", "✅"),
         ("datacore_ledger_append", LEDGER_APPEND_SCHEMA, ledger_append_handler,
          "Append an event to a space ledger as this agent's own actor.", "📒"),
+        ("datacore_who_has_what", WHO_HAS_WHAT_SCHEMA, who_has_what_handler,
+         "Who has what: open delegated work across spaces, by assignee and status.", "🗂️"),
     ):
         try:
             ctx.register_tool(name=name, toolset="datacore", schema=schema,

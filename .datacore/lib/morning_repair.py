@@ -315,7 +315,45 @@ def _repairer() -> str | None:
     return roster.by_role("chief of operations")
 
 
-def delegate(f: dict, day: str) -> str:
+# ── ONE FAULT, ONE OPEN ITEM (owner, 2026-11-05) ─────────────────────────────
+# A check reports and alerts; it does not file a new task per failure per day,
+# and a repair closes itself when its re-check passes. Items used to be named
+# repair-<fault>-<date>, so every red night filed another one for the same
+# fault (14 claimed by Miles from one night, 2026-11-04).
+
+OPEN_STATES = ("created", "claimed")
+
+
+def fault_of(iid: str, payload: dict) -> str:
+    """The fault a repair item is for: its `fault`, or its legacy dated id."""
+    import re
+    if payload.get("fault"):
+        return str(payload["fault"])
+    return re.sub(r"-\d{8}$", "", iid[len("repair-"):] if iid.startswith("repair-") else iid)
+
+
+def _repair_items() -> dict:
+    """{fault: [(item id, status), ...]} for the sweep's own items in the repair
+    space. Unreadable ledger -> {}: the sweep then files as before, never crashes."""
+    try:
+        from jobs.autofix import _space
+        from ledger.hub import authoritative_state
+        state = authoritative_state(_space(ROOT))
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict = {}
+    for iid, it in state.items.items():
+        p = it.payload or {}
+        if p.get("morning_repair"):
+            out.setdefault(fault_of(iid, p), []).append((iid, it.status))
+    return out
+
+
+def _open_items(existing: dict, fid: str) -> list[str]:
+    return sorted(i for i, st in existing.get(fid, []) if st in OPEN_STATES)
+
+
+def delegate(f: dict, day: str, existing: dict | None = None) -> str:
     """A repair item for the finding's own agent -- a red duty goes to the agent whose
     duty it is (CAD-6), everything else to the chief of operations. Returns the item
     id, or ''."""
@@ -323,7 +361,15 @@ def delegate(f: dict, day: str) -> str:
     from ledger.log import EventLog
     from ledger.policy import guarded_append
     from jobs.autofix import _space
-    iid = f"repair-{f['id']}-{day.replace('-', '')}"
+    existing = _repair_items() if existing is None else existing
+    already = _open_items(existing, f["id"])
+    if already:
+        f["reused"] = True          # one fault, one open item: no second task
+        return already[-1]
+    used = {i for i, _ in existing.get(f["id"], [])}
+    iid = f"repair-{f['id']}"
+    if iid in used:                 # its earlier item closed; the fault came back
+        iid = f"repair-{f['id']}-{day.replace('-', '')}"
     f["assignee"] = f.get("owner") or _repairer()
     if not f["assignee"]:
         f["delegation_error"] = "no principal has the role 'chief of operations' in principals.yaml"
@@ -335,7 +381,8 @@ def delegate(f: dict, day: str) -> str:
     try:
         guarded_append(EventLog(_space(ROOT), this_actor()), "item.create",
                        {"id": iid, "title": f"Repair: {f['title']}", "assignee": f["assignee"], "route": "dev",
-                        "body": body, "requested_by": this_actor(), "morning_repair": True})
+                        "body": body, "requested_by": this_actor(), "morning_repair": True,
+                        "fault": f["id"]})
     except Exception as exc:  # noqa: BLE001 -- report, never crash the sweep
         f["delegation_error"] = f"{type(exc).__name__}: {exc}"[:200]
         return ""
@@ -373,6 +420,7 @@ def sweep() -> int:
     # Each finding once: a copy delegated on its own spent the night's budget on
     # one finding and left the rest "nothing could be delegated" (2026-11-01).
     found, delegated = _unique(findings()), 0
+    existing = _repair_items()
     for f in found:
         f["tried"] = remediate(f)
     # One re-check after the remediations; only what is still failing goes to Miles.
@@ -388,7 +436,10 @@ def sweep() -> int:
         elif f["id"] in still and f["id"] in handed:
             f["item"] = handed[f["id"]]    # already Miles's tonight: not a second hand-off
         elif f["id"] in still:
-            if len(handed) + delegated < MAX_ITEMS:
+            if _open_items(existing, f["id"]):
+                # One fault, one open item: its open item, not a new one; no budget spent.
+                f["item"], f["reused"] = _open_items(existing, f["id"])[-1], True
+            elif len(handed) + delegated < MAX_ITEMS:
                 f["item"] = delegate(f, day)
                 delegated += bool(f["item"])
             else:
@@ -546,6 +597,7 @@ def recheck() -> int:
     for f in failing:
         f["days_red"] = days_red(f, day)
     failing.sort(key=lambda f: -f["days_red"])
+    closed = close_cleared(repaired)
     out = FRAGMENTS / day / "repairs.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({
@@ -576,9 +628,38 @@ def recheck() -> int:
                                         for f in page[:3])
                      + (f"; and {len(page) - 3} more" if len(page) > 3 else "")
                      + ". The full list is in the morning briefing.")
+    if closed:
+        print(f"morning_repair recheck: closed {len(closed)} repair item(s) whose fault cleared: "
+              + ", ".join(closed[:10]))
     print(f"morning_repair recheck: {len(repaired)} repaired, {len(failing)} still failing "
           f"({len(page)} need a person) -> {out}")
     return 0
+
+
+def close_cleared(repaired: list[dict]) -> list[str]:
+    """A repair closes itself when its re-check passes: each open item of a fault
+    the 03:30 re-check no longer finds is dismissed as done, with the reason. The
+    box writes as Winston, who precedes the repairer in the arbitration order;
+    a refusal is printed, never raised. item.reopen undoes a close."""
+    ids = {f["id"] for f in repaired if f.get("kind") != "self"}
+    if not ids:
+        return []
+    existing = _repair_items()
+    from actor_identity import this_actor
+    from ledger.log import EventLog
+    from ledger.policy import guarded_append
+    from jobs.autofix import _space
+    closed = []
+    for fid in sorted(ids):
+        for iid in _open_items(existing, fid):
+            try:
+                guarded_append(EventLog(_space(ROOT), this_actor()), "item.dismiss",
+                               {"id": iid, "kind": "done",
+                                "reason": "cleared: the 03:30 re-check no longer finds this fault"})
+                closed.append(iid)
+            except Exception as exc:  # noqa: BLE001 -- report, never crash the re-check
+                print(f"morning_repair recheck: could not close {iid}: {type(exc).__name__}: {exc}")
+    return closed
 
 
 def main() -> int:

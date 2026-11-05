@@ -24,6 +24,7 @@ The judge is not the worker: it reads the ledger, not the agents' own reports.
 
     delegation_watch.py check    [--root ~/Data] [--dry-run] [--json]
     delegation_watch.py briefing [--root ~/Data]          # one line for /today
+    delegation_watch.py who      [--root ~/Data] [--json] # who has what, across spaces
 
 `check` sends through this host's alert route (job_verify._send_command, as
 agent_presence_check does), one message per cycle for the NEW gaps and one for
@@ -129,22 +130,121 @@ def gaps_in(space: str, state, *, now_ms: int, kind_of: Callable = _default_kind
     return out
 
 
-def scan(root, *, now_ms: int | None = None, kind_of: Callable = _default_kind_of, fold=None,
-         **limits) -> tuple[list[dict], dict]:
-    """(gaps across every ledger space, {space: why its read failed})."""
+def states(root, *, fold=None) -> tuple[dict, dict]:
+    """({space name: folded state}, {space name: why its read failed}) for every ledger space."""
     from ledger.union import ledger_spaces
     if fold is None:
         from ledger.hub import authoritative_state as fold
-    now = int(time.time() * 1000) if now_ms is None else now_ms
-    found, errors = [], {}
+    out, errors = {}, {}
     for space in ledger_spaces(root):
         try:
-            state = fold(space)
+            out[space.name] = fold(space)
         except Exception as exc:  # noqa: BLE001 -- named, never skipped silently
             errors[space.name] = f"{type(exc).__name__}: {exc}"
-            continue
-        found += gaps_in(space.name, state, now_ms=now, kind_of=kind_of, **limits)
+    return out, errors
+
+
+def scan(root, *, now_ms: int | None = None, kind_of: Callable = _default_kind_of, fold=None,
+         **limits) -> tuple[list[dict], dict]:
+    """(gaps across every ledger space, {space: why its read failed})."""
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    folded, errors = states(root, fold=fold)
+    found = []
+    for name, state in folded.items():
+        found += gaps_in(name, state, now_ms=now, kind_of=kind_of, **limits)
     return found, errors
+
+
+# ── Who has what (Winston path step 3, owner goal 2026-11-05) ─────────────────
+# Winston's read tool: every open delegation across spaces, by assignee and
+# status. Same read and the same exclusions as the gap check above (org mirrors
+# are not delegations); it reads and never writes.
+
+OPEN = ("created", "claimed")
+
+
+def who_has_what(folded: dict, *, now_ms: int) -> list[dict]:
+    rows = []
+    for space in sorted(folded):
+        for iid in sorted(folded[space].items):
+            it = folded[space].items[iid]
+            p = it.payload or {}
+            if p.get("org") or it.status not in OPEN:
+                continue
+            since = _event_ms(it, "item.claim") if it.status == "claimed" else _start_ms(it)
+            rows.append({"assignee": p.get("assignee") or p.get("runner") or "(nobody)",
+                         "status": it.status, "space": space, "id": iid, "title": it.title,
+                         "since_ms": since,
+                         "age": ("?" if since is None else _hours(now_ms - since) if since <= now_ms
+                                 else f"due in {_hours(since - now_ms)}")})
+    return rows
+
+
+def who_text(rows: list[dict], errors: dict, per_person: int = 8) -> str:
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        by.setdefault(r["assignee"], []).append(r)
+    lines = []
+    for who in sorted(by, key=lambda w: (-len(by[w]), w)):
+        mine = sorted(by[who], key=lambda r: (r["status"] != "claimed", -(r["since_ms"] or 0)))
+        claimed = sum(r["status"] == "claimed" for r in mine)
+        lines.append(f"{who}: {len(mine)} open ({claimed} claimed, {len(mine) - claimed} waiting)")
+        for r in mine[:per_person]:
+            state = "working" if r["status"] == "claimed" else "waiting"
+            age = r["age"] if r["age"].startswith("due in") else f"{state} {r['age']}"
+            lines.append(f"  - {age}: {r['title'][:90]} [{r['space']} {r['id']}]")
+        if len(mine) > per_person:
+            lines.append(f"  … and {len(mine) - per_person} more")
+    if not lines:
+        lines.append("Nobody has open delegated work.")
+    for space, why in sorted(errors.items()):
+        lines.append(f"{space} could not be read ({why[:120]}): its work is not in this list.")
+    return "\n".join(lines)
+
+
+# ── Filing only where the agent listens (Winston path step 4, owner goal 2026-11-05) ──
+# The smaller of the two fixes: rather than every agent watching every space,
+# Winston files a delegation only in a space the assignee's dispatcher reads.
+# Each agent's listening repositories are declared in principals.yaml
+# (`listens_in`, by repository name: the pods name their folders differently).
+
+def _repo_of(space_dir: Path) -> str | None:
+    import subprocess
+    try:
+        url = subprocess.run(["git", "-C", str(space_dir), "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    return name[:-4] if name.endswith(".git") else (name or None)
+
+
+def _entry_of(name):
+    from actor_identity import principal_of
+    try:
+        return principal_of(str(name))[1]
+    except Exception:  # noqa: BLE001 -- an unknown name is nobody's
+        return None
+
+
+def listening_problem(space_dir: Path, payload: dict, *, repo_of: Callable = _repo_of,
+                      entry_of: Callable = _entry_of) -> str | None:
+    """Why a delegation filed in `space_dir` would never be picked up, or None.
+
+    Only a new delegation to an AGENT that declares where it listens is judged.
+    The owner's own items, org mirrors, and a space whose repository cannot be
+    told are left alone: this refuses only what is known to be unreachable."""
+    if not isinstance(payload, dict) or payload.get("org"):
+        return None
+    who = payload.get("assignee") or payload.get("runner")
+    entry = entry_of(who) if who else None
+    if not entry or entry.get("kind") != "agent" or not entry.get("listens_in"):
+        return None
+    repo = repo_of(Path(space_dir))
+    if not repo or repo in entry["listens_in"]:
+        return None
+    return (f"{who} does not listen in {Path(space_dir).name} ({repo}); its dispatcher reads "
+            f"{', '.join(entry['listens_in'])}. File it there, with a pointer to where the work lives.")
 
 
 def _load(path: Path) -> dict:
@@ -211,6 +311,104 @@ def alert(found: list[dict], *, state_path=DEFAULT_STATE, send: Callable[[str], 
     return {"alerted": alerted, "cleared": cleared, "unsent": unsent}
 
 
+# ── Follow-through on the owner's requests (Winston path step 5, owner goal 2026-11-05) ──
+# An owner request is an item Winston filed from the owner's message, marked
+# `asked_by` (the person who asked) in its payload. Not `requested_by`: the claim
+# gate reserves that for the filing principal. Each one that ends is reported to the owner
+# ONCE per outcome, through the same alert route as the gaps: done and checked by
+# someone other than the doer (verified), done but not yet checked (completed),
+# or not done and why (dismissed: a drop after failures, a provider fault).
+# Open requests that stall are already gaps above. Reads only.
+
+DEFAULT_REQUESTS_STATE = STATE_DIR / "delegation-requests-reported.json"
+ENDED = {"verified": "✅ Done and checked", "completed": "☑️ Done, not yet checked by someone else",
+         "dismissed": "❌ Not done"}
+
+
+def _requests(folded: dict):
+    for space in sorted(folded):
+        for iid in sorted(folded[space].items):
+            it = folded[space].items[iid]
+            if (it.payload or {}).get("asked_by"):
+                yield space, iid, it
+
+
+def _outcome_line(space, iid, it) -> str:
+    p = it.payload or {}
+    who = p.get("assignee") or p.get("runner") or "nobody"
+    why = f": {str(it.closed_reason)[:200]}" if it.status == "dismissed" and it.closed_reason else ""
+    return f"{ENDED[it.status]}: {it.title[:100]} [{who}, {space} {iid}]{why}"
+
+
+#: The bar (owner, 2026-11-05): within 15 minutes the owner hears who has it;
+#: within 24 hours something other than the doer has checked it.
+WHO_HAS_IT_MS = 15 * 60 * 1000
+CHECKED_BY_MS = 24 * 3600 * 1000
+
+
+def _stages_due(it, now_ms: int) -> list[tuple[str, str]]:
+    """(stage, message tail) the request has reached by `now_ms`. Each stage is
+    told once. Pattern: a durable workflow with timers, kept as level-triggered
+    state (the ledger) plus a record of what was told; a missed timer is the
+    next step (tell the owner), never a silent wait."""
+    p = it.payload or {}
+    who = p.get("assignee") or p.get("runner") or "nobody"
+    created = _event_ms(it, "item.create")
+    out = []
+    if it.status in ENDED:
+        out.append((it.status, ENDED[it.status]))
+    elif it.status == "claimed":
+        out.append(("has", f"🗂️ {who} has it"))
+    elif created is not None and now_ms - created > WHO_HAS_IT_MS:
+        out.append(("late_pickup", f"⏳ Not picked up {_hours(now_ms - created)} after you asked "
+                                   f"(waiting for {who})"))
+    if it.status not in ("verified", "dismissed"):
+        # The bar counts from when the owner asked, not from when the doer finished.
+        if created is not None and now_ms - created > CHECKED_BY_MS:
+            out.append(("late_check", "⚠️ 24 h and not checked by anyone other than the doer"))
+    return out
+
+
+def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAULT_REQUESTS_STATE,
+                    send: Callable[[str], bool] | None = None) -> dict:
+    """Tell the owner each stage of each request once. {reported, unsent}."""
+    send = send or _send_default
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    st = _load(state_path)
+    seen = st.get("told") or {}
+    due = []
+    for space, iid, it in _requests(folded):
+        k = f"{space}/{iid}"
+        for stage, head in _stages_due(it, now):
+            if stage not in (seen.get(k) or []):
+                due.append((k, stage, head, space, iid, it))
+    if not due:
+        return {"reported": [], "unsent": []}
+    lines = []
+    for k, stage, head, space, iid, it in due:
+        p = it.payload or {}
+        why = f": {str(it.closed_reason)[:200]}" if stage == "dismissed" and it.closed_reason else ""
+        lines.append(f"{head}: {it.title[:100]} [{p.get('assignee') or p.get('runner') or 'nobody'}, "
+                     f"{space} {iid}]{why}")
+    keys = sorted({d[0] for d in due})
+    if not send(("Your requests to Winston:\n" + "\n".join(lines))[:3400]):
+        return {"reported": [], "unsent": keys}
+    for k, stage, *_ in due:
+        seen.setdefault(k, []).append(stage)
+    _save(state_path, {"told": seen})
+    return {"reported": keys, "unsent": []}
+
+
+def requests_line(folded: dict) -> str:
+    open_ = ended = 0
+    for _, _, it in _requests(folded):
+        if it.status in OPEN:
+            open_ += 1
+        elif it.status in ENDED:
+            ended += 1
+    return f"Your requests: {open_} open, {ended} finished (each finished one was reported to you)."
+
+
 def briefing_line(found: list[dict], errors: dict) -> str:
     if errors:
         return f"Delegation gaps: could not read {', '.join(sorted(errors))}, so the count is incomplete."
@@ -224,16 +422,24 @@ def briefing_line(found: list[dict], errors: dict) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=("check", "briefing"))
+    ap.add_argument("cmd", choices=("check", "briefing", "who"))
     ap.add_argument("--root", type=Path, default=Path.home() / "Data")
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
     ap.add_argument("--dry-run", action="store_true", help="print what it would send; no file is written")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    found, errors = scan(a.root)
+    if a.cmd == "who":
+        folded, errors = states(a.root)
+        rows = who_has_what(folded, now_ms=int(time.time() * 1000))
+        print(json.dumps({"errors": errors, "open": rows}, sort_keys=True) if a.json
+              else who_text(rows, errors))
+        return 1 if errors else 0
+    folded, errors = states(a.root)
+    now_ms = int(time.time() * 1000)
+    found = [g for name, state in folded.items() for g in gaps_in(name, state, now_ms=now_ms)]
     if a.cmd == "briefing":
-        print(briefing_line(found, errors))
+        print(briefing_line(found, errors) + " " + requests_line(folded))
         return 1 if errors else 0
     if a.dry_run:
         import tempfile
@@ -244,8 +450,10 @@ def main(argv=None) -> int:
             result = alert(found, state_path=st, send=lambda t: print("WOULD SEND:\n" + t) or True)
     else:
         _save(a.artifact, {"checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                           "errors": errors, "gaps": found, "line": briefing_line(found, errors)})
+                           "errors": errors, "gaps": found,
+                           "line": briefing_line(found, errors) + " " + requests_line(folded)})
         result = alert(found, state_path=a.state)
+        result.update({f"requests_{k}": v for k, v in report_requests(folded).items()})
     summary = {"gaps": len(found), "errors": errors, **{k: len(v) for k, v in result.items()}}
     print(json.dumps({**summary, **result, "list": found} if a.json else summary, sort_keys=True))
     return 1 if errors else 0

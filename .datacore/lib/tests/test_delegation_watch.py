@@ -152,3 +152,146 @@ def test_the_check_writes_no_ledger_event(tmp_path):
     found, errors = dw.scan(root, now_ms=NOW * 2, kind_of=_kind)
     assert errors == {} and [(f["space"], f["id"], f["kind"]) for f in found] == [("2-datacore", "t1", "not_picked_up")]
     assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+# ── Winston's read tool: who has what, across spaces (Winston path step 3, 2026-11-05) ──
+
+def test_who_has_what_groups_open_work_by_assignee_and_status():
+    """Winston must see who has what without the owner asking. Same read as the
+    gap check: org mirrors and closed work are not listed; the owner's own list
+    is listed under the owner, because Winston follows that up too."""
+    a = NS(items={i.id: i for i in [
+        item("a1", assignee="miles"),
+        item("a2", status="claimed", assignee="miles", claimed=NOW - H),
+        item("a3", status="completed", assignee="miles"),
+        item("a4", assignee="miles", org=True),
+    ]})
+    b = NS(items={i.id: i for i in [
+        item("b1", assignee="data"),
+        item("b2", assignee=None),
+        item("b3", assignee="gregor"),
+    ]})
+    rows = dw.who_has_what({"2-datacore": a, "8-firm": b}, now_ms=NOW)
+    got = {(r["assignee"], r["status"], r["space"], r["id"]) for r in rows}
+    assert got == {("miles", "created", "2-datacore", "a1"), ("miles", "claimed", "2-datacore", "a2"),
+                   ("data", "created", "8-firm", "b1"), ("(nobody)", "created", "8-firm", "b2"),
+                   ("gregor", "created", "8-firm", "b3")}
+    a2 = next(r for r in rows if r["id"] == "a2")
+    assert a2["age"] == "1 h" and a2["title"] == "task a2"
+
+
+def test_who_has_what_text_is_one_block_per_assignee():
+    a = NS(items={i.id: i for i in [item("a1"), item("a2", status="claimed", claimed=NOW - H)]})
+    text = dw.who_text(dw.who_has_what({"2-datacore": a}, now_ms=NOW), {})
+    assert text.splitlines()[0].startswith("miles: 2 open (1 claimed, 1 waiting)")
+    assert "2-datacore" in text and "task a1" in text
+
+
+def test_who_has_what_names_a_space_it_could_not_read():
+    text = dw.who_text([], {"5-plur": "OSError: gone"})
+    assert "5-plur" in text and "could not be read" in text
+
+
+def test_who_has_what_says_when_work_is_not_due_yet():
+    a = NS(items={"f1": item("f1", not_before="2027-06-01T08:00:00+00:00")})
+    rows = dw.who_has_what({"8-firm": a}, now_ms=NOW)
+    assert rows[0]["age"].startswith("due in ")
+
+
+# ── Filing only where the agent listens (Winston path step 4, 2026-11-05) ──
+# AGT-12's evidence: a delegated post was filed in a space the agent's dispatcher
+# never reads, and waited forever. Winston's filing path now refuses that at the
+# moment of filing and names where the agent does listen.
+
+LISTENS = {"data": {"kind": "agent", "listens_in": ["datacore-space", "plur-space"]},
+           "miles": {"kind": "agent", "listens_in": ["datacore-space"]},
+           "gregor": {"kind": "human"}}
+
+
+def _entry(name):
+    return LISTENS.get({"nightshift": "miles"}.get(name, name))
+
+
+def test_a_delegation_where_the_agent_does_not_listen_is_refused_with_where_it_does():
+    why = dw.listening_problem(Path("/x/8-firm"), {"id": "p1", "assignee": "data"},
+                               repo_of=lambda p: "the-firm-space", entry_of=_entry)
+    assert why and "data" in why and "the-firm-space" in why
+    assert "datacore-space" in why and "plur-space" in why
+
+
+def test_a_delegation_where_the_agent_listens_passes():
+    assert dw.listening_problem(Path("/x/2-datacore"), {"id": "p1", "assignee": "miles"},
+                                repo_of=lambda p: "datacore-space", entry_of=_entry) is None
+    # a runner name resolves to its principal
+    assert dw.listening_problem(Path("/x/2-datacore"), {"id": "p1", "runner": "nightshift"},
+                                repo_of=lambda p: "datacore-space", entry_of=_entry) is None
+
+
+def test_the_owners_items_org_mirrors_and_unknown_spaces_are_not_refused():
+    firm = lambda p: "the-firm-space"  # noqa: E731
+    assert dw.listening_problem(Path("/x"), {"assignee": "gregor"}, repo_of=firm, entry_of=_entry) is None
+    assert dw.listening_problem(Path("/x"), {"assignee": "data", "org": {"h": 1}},
+                                repo_of=firm, entry_of=_entry) is None
+    assert dw.listening_problem(Path("/x"), {"assignee": "data"},
+                                repo_of=lambda p: None, entry_of=_entry) is None
+
+
+def test_the_registry_template_documents_where_an_agent_listens():
+    """principals.yaml is a private per-host overlay; the tracked template carries the field."""
+    import yaml
+    reg = yaml.safe_load((LIB.parent / "registry" / "principals.yaml.example").read_text())["principals"]
+    assert any(e.get("listens_in") for e in reg.values() if e.get("kind") == "agent")
+
+
+# ── Follow-through on the owner's requests (Winston path step 5, 2026-11-05) ──
+# "...and tells the owner the result or why not, without being asked." An owner
+# request is an item Winston filed with `asked_by`. Each one that ends is
+# reported once: done and checked, done but not yet checked, or not done and why.
+
+def req(iid, status, reason=None, assignee="data"):
+    it = item(iid, status=status, assignee=assignee, reason=reason)
+    it.payload["asked_by"] = "gregor"
+    return it
+
+
+def test_each_finished_owner_request_is_reported_once_with_its_result(tmp_path):
+    folded = {"2-datacore": NS(items={i.id: i for i in [
+        req("r1", "verified"), req("r2", "completed"),
+        req("r3", "dismissed", reason="gave up after 3 failed attempts: HTTP 402 from openrouter.ai"),
+        req("r4", "claimed"), item("x1", status="verified")]})}
+    sent = []
+    st = tmp_path / "s.json"
+    out = dw.report_requests(folded, state_path=st, send=lambda t: sent.append(t) or True)
+    assert sorted(out["reported"]) == ["2-datacore/r1", "2-datacore/r2", "2-datacore/r3", "2-datacore/r4"]
+    text = "\n".join(sent)
+    assert "task r1" in text and "checked" in text
+    assert "task r2" in text and "not yet checked" in text
+    assert "task r3" in text and "402" in text
+    assert "task r4" in text and "has it" in text               # claimed: the owner hears who has it
+    assert "task x1" not in text                                # not an owner request
+    sent.clear()
+    assert dw.report_requests(folded, state_path=st, send=lambda t: sent.append(t) or True)["reported"] == []
+    assert sent == []                                           # once, never again
+
+
+def test_a_completed_request_is_reported_again_when_it_becomes_checked(tmp_path):
+    st = tmp_path / "s.json"
+    sent = []
+    dw.report_requests({"s": NS(items={"r": req("r", "completed")})}, state_path=st,
+                       send=lambda t: sent.append(t) or True)
+    dw.report_requests({"s": NS(items={"r": req("r", "verified")})}, state_path=st,
+                       send=lambda t: sent.append(t) or True)
+    assert len(sent) == 2 and "checked" in sent[1]
+
+
+def test_an_unsent_report_is_tried_again_next_time(tmp_path):
+    st = tmp_path / "s.json"
+    folded = {"s": NS(items={"r": req("r", "verified")})}
+    assert dw.report_requests(folded, state_path=st, send=lambda t: False)["unsent"] == ["s/r"]
+    assert dw.report_requests(folded, state_path=st, send=lambda t: True)["reported"] == ["s/r"]
+
+
+def test_the_briefing_line_counts_the_owners_open_requests():
+    folded = {"s": NS(items={i.id: i for i in [req("a", "claimed"), req("b", "created"), req("c", "verified")]})}
+    line = dw.requests_line(folded)
+    assert line.startswith("Your requests: 2 open") and "1 finished" in line
