@@ -370,10 +370,17 @@ def baseline_green() -> set[str]:
 def changes(history: list[dict], board: dict, base_green: set[str]) -> dict[str, list[str]]:
     """turned_red, recovered, newly_cnr, still_red, still_cnr -- lists of promise ids."""
     out = {k: [] for k in ("turned_red", "recovered", "newly_cnr", "still_red", "still_cnr")}
+    # MSG-12: a board where the alert was not delivered (alert_delivered=False) is
+    # excluded from the "last judged" calculation. The owner did not receive the
+    # news that night, so the same news must be sent again the next night.
+    # Old boards with no alert_delivered field are treated as delivered (default True).
+    delivered = [h for h in history if h.get("alert_delivered", True) is not False]
     for pid, e in board["promises"].items():
         past = [h["promises"].get(pid, {}).get("state") for h in history]
-        judged = next((s for s in past if s in (GREEN, RED)), None)
-        if judged is None and not history:
+        judged = next((h["promises"].get(pid, {}).get("state")
+                       for h in delivered
+                       if h["promises"].get(pid, {}).get("state") in (GREEN, RED)), None)
+        if judged is None and not delivered:
             judged = GREEN if _norm(pid) in base_green else None
         ever_green = GREEN in past or _norm(pid) in base_green
         last = past[0] if past else None
@@ -483,6 +490,11 @@ def send_to_firm(text: str) -> tuple[bool, str]:
         try:
             r = subprocess.run(["bash", "-c", command], input=text, capture_output=True, text=True, timeout=60)
             if r.returncode == 0:
+                try:
+                    from tg_format import record_sent as _record_sent
+                    _record_sent("promise_nightly", text)
+                except Exception:  # noqa: BLE001
+                    pass
                 return True, "sent"
             why = f"alert command exit {r.returncode}"
         except (OSError, subprocess.SubprocessError) as e:
@@ -514,6 +526,11 @@ def send_to_firm(text: str) -> tuple[bool, str]:
         with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data,
                                     timeout=15) as r:
             if r.status == 200:
+                try:
+                    from tg_format import record_sent as _record_sent
+                    _record_sent("promise_nightly", text)
+                except Exception:  # noqa: BLE001
+                    pass
                 return True, "sent"
             why = f"http {r.status}"
     except urllib.error.HTTPError as e:
@@ -593,6 +610,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     state.mkdir(parents=True, exist_ok=True)
     path = state / f"board-{night}.json"
+    # MSG-12: a second run on the same day must not re-announce the same news.
+    already_sent_today = False
+    if path.exists():
+        try:
+            already_sent_today = json.loads(path.read_text()).get("alert_delivered") is True
+        except (OSError, ValueError):
+            pass
     _write(path, board)
     _write(state / "latest.json", board)
     for old in sorted(state.glob("board-*.json"))[:-KEEP]:
@@ -613,11 +637,19 @@ def main(argv: list[str] | None = None) -> int:
         text = None
         ch = {**ch, "turned_red": [], "recovered": [], "newly_cnr": []}
     rc, outcome = 0, "none"
-    if text and args.no_send:
+    if text and already_sent_today:
+        board["alert_delivered"] = True
+        _write(path, board)
+        _write(state / "latest.json", board)
+        outcome = "none (already sent today)"
+    elif text and args.no_send:
         print(text)
         outcome = "none (--no-send)"
     elif text:
         ok, why = send_to_firm(text)
+        board["alert_delivered"] = ok
+        _write(path, board)
+        _write(state / "latest.json", board)
         outcome = "sent" if ok else f"NOT delivered ({why})"
         rc = 0 if ok else 1
     c = board["counts"]
