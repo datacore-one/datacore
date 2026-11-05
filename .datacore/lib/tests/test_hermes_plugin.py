@@ -527,3 +527,22 @@ def test_ledger_tool_refuses_symlink_escape(as_tris, tmp_path, monkeypatch):
 def test_missing_policy_lib_refuses_call(as_tris, monkeypatch):
     monkeypatch.setattr(hp, '_lib', lambda: False)
     assert hp.pre_tool_call('terminal', {'command': 'echo hello'})['action'] == 'block'
+
+
+def test_the_ledger_tool_refuses_a_delegation_where_the_agent_does_not_listen(as_tris, tmp_path, monkeypatch):
+    """Winston path step 4 (2026-11-05): Winston files only where the agent listens."""
+    import types
+    (tmp_path / "8-firm" / ".datacore").mkdir(parents=True)
+    (tmp_path / "8-firm" / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    wrote = []
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=lambda **k: None))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: wrote.append(payload)))
+    monkeypatch.setitem(sys.modules, "delegation_watch", types.SimpleNamespace(
+        listening_problem=lambda space_dir, payload: "data does not listen in the-firm-space"))
+    out = hp.ledger_append_handler(space="8-firm", type="item.create",
+                                   payload={"id": "p1", "title": "post", "assignee": "data"})
+    assert out.startswith("Refused:") and "does not listen" in out and not wrote

@@ -202,6 +202,51 @@ def who_text(rows: list[dict], errors: dict, per_person: int = 8) -> str:
     return "\n".join(lines)
 
 
+# ── Filing only where the agent listens (Winston path step 4, owner goal 2026-11-05) ──
+# The smaller of the two fixes: rather than every agent watching every space,
+# Winston files a delegation only in a space the assignee's dispatcher reads.
+# Each agent's listening repositories are declared in principals.yaml
+# (`listens_in`, by repository name: the pods name their folders differently).
+
+def _repo_of(space_dir: Path) -> str | None:
+    import subprocess
+    try:
+        url = subprocess.run(["git", "-C", str(space_dir), "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    return name[:-4] if name.endswith(".git") else (name or None)
+
+
+def _entry_of(name):
+    from actor_identity import principal_of
+    try:
+        return principal_of(str(name))[1]
+    except Exception:  # noqa: BLE001 -- an unknown name is nobody's
+        return None
+
+
+def listening_problem(space_dir: Path, payload: dict, *, repo_of: Callable = _repo_of,
+                      entry_of: Callable = _entry_of) -> str | None:
+    """Why a delegation filed in `space_dir` would never be picked up, or None.
+
+    Only a new delegation to an AGENT that declares where it listens is judged.
+    The owner's own items, org mirrors, and a space whose repository cannot be
+    told are left alone: this refuses only what is known to be unreachable."""
+    if not isinstance(payload, dict) or payload.get("org"):
+        return None
+    who = payload.get("assignee") or payload.get("runner")
+    entry = entry_of(who) if who else None
+    if not entry or entry.get("kind") != "agent" or not entry.get("listens_in"):
+        return None
+    repo = repo_of(Path(space_dir))
+    if not repo or repo in entry["listens_in"]:
+        return None
+    return (f"{who} does not listen in {Path(space_dir).name} ({repo}); its dispatcher reads "
+            f"{', '.join(entry['listens_in'])}. File it there, with a pointer to where the work lives.")
+
+
 def _load(path: Path) -> dict:
     try:
         d = json.loads(Path(path).read_text())

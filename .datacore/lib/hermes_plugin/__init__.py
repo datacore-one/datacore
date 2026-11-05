@@ -498,6 +498,16 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
             return "Refused: directory is not a space under the configured data root."
     except (OSError, RuntimeError, ValueError):
         return "Refused: directory is not a space under the configured data root, or discovery is invalid."
+    if etype == "item.create":
+        # Winston path step 4 (2026-11-05): a delegation is filed only where the
+        # assignee's dispatcher listens, or it waits forever (AGT-12's wrong space).
+        try:
+            from delegation_watch import listening_problem  # noqa: PLC0415
+            why = listening_problem(space_dir, payload)
+        except Exception:  # noqa: BLE001 -- the check never blocks on its own failure
+            why = None
+        if why:
+            return f"Refused: {why}"
     try:
         # No actor argument by design: it comes from the registry, never the model.
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)

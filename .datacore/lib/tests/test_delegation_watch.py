@@ -196,3 +196,48 @@ def test_who_has_what_says_when_work_is_not_due_yet():
     a = NS(items={"f1": item("f1", not_before="2027-06-01T08:00:00+00:00")})
     rows = dw.who_has_what({"8-firm": a}, now_ms=NOW)
     assert rows[0]["age"].startswith("due in ")
+
+
+# ── Filing only where the agent listens (Winston path step 4, 2026-11-05) ──
+# AGT-12's evidence: a delegated post was filed in a space the agent's dispatcher
+# never reads, and waited forever. Winston's filing path now refuses that at the
+# moment of filing and names where the agent does listen.
+
+LISTENS = {"data": {"kind": "agent", "listens_in": ["datacore-space", "plur-space"]},
+           "miles": {"kind": "agent", "listens_in": ["datacore-space"]},
+           "gregor": {"kind": "human"}}
+
+
+def _entry(name):
+    return LISTENS.get({"nightshift": "miles"}.get(name, name))
+
+
+def test_a_delegation_where_the_agent_does_not_listen_is_refused_with_where_it_does():
+    why = dw.listening_problem(Path("/x/8-firm"), {"id": "p1", "assignee": "data"},
+                               repo_of=lambda p: "the-firm-space", entry_of=_entry)
+    assert why and "data" in why and "the-firm-space" in why
+    assert "datacore-space" in why and "plur-space" in why
+
+
+def test_a_delegation_where_the_agent_listens_passes():
+    assert dw.listening_problem(Path("/x/2-datacore"), {"id": "p1", "assignee": "miles"},
+                                repo_of=lambda p: "datacore-space", entry_of=_entry) is None
+    # a runner name resolves to its principal
+    assert dw.listening_problem(Path("/x/2-datacore"), {"id": "p1", "runner": "nightshift"},
+                                repo_of=lambda p: "datacore-space", entry_of=_entry) is None
+
+
+def test_the_owners_items_org_mirrors_and_unknown_spaces_are_not_refused():
+    firm = lambda p: "the-firm-space"  # noqa: E731
+    assert dw.listening_problem(Path("/x"), {"assignee": "gregor"}, repo_of=firm, entry_of=_entry) is None
+    assert dw.listening_problem(Path("/x"), {"assignee": "data", "org": {"h": 1}},
+                                repo_of=firm, entry_of=_entry) is None
+    assert dw.listening_problem(Path("/x"), {"assignee": "data"},
+                                repo_of=lambda p: None, entry_of=_entry) is None
+
+
+def test_the_registry_template_documents_where_an_agent_listens():
+    """principals.yaml is a private per-host overlay; the tracked template carries the field."""
+    import yaml
+    reg = yaml.safe_load((LIB.parent / "registry" / "principals.yaml.example").read_text())["principals"]
+    assert any(e.get("listens_in") for e in reg.values() if e.get("kind") == "agent")
