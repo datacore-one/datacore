@@ -843,6 +843,38 @@ def test_everything_published_still_says_so(monkeypatch, tmp_path):
     assert result.ok and result.reason == "all published"
 
 
+def test_converge_does_not_publish_deletion_of_tracked_file(repo_pair: Path):
+    """MEM-61 (converge path): a file missing on this machine must not reach origin.
+
+    Before the fix, `git add -A` staged the deletion and converge pushed it —
+    the same mechanism that wiped 110 files from datafund-space on 2026-07-21.
+    """
+    notes = repo_pair / "notes"
+    notes.mkdir()
+    (notes / "n03.md").write_text("note 3\n")
+    git(repo_pair, "add", "-A")
+    git(repo_pair, "commit", "-qm", "seed notes")
+    git(repo_pair, "push", "-q", "origin", "main")
+
+    # Simulate the file going missing on this machine
+    (notes / "n03.md").unlink()
+    # Add a real edit so there is something to publish (guards that see nothing
+    # dirty would skip the whole autosave and the deletion is never staged)
+    (repo_pair / "new-work.md").write_text("agent output\n")
+
+    res = converge(repo_pair)
+
+    origin = repo_pair.parent / "origin.git"
+    still_there = subprocess.run(
+        ["git", "--git-dir", str(origin), "cat-file", "-e", "main:notes/n03.md"],
+        capture_output=True, timeout=10,
+    ).returncode == 0
+    assert still_there, f"converge published the deletion; result: {res}"
+    assert res.context.get("held_back") or not res.ok or "deletion" in res.reason.lower(), (
+        f"deletion was neither held back nor flagged: {res}"
+    )
+
+
 def test_a_generated_file_origin_untracked_is_untracked_here_too(repo_pair: Path, tmp_path: Path):
     """Origin stopped tracking a generated file; this host still tracks it and
     has regenerated it. Git refused the merge forever ("your local changes would
