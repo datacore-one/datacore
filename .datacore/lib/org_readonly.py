@@ -366,12 +366,13 @@ def plan(space, text=None):
         if old is None:
             changed = True
             org = fields.get("org") or {}
+            inbox_f = str(Path(f).parent / "inbox.org")
             if org.get("properties"):
-                refusals.append((fields["title"], "a new heading with properties",
-                                 _cmd("add", "--file", f, "--allow-any-file", "--heading", fields["title"],
+                refusals.append((fields["title"], "new tasks go to the inbox, not the task list",
+                                 _cmd("add", "--file", inbox_f, "--heading", fields["title"],
                                       *sum((["--property", f"{k}={v}"] for k, v in org["properties"].items()), []))))
                 continue
-            argv = ["add", "--file", f, "--allow-any-file", "--heading", fields["title"],
+            argv = ["add", "--file", inbox_f, "--heading", fields["title"],
                     "--state", fields.get("state") or "TODO", "--property", f"ID={tid}"]
             if fields.get("tags"):
                 argv += ["--tags", ":" + ":".join(fields["tags"]) + ":"]
@@ -379,13 +380,13 @@ def plan(space, text=None):
                 argv += ["--priority", org["priority"]]
             if fields.get("scheduled"):
                 argv += ["--scheduled", _date(fields["scheduled"])]
+            if fields.get("deadline"):
+                argv += ["--deadline", _date(fields["deadline"])]
             if org.get("body"):
                 argv += ["--body", org["body"]]
             if fields.get("parent"):
                 argv += ["--parent-id", fields["parent"]]
-            commands.append(argv)
-            if fields.get("deadline"):
-                commands.append(["update", "--file", f, "--id", tid, "--deadline", _date(fields["deadline"])])
+            refusals.append((fields["title"], "new tasks go to the inbox, not the task list", _cmd(*argv)))
             continue
         diff = changed_fields(fields, old, strict=strict)
         if not diff:
