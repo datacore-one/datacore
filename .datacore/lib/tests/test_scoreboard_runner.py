@@ -53,3 +53,18 @@ def test_the_first_run_keeps_each_failing_files_first_failure_line(tmp_path, mon
     [(test, line)] = promise_evals.FIRST_FAILURES[str(bad)]
     assert test == "test_host" and "ssh hiccup" in line and "\n" not in line
     assert str(good) not in promise_evals.FIRST_FAILURES
+
+
+def test_the_evals_never_run_as_the_host_agent(tmp_path, monkeypatch):
+    """Owner, 2026-11-05 ("fix the failing promises"): on Miles's and Winston's
+    boards seven promises (AGT-10, CAD-4, LED-2/3/4/5/9) were red only because
+    their temporary ledgers inherited the host's agent identity, and the writer
+    guard refused the fixtures' events. An eval that needs an identity sets its
+    own; every other eval runs as a neutral name that is no principal."""
+    monkeypatch.setenv("DATACORE_ACTOR", "miles")
+    probe = tmp_path / "test_promise_ZZ9_identity.py"
+    probe.write_text("import os\n\ndef test_neutral():\n"
+                     f"    assert os.environ['DATACORE_ACTOR'] == {promise_evals.EVAL_ACTOR!r}\n")
+    assert promise_evals.run_suite(tmp_path, [probe], {}) == {probe.name: True}
+    import actor_identity
+    assert actor_identity.principal_of(promise_evals.EVAL_ACTOR)[0] is None
