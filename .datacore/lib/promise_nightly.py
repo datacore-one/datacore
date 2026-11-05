@@ -84,7 +84,10 @@ UNREACHABLE = re.compile(
     # nightshift run, 2026-09-30): an ssh call that timed out, "could not check
     # (UNREACHABLE ...)", "could not tell (unreachable)", "could not read the crontab (timeout)"
     r"|TimeoutExpired: Command '\['ssh'|\bUNREACHABLE\b|could not tell \(unreachable\)"
-    r"|could not read the crontab \(timeout\)", re.I)
+    r"|could not read the crontab \(timeout\)"
+    # Winston's pod (2026-11-05): the egress proxy refuses ssh's ProxyCommand (nc) to
+    # another host. Only the proxy's refusal: a service answering 403 is a red.
+    r"|nc: Proxy error: \"HTTP/1\.1 403", re.I)
 
 #: agent_eval.require_enabled()'s own words: an agent eval the nightly did not
 #: run (it never turns DATACORE_AGENT_EVALS on -- real model runs cost money).

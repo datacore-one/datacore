@@ -319,10 +319,21 @@ def test_a_red_that_passes_when_run_again_names_what_the_first_run_said(tmp_path
     "AssertionError: machines not on current main: box: could not check (UNREACHABLE timeout)",
     "AssertionError: could not tell (unreachable): ['box', 'hermes']",
     "Failed: box: could not read the crontab (timeout) -- could not tell is not a pass",
+    # Winston's pod (2026-11-05): its egress proxy refuses ssh's ProxyCommand to other hosts.
+    'Failed: winston: could not read the crontab: nc: Proxy error: "HTTP/1.1 403 Forbidden"',
+    'AssertionError: could not read Hermes\'s cap: nc: Proxy error: "HTTP/1.1 403 Forbidden"',
 ])
 def test_an_ssh_timeout_or_could_not_tell_is_could_not_run(line):
     b = board(WED, {"SYN-4": "red"}, {"SYN-4": [fail("s.py", "t", line)]})
     assert b["promises"]["SYN-4"]["state"] == "could-not-run"
+
+
+def test_a_403_that_is_not_the_ssh_proxy_stays_red():
+    """Only the proxy refusing the connection means 'host unreachable'; a service
+    answering 403 is an answer, and a red."""
+    line = "AssertionError: GitHub said HTTP/1.1 403 Forbidden for the release"
+    b = board(WED, {"SYN-4": "red"}, {"SYN-4": [fail("s.py", "t", line)]})
+    assert b["promises"]["SYN-4"]["state"] == "red"
 
 
 def test_a_promise_whose_every_eval_file_lacks_a_need_could_not_run_without_a_rerun():
