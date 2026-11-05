@@ -241,3 +241,56 @@ def test_the_registry_template_documents_where_an_agent_listens():
     import yaml
     reg = yaml.safe_load((LIB.parent / "registry" / "principals.yaml.example").read_text())["principals"]
     assert any(e.get("listens_in") for e in reg.values() if e.get("kind") == "agent")
+
+
+# ── Follow-through on the owner's requests (Winston path step 5, 2026-11-05) ──
+# "...and tells the owner the result or why not, without being asked." An owner
+# request is an item Winston filed with `asked_by`. Each one that ends is
+# reported once: done and checked, done but not yet checked, or not done and why.
+
+def req(iid, status, reason=None, assignee="data"):
+    it = item(iid, status=status, assignee=assignee, reason=reason)
+    it.payload["asked_by"] = "gregor"
+    return it
+
+
+def test_each_finished_owner_request_is_reported_once_with_its_result(tmp_path):
+    folded = {"2-datacore": NS(items={i.id: i for i in [
+        req("r1", "verified"), req("r2", "completed"),
+        req("r3", "dismissed", reason="gave up after 3 failed attempts: HTTP 402 from openrouter.ai"),
+        req("r4", "claimed"), item("x1", status="verified")]})}
+    sent = []
+    st = tmp_path / "s.json"
+    out = dw.report_requests(folded, state_path=st, send=lambda t: sent.append(t) or True)
+    assert sorted(out["reported"]) == ["2-datacore/r1", "2-datacore/r2", "2-datacore/r3"]
+    text = "\n".join(sent)
+    assert "task r1" in text and "checked" in text
+    assert "task r2" in text and "not yet checked" in text
+    assert "task r3" in text and "402" in text
+    assert "task r4" not in text and "task x1" not in text      # still open / not an owner request
+    sent.clear()
+    assert dw.report_requests(folded, state_path=st, send=lambda t: sent.append(t) or True)["reported"] == []
+    assert sent == []                                           # once, never again
+
+
+def test_a_completed_request_is_reported_again_when_it_becomes_checked(tmp_path):
+    st = tmp_path / "s.json"
+    sent = []
+    dw.report_requests({"s": NS(items={"r": req("r", "completed")})}, state_path=st,
+                       send=lambda t: sent.append(t) or True)
+    dw.report_requests({"s": NS(items={"r": req("r", "verified")})}, state_path=st,
+                       send=lambda t: sent.append(t) or True)
+    assert len(sent) == 2 and "checked" in sent[1]
+
+
+def test_an_unsent_report_is_tried_again_next_time(tmp_path):
+    st = tmp_path / "s.json"
+    folded = {"s": NS(items={"r": req("r", "verified")})}
+    assert dw.report_requests(folded, state_path=st, send=lambda t: False)["unsent"] == ["s/r"]
+    assert dw.report_requests(folded, state_path=st, send=lambda t: True)["reported"] == ["s/r"]
+
+
+def test_the_briefing_line_counts_the_owners_open_requests():
+    folded = {"s": NS(items={i.id: i for i in [req("a", "claimed"), req("b", "created"), req("c", "verified")]})}
+    line = dw.requests_line(folded)
+    assert line.startswith("Your requests: 2 open") and "1 finished" in line

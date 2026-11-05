@@ -311,6 +311,65 @@ def alert(found: list[dict], *, state_path=DEFAULT_STATE, send: Callable[[str], 
     return {"alerted": alerted, "cleared": cleared, "unsent": unsent}
 
 
+# ── Follow-through on the owner's requests (Winston path step 5, owner goal 2026-11-05) ──
+# An owner request is an item Winston filed from the owner's message, marked
+# `asked_by` (the person who asked) in its payload. Not `requested_by`: the claim
+# gate reserves that for the filing principal. Each one that ends is reported to the owner
+# ONCE per outcome, through the same alert route as the gaps: done and checked by
+# someone other than the doer (verified), done but not yet checked (completed),
+# or not done and why (dismissed: a drop after failures, a provider fault).
+# Open requests that stall are already gaps above. Reads only.
+
+DEFAULT_REQUESTS_STATE = STATE_DIR / "delegation-requests-reported.json"
+ENDED = {"verified": "✅ Done and checked", "completed": "☑️ Done, not yet checked by someone else",
+         "dismissed": "❌ Not done"}
+
+
+def _requests(folded: dict):
+    for space in sorted(folded):
+        for iid in sorted(folded[space].items):
+            it = folded[space].items[iid]
+            if (it.payload or {}).get("asked_by"):
+                yield space, iid, it
+
+
+def _outcome_line(space, iid, it) -> str:
+    p = it.payload or {}
+    who = p.get("assignee") or p.get("runner") or "nobody"
+    why = f": {str(it.closed_reason)[:200]}" if it.status == "dismissed" and it.closed_reason else ""
+    return f"{ENDED[it.status]}: {it.title[:100]} [{who}, {space} {iid}]{why}"
+
+
+def report_requests(folded: dict, *, state_path=DEFAULT_REQUESTS_STATE,
+                    send: Callable[[str], bool] | None = None) -> dict:
+    """Tell the owner each finished request once per outcome. {reported, unsent}."""
+    send = send or _send_default
+    st = _load(state_path)
+    seen = st.get("reported") or {}
+    due = [(space, iid, it) for space, iid, it in _requests(folded)
+           if it.status in ENDED and seen.get(f"{space}/{iid}") != it.status]
+    if not due:
+        return {"reported": [], "unsent": []}
+    text = "Your requests to Winston:\n" + "\n".join(_outcome_line(*d) for d in due)
+    keys = [f"{space}/{iid}" for space, iid, _ in due]
+    if not send(text[:3400]):
+        return {"reported": [], "unsent": keys}
+    for (space, iid, it), k in zip(due, keys):
+        seen[k] = it.status
+    _save(state_path, {"reported": seen})
+    return {"reported": keys, "unsent": []}
+
+
+def requests_line(folded: dict) -> str:
+    open_ = ended = 0
+    for _, _, it in _requests(folded):
+        if it.status in OPEN:
+            open_ += 1
+        elif it.status in ENDED:
+            ended += 1
+    return f"Your requests: {open_} open, {ended} finished (each finished one was reported to you)."
+
+
 def briefing_line(found: list[dict], errors: dict) -> str:
     if errors:
         return f"Delegation gaps: could not read {', '.join(sorted(errors))}, so the count is incomplete."
@@ -337,9 +396,11 @@ def main(argv=None) -> int:
         print(json.dumps({"errors": errors, "open": rows}, sort_keys=True) if a.json
               else who_text(rows, errors))
         return 1 if errors else 0
-    found, errors = scan(a.root)
+    folded, errors = states(a.root)
+    now_ms = int(time.time() * 1000)
+    found = [g for name, state in folded.items() for g in gaps_in(name, state, now_ms=now_ms)]
     if a.cmd == "briefing":
-        print(briefing_line(found, errors))
+        print(briefing_line(found, errors) + " " + requests_line(folded))
         return 1 if errors else 0
     if a.dry_run:
         import tempfile
@@ -350,8 +411,10 @@ def main(argv=None) -> int:
             result = alert(found, state_path=st, send=lambda t: print("WOULD SEND:\n" + t) or True)
     else:
         _save(a.artifact, {"checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                           "errors": errors, "gaps": found, "line": briefing_line(found, errors)})
+                           "errors": errors, "gaps": found,
+                           "line": briefing_line(found, errors) + " " + requests_line(folded)})
         result = alert(found, state_path=a.state)
+        result.update({f"requests_{k}": v for k, v in report_requests(folded).items()})
     summary = {"gaps": len(found), "errors": errors, **{k: len(v) for k, v in result.items()}}
     print(json.dumps({**summary, **result, "list": found} if a.json else summary, sort_keys=True))
     return 1 if errors else 0
