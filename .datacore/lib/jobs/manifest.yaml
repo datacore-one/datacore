@@ -631,6 +631,11 @@ jobs:
         check: last_line_regex
         arg: "^OK \\d+ hub space"
         max_age_hours: 26
+      # Checkpoint verification result: ledger_checkpoint.py verify writes here (OPS-22)
+      - path: "~/.datacore/state/checkpoint-verify.log"
+        check: regex
+        arg: "ok|FAIL"
+        max_age_hours: 26
 
   # THE HUB KEEPS SEALING (plan 2026-10-31, phase D). The hub (datacored in
   # Winston's pod) seals every hub space every 15 minutes; until this contract
@@ -930,7 +935,7 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/sync-traces.last"
         check: regex
-        arg: 'sync_traces: \d+ transcript'
+        arg: 'sync_traces: (?!0\s)[0-9]+ transcript'
         max_age_hours: 26
 
   - name: sync-traces
@@ -941,7 +946,7 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/sync-traces.last"
         check: regex
-        arg: 'sync_traces: \d+ transcript'
+        arg: 'sync_traces: (?!0\s)[0-9]+ transcript'
         max_age_hours: 26
 
   # The box's two cadences (DIP-0050), installed by the ventures module's
@@ -1108,7 +1113,7 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/sync-traces.last"
         check: regex
-        arg: 'sync_traces: \d+ transcript'
+        arg: 'sync_traces: (?!0\s)[0-9]+ transcript'
         max_age_hours: 26
 
   # ── the unattended principals (product description, stage 2): a contract
@@ -1877,7 +1882,7 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/sync-traces.last"
         check: regex
-        arg: 'sync_traces: \d+ transcript'
+        arg: 'sync_traces: (?!0\s)[0-9]+ transcript'
         since: arrival
         max_age_hours: 48  # awake hours: an arrival is the first join of a session; two days awake without one is a stalled join -- OPS-1
 
