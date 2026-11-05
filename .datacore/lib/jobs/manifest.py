@@ -133,6 +133,32 @@ def ssh_alias(machine: str, path: Path | None = None) -> str | None:
     return machine
 
 
+def actor_to_machine(actor: str, path: Path | None = None) -> str | None:
+    """Resolve an actor name to its machine name in the roster.
+
+    When a machine is renamed (e.g., Winston moved, hostname changed to
+    'winston' but manifest still lists 'box'), the infrastructure file's
+    servers.<machine>.access.actor maps the old machine name to the new actor.
+    This function goes backwards: given an actor, find its machine name.
+
+    Returns None if the actor is not found in the roster, or the actor itself
+    if it matches a manifest_machine alias (e.g. the actor IS already a machine name).
+    """
+    for machine_name, cfg in _servers(path).items():
+        if isinstance(cfg, dict):
+            access = cfg.get("access") or {}
+            if str(access.get("actor", "")).lower() == actor.lower():
+                return machine_name
+    # If the actor is a manifest alias or roster key, return it
+    for machine_name, cfg in _servers(path).items():
+        if machine_name.lower() == actor.lower():
+            return machine_name
+        manifest_alias = cfg.get("manifest_machine")
+        if manifest_alias and str(manifest_alias).lower() == actor.lower():
+            return machine_name
+    return None
+
+
 def ssh_hosts(path: Path | None = None) -> list[str]:
     """Every roster machine ssh can reach, by ssh alias, in roster order."""
     return [a for a in (_reachable_alias(c) for c in _servers(path).values()) if a]
