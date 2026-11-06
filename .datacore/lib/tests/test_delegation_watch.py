@@ -324,3 +324,35 @@ def test_request_reports_go_to_the_owners_own_chat_not_the_alert_group(tmp_path,
     assert any(str(c).endswith("winston_send.py") for c in cmd), cmd
     assert "--alert" not in cmd, cmd
     assert "task r" in text
+
+
+def test_a_finished_request_says_who_did_it_who_checked_it_and_where_the_result_is(tmp_path, monkeypatch):
+    """Owner, 2026-11-06: "It should tell who did it." The report named only the
+    assignee field ("nightshift", a writer name), not who did the work, who
+    checked it, or where to look."""
+    import actor_identity
+    monkeypatch.setattr(actor_identity, "principals", lambda path=None: {
+        "miles": {"writes_as": ["miles", "nightshift"]}, "winston": {}, "data": {}})
+    done = req("d1", "verified")
+    done.owner = "nightshift"                       # Miles's hourly run writes as nightshift
+    done.payload["check"] = "test -s 1-tracks/research/note.md && grep -qi x 1-tracks/research/note.md"
+    done.history.append(f"{NOW}.0000.winston winston item.verify: applied")
+    code = req("c1", "verified")
+    code.owner = "nightshift"
+    code.payload["runner"] = "nightshift"
+    code.payload["spec"] = {"properties": {"SURFACE": "datacore-one/datacore"}}
+    code.history.append(f"{NOW}.0000.winston winston item.verify: applied")
+    waiting = req("w1", "completed")
+    waiting.owner = "data"
+    sent = []
+    dw.report_requests({"2-datacore": NS(items={"d1": done, "c1": code, "w1": waiting})},
+                       state_path=tmp_path / "s.json", send=lambda t: sent.append(t) or True)
+    text = sent[0]
+    d1 = next(l for l in text.splitlines() if "task d1" in l)
+    assert "Done by Miles" in d1 and "checked by Winston" in d1, d1
+    assert "1-tracks/research/note.md" in d1, d1
+    assert "[2-datacore d1]" in d1, d1                      # no writer name in the brackets
+    c1 = next(l for l in text.splitlines() if "task c1" in l)
+    assert "agent/c1" in c1 and "datacore-one/datacore" in c1, c1
+    w1 = next(l for l in text.splitlines() if "task w1" in l)
+    assert "Done by Data" in w1 and "not yet checked" in w1, w1
