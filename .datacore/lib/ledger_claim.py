@@ -372,9 +372,14 @@ def _artifact_tree_clean(space, offenders: list | None = None):
         return False
     root_path = Path(root.stdout.strip()).resolve()
     try:
-        event_prefix = (Path(space).resolve().relative_to(root_path) / ".datacore/events").as_posix() + "/"
+        rel = Path(space).resolve().relative_to(root_path)
     except ValueError:
         return False
+    # The event logs and the telemetry logs (plan phase C) are both append-only
+    # ledger records, written by the writers themselves -- the verifier's own
+    # writer appends telemetry continuously, so refusing it meant no check ever
+    # ran in that copy (2026-11-06). Neither is the agent's artifact.
+    prefixes = tuple((rel / ".datacore" / d).as_posix() + "/" for d in ("events", "telemetry"))
     paths = []
     for command in (["git", "diff", "--name-only", "-z", "HEAD"],
                     ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
@@ -383,8 +388,8 @@ def _artifact_tree_clean(space, offenders: list | None = None):
             return False
         paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
     def permitted(name: str) -> bool:
-        return (name.startswith(event_prefix) and "/" not in name[len(event_prefix):]
-                and (name.endswith(".jsonl") or name.endswith(".lock")))
+        return any(name.startswith(pre) and "/" not in name[len(pre):]
+                   and (name.endswith(".jsonl") or name.endswith(".lock")) for pre in prefixes)
     bad = [name for name in paths if not permitted(name)]
     if offenders is not None:
         offenders.extend(bad)
