@@ -238,7 +238,7 @@ class LedgerState:
 
 
 def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=None,
-         legacy_reversals=None) -> LedgerState:
+         legacy_reversals=None, held=None) -> LedgerState:
     """Reduce `events` (already merged + hlc-sorted) into a `LedgerState`.
 
     Pure and order-preserving: does not sort, does not mutate `events` or
@@ -286,6 +286,11 @@ def fold(events: list[Event], *, lease_grantors=None, policy=None, reversers=Non
     state.finality = fin
     if len(fin.voids):
         events = [e for e in events if not fin.voids.applies(getattr(e, "log", e.actor), e)]
+    # HELD EVENTS ARE NO-OPS (owner decision 2026-11-06): a signed event in a
+    # grantor's own log whose signature is not its writer's stays in the chain
+    # (admission) and has no effect here. `held`: their hashes, from admission.
+    if held:
+        events = [e for e in events if e.hash not in held]
 
     # REJECTED PROPOSALS ARE NO-OPS (Codex re-audit, new defect 1). An event a
     # grantor recorded as rejected (`ledger.reject`, audit finding 11) was
