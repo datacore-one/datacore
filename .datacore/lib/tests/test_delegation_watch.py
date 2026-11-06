@@ -295,3 +295,32 @@ def test_the_briefing_line_counts_the_owners_open_requests():
     folded = {"s": NS(items={i.id: i for i in [req("a", "claimed"), req("b", "created"), req("c", "verified")]})}
     line = dw.requests_line(folded)
     assert line.startswith("Your requests: 2 open") and "1 finished" in line
+
+
+def test_request_reports_go_to_the_owners_own_chat_not_the_alert_group(tmp_path, monkeypatch):
+    """The owner asked Winston in their 1:1 chat; the answer goes back there.
+    On 2026-11-06 the Tris request was completed and verified, the watch
+    recorded it as told -- and the owner never saw it: it went through the
+    alert route, which posts only to The Firm group. Gaps stay alerts (group);
+    a report on the owner's own request is a reply (1:1, winston_send.py
+    without --alert)."""
+    calls = []
+
+    class R:
+        returncode = 0
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw.get("input")))
+        return R()
+    monkeypatch.setattr(dw.subprocess, "run", run)
+    import job_verify
+    sender = tmp_path / "winston_send.py"
+    sender.write_text("")
+    monkeypatch.setattr(job_verify, "WINSTON_SEND", sender)
+    folded = {"s": NS(items={"r": req("r", "verified")})}
+    out = dw.report_requests(folded, state_path=tmp_path / "s.json")
+    assert out["reported"] == ["s/r"], out
+    (cmd, text), = calls
+    assert any(str(c).endswith("winston_send.py") for c in cmd), cmd
+    assert "--alert" not in cmd, cmd
+    assert "task r" in text
