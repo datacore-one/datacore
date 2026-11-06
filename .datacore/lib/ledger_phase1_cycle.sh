@@ -162,12 +162,12 @@ if [ "$FAILED_SPACES" != " " ]; then
   INGEST_ROOT="$VIEW"
   echo "ingest: skipping${FAILED_SPACES}- its converge failed"
 fi
-"$PY" "$LIB/ledger_ingest_org.py" --root "$INGEST_ROOT" > "$STATE/phase1-ingest.log" 2>&1
+"$PY" "$LIB/ledger_ingest_org.py" --root "$INGEST_ROOT" >> "$STATE/phase1-ingest.log" 2>&1
 irc=$?
 echo "ingest rc=$irc"
-# The reasons belong in THIS log (audit B-F13): phase1-ingest.log is rewritten
-# every run, and three weeks of cycle logs could say that 2-datacore failed on
-# 09-23 but never why.
+# The reasons belong in THIS log (audit B-F13): phase1-ingest.log keeps its history
+# (appended, not rewritten), so three weeks of logs can show that 2-datacore failed on
+# 09-23 and when/why it was fixed. OPS-21.
 grep ' FAILED:' "$STATE/phase1-ingest.log" 2>/dev/null | sed 's/^/ingest /'
 # ONE SPACE'S FAULT IS ONE SPACE'S FAULT. Existing IDs do not prove that edited
 # bodies and properties reached the ledger, so a space whose ingest failed must
