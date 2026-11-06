@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -283,6 +284,22 @@ def _send_default(text: str) -> bool:
     return job_verify._send_command(text)
 
 
+def _send_owner(text: str) -> bool:
+    """A report on the owner's OWN request goes to the owner's 1:1 chat with
+    Winston, where they asked -- not the alert route, which posts only to The
+    Firm group (2026-11-06: a verified request was recorded as told and never
+    seen). Gaps stay alerts. False (retried next run) when it was not delivered."""
+    import job_verify
+    if not job_verify.WINSTON_SEND.exists():
+        return False
+    try:
+        r = subprocess.run([sys.executable, str(job_verify.WINSTON_SEND)], input=text,
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
 def alert(found: list[dict], *, state_path=DEFAULT_STATE, send: Callable[[str], bool] | None = None) -> dict:
     """One message for the new gaps, one for those that cleared. {alerted, cleared, unsent}."""
     send = send or _send_default
@@ -371,8 +388,8 @@ def _stages_due(it, now_ms: int) -> list[tuple[str, str]]:
 
 def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAULT_REQUESTS_STATE,
                     send: Callable[[str], bool] | None = None) -> dict:
-    """Tell the owner each stage of each request once. {reported, unsent}."""
-    send = send or _send_default
+    """Tell the owner each stage of each request once, in their own chat. {reported, unsent}."""
+    send = send or _send_owner
     now = int(time.time() * 1000) if now_ms is None else now_ms
     st = _load(state_path)
     seen = st.get("told") or {}
