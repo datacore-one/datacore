@@ -220,6 +220,12 @@ class Refusal(Exception):
 class Admission:
     events: list            # admitted, in input order
     refused: dict           # {chain: "seq N: code: message"} -- where each log stops
+    #: {chain: ["seq N: bad_signature: ..."]} -- events HELD in a grantor's own
+    #: log: in the chain, no effect (owner decision 2026-11-06). Named, never silent.
+    held: dict = field(default_factory=dict)
+    #: their hashes: in `events` (so admitting `events` again keeps the chain),
+    #: and passed to the fold as `held`, which gives them no effect.
+    held_hashes: frozenset = frozenset()
 
 
 def _writer_of(chain: str) -> str:
@@ -338,8 +344,16 @@ def _legacy_prefix(chain: str, events: list[Event], entry, excused=None) -> int:
     return top + 1
 
 
+def _holds_place(e: Event, prior) -> bool:
+    """Next seq, previous event's hash, its own hash: the event is where it claims to be."""
+    expected_seq = prior.seq + 1 if prior is not None else 0
+    expected_prev = prior.hash if prior is not None else GENESIS
+    return e.seq == expected_seq and e.prev == expected_prev and compute_hash(event_body(e)) == e.hash
+
+
 def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int,
-                rejected=frozenset(), own_grantor_log: bool = False) -> tuple[int, str | None]:
+                rejected=frozenset(), own_grantor_log: bool = False,
+                held: list | None = None) -> tuple[int, str | None]:
     """(how many leading events of `chain` are admitted, why the next is not -- or None).
 
     `events` in seq order, as they lie in the log file. `rejected`: the
@@ -354,7 +368,16 @@ def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int
     events into winston.jsonl). Such an event stays in the chain with no
     effect -- the fold ignores types it does not know -- as long as it holds
     its place: the next seq, the previous event's hash, its own hash. Every
-    known type, and every writer's log, keeps the rules above."""
+    known type, and every writer's log, keeps the rules above.
+
+    FOREIGN SIGNATURE IN THE GRANTOR'S OWN LOG (owner decision 2026-11-06):
+    on 2026-11-05 a test run wrote one `item.create` into 2-datacore's
+    winston.jsonl signed with a key it generated itself, and every correctly
+    signed event Winston wrote after it counted for nothing. A signed event
+    there that holds its place but fails `bad_signature` is HELD: it stays in
+    the chain, is not admitted (no effect on state), and is appended to `held`
+    as "seq N: bad_signature: ..." so readers name it. Unsigned events, events
+    out of place and every writer's log keep the rules above."""
     n, prior = 0, None
     try:
         if chain in auth.legacy:
@@ -371,6 +394,11 @@ def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int
             try:
                 check_event(e, chain, prior, auth, now_ms=now_ms)
             except Refusal as exc:
+                if own_grantor_log and exc.code == "bad_signature" and e.sig and _holds_place(e, prior):
+                    if held is not None:
+                        held.append((e, f"seq {e.seq}: {exc.code}: {exc.message}"))
+                    n, prior = n + 1, e
+                    continue
                 if exc.code not in PROPOSAL_CODES or (chain, e.seq, e.hash) not in rejected:
                     raise
                 check_event(e, chain, prior, auth, now_ms=now_ms, as_proposal=True)
@@ -388,19 +416,25 @@ def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
         chains.setdefault(getattr(e, "log", None) or e.actor, []).append(e)
     keep: set[int] = set()
     refused: dict[str, str] = {}
+    held_by: dict[str, list[str]] = {}
+    held_hashes: set = set()
     rejected: set = set()
     # The grantors' logs first: their `ledger.reject` records decide which
     # writer events are kept as rejected proposals (audit finding 11).
     for chain in sorted(chains, key=lambda c: (c not in auth.grantors, c)):
         ordered = sorted(chains[chain], key=lambda e: e.seq if type(e.seq) is int else -1)
+        held: list = []
         n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected),
-                             own_grantor_log=chain in auth.grantors)
+                             own_grantor_log=chain in auth.grantors, held=held)
         keep.update(id(e) for e in ordered[:n])
+        if held:
+            held_by[chain] = [why_held for _, why_held in held]
+            held_hashes.update(e.hash for e, _ in held)
         if why:
             refused[chain] = why
         if chain in auth.grantors:
             rejected |= rejected_proposals(ordered[:n])
-    return Admission([e for e in events if id(e) in keep], refused)
+    return Admission([e for e in events if id(e) in keep], refused, held_by, frozenset(held_hashes))
 
 
 def rejected_proposals(grantor_events) -> set:

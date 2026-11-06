@@ -288,11 +288,13 @@ def _admission_refusals(space: Path) -> list[str]:
         cfg = hub.require_config_or_no_hub(space, events, None)
         if cfg is None:
             return []
-        refused = hub.admit(events, hub.authority(space, cfg, None), now_ms=hub._wall_ms()).refused
+        res = hub.admit(events, hub.authority(space, cfg, None), now_ms=hub._wall_ms())
     except Exception as exc:  # noqa: BLE001 -- unreadable admission is not "all clear"
         return [f"{_shown(space)}: hub admission could not be read ({type(exc).__name__}: {exc})"]
-    return [f"{log}.jsonl: hub admission stops this log at {why} -- nothing written after it counts"
-            for log, why in sorted(refused.items())]
+    return ([f"{log}.jsonl: hub admission stops this log at {why} -- nothing written after it counts"
+             for log, why in sorted(res.refused.items())]
+            + [f"{log}.jsonl: hub admission HOLDS {why} -- in the chain, no effect; the writer's key "
+               "did not sign it" for log, whys in sorted(res.held.items()) for why in whys])
 
 
 def cmd_items(args: argparse.Namespace) -> None:
