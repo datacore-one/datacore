@@ -182,11 +182,79 @@ def who_has_what(folded: dict, *, now_ms: int) -> list[dict]:
     return rows
 
 
-def who_text(rows: list[dict], errors: dict, per_person: int = 8) -> str:
+# ── An agent that paused itself (issue #296, owner 2026-11-06) ────────────────
+# A login, credit or usage-limit failure pauses an agent's claiming on its own
+# host (claim_backoff) for PROBE_AFTER; items stay queued. On 2026-11-06 Tris
+# paused at 17:21 (OpenRouter 402), Winston filed the owner's request for her
+# at 21:11 and said "Tris has it", and nobody told the owner. The block file is
+# local to the agent's host, but the failure is in the ledger: an item.release
+# by that agent whose error claim_backoff calls an access or usage failure,
+# with no claim or completion by the agent after it. Reads only.
+
+_PAUSE_ENDS = ("item.claim", "item.complete")
+
+
+def _pause_why(error: str) -> str | None:
+    import claim_backoff
+    if claim_backoff.is_usage_limit(error):
+        return "the model usage limit was reached"
+    if any(m in error.lower() for m in claim_backoff.CREDIT_MARKERS):
+        return "out of model credit"
+    if claim_backoff.is_access_failure(error):
+        return "its model login failed"
+    return None
+
+
+def pauses_from(events) -> dict:
+    """{actor: {since_ms, retry_ms, why}} for each agent whose latest attempt
+    ended in an access or usage failure."""
+    import claim_backoff
+    probe_ms = int(claim_backoff.PROBE_AFTER.total_seconds() * 1000)
+    run: dict[str, dict | None] = {}
+    for e in sorted(events, key=lambda e: _hlc_ms(e.hlc) or 0):
+        if e.type in _PAUSE_ENDS:
+            run[e.actor] = None
+        elif e.type == "item.release":
+            p = e.payload or {}
+            why = ("the model usage limit was reached" if p.get("kind") == "usage_limit"
+                   else _pause_why(str(p.get("error") or "")))
+            at = _hlc_ms(e.hlc)
+            if why is None or at is None:
+                run[e.actor] = None       # an ordinary failure: the model ran
+                continue
+            cur = run.get(e.actor)
+            run[e.actor] = {"since_ms": cur["since_ms"] if cur else at, "retry_ms": at + probe_ms, "why": why}
+    return {a: p for a, p in run.items() if p}
+
+
+def pauses(root, **_kw) -> dict:
+    """pauses_from over every ledger space's task events; a space that cannot be read is skipped."""
+    from ledger.log import read_task_events
+    from ledger.union import ledger_spaces
+    events = []
+    for space in ledger_spaces(root):
+        try:
+            events += [e for e in read_task_events(space) if e.type in (*_PAUSE_ENDS, "item.release")]
+        except Exception:  # noqa: BLE001 -- the gap check names unreadable spaces
+            continue
+    return pauses_from(events)
+
+
+def _clock(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def pause_text(actor: str, p: dict) -> str:
+    return (f"⏸ {_person(actor)} cannot take work: {p['why']} (since {_clock(p['since_ms'])}). "
+            f"Their tasks stay queued; {_person(actor)} retries by itself about {_clock(p['retry_ms'])}, "
+            f"or sooner once the cause is fixed and the pause is cleared on their host.")
+
+
+def who_text(rows: list[dict], errors: dict, per_person: int = 8, pauses: dict | None = None) -> str:
     by: dict[str, list[dict]] = {}
     for r in rows:
         by.setdefault(r["assignee"], []).append(r)
-    lines = []
+    lines = [pause_text(a, p) for a, p in sorted((pauses or {}).items())]
     for who in sorted(by, key=lambda w: (-len(by[w]), w)):
         mine = sorted(by[who], key=lambda r: (r["status"] != "claimed", -(r["since_ms"] or 0)))
         claimed = sum(r["status"] == "claimed" for r in mine)
@@ -197,7 +265,7 @@ def who_text(rows: list[dict], errors: dict, per_person: int = 8) -> str:
             lines.append(f"  - {age}: {r['title'][:90]} [{r['space']} {r['id']}]")
         if len(mine) > per_person:
             lines.append(f"  … and {len(mine) - per_person} more")
-    if not lines:
+    if not rows:
         lines.append("Nobody has open delegated work.")
     for space, why in sorted(errors.items()):
         lines.append(f"{space} could not be read ({why[:120]}): its work is not in this list.")
@@ -408,7 +476,7 @@ WHO_HAS_IT_MS = 15 * 60 * 1000
 CHECKED_BY_MS = 24 * 3600 * 1000
 
 
-def _stages_due(it, now_ms: int) -> list[tuple[str, str]]:
+def _stages_due(it, now_ms: int, pauses: dict | None = None) -> list[tuple[str, str]]:
     """(stage, message tail) the request has reached by `now_ms`. Each stage is
     told once. Pattern: a durable workflow with timers, kept as level-triggered
     state (the ledger) plus a record of what was told; a missed timer is the
@@ -421,6 +489,10 @@ def _stages_due(it, now_ms: int) -> list[tuple[str, str]]:
         out.append((it.status, ENDED[it.status]))
     elif it.status == "claimed":
         out.append(("has", f"🗂️ {who} has it"))
+    elif who in (pauses or {}):
+        # Issue #296: filed for an agent that cannot start -- said once, at once.
+        out.append(("paused", f"⏸ Filed for {_person(who)}, who cannot take it yet. "
+                              + pause_text(who, pauses[who])))
     elif created is not None and now_ms - created > WHO_HAS_IT_MS:
         out.append(("late_pickup", f"⏳ Not picked up {_hours(now_ms - created)} after you asked "
                                    f"(waiting for {who})"))
@@ -432,7 +504,7 @@ def _stages_due(it, now_ms: int) -> list[tuple[str, str]]:
 
 
 def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAULT_REQUESTS_STATE,
-                    send: Callable[[str], bool] | None = None) -> dict:
+                    send: Callable[[str], bool] | None = None, pauses: dict | None = None) -> dict:
     """Tell the owner each stage of each request once, in their own chat. {reported, unsent}."""
     send = send or _send_owner
     now = int(time.time() * 1000) if now_ms is None else now_ms
@@ -441,7 +513,7 @@ def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAU
     due = []
     for space, iid, it in _requests(folded):
         k = f"{space}/{iid}"
-        for stage, head in _stages_due(it, now):
+        for stage, head in _stages_due(it, now, pauses):
             if stage not in (seen.get(k) or []):
                 due.append((k, stage, head, space, iid, it))
     if not due:
@@ -500,8 +572,9 @@ def main(argv=None) -> int:
     if a.cmd == "who":
         folded, errors = states(a.root)
         rows = who_has_what(folded, now_ms=int(time.time() * 1000))
-        print(json.dumps({"errors": errors, "open": rows}, sort_keys=True) if a.json
-              else who_text(rows, errors))
+        paused = pauses(a.root)
+        print(json.dumps({"errors": errors, "open": rows, "paused": paused}, sort_keys=True) if a.json
+              else who_text(rows, errors, pauses=paused))
         return 1 if errors else 0
     folded, errors = states(a.root)
     now_ms = int(time.time() * 1000)
@@ -521,7 +594,7 @@ def main(argv=None) -> int:
                            "errors": errors, "gaps": found,
                            "line": briefing_line(found, errors) + " " + requests_line(folded)})
         result = alert(found, state_path=a.state)
-        result.update({f"requests_{k}": v for k, v in report_requests(folded).items()})
+        result.update({f"requests_{k}": v for k, v in report_requests(folded, pauses=pauses(a.root)).items()})
     summary = {"gaps": len(found), "errors": errors, **{k: len(v) for k, v in result.items()}}
     print(json.dumps({**summary, **result, "list": found} if a.json else summary, sort_keys=True))
     return 1 if errors else 0

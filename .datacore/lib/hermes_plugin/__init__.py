@@ -454,7 +454,12 @@ def who_has_what_handler(**_kw) -> str:
         import time as _time  # noqa: PLC0415
         import delegation_watch as dw  # noqa: PLC0415
         folded, errors = dw.states(_root())
-        return dw.who_text(dw.who_has_what(folded, now_ms=int(_time.time() * 1000)), errors)
+        try:
+            paused = dw.pauses(_root())
+        except Exception:  # noqa: BLE001 -- the pause line never hides the list
+            paused = {}
+        return dw.who_text(dw.who_has_what(folded, now_ms=int(_time.time() * 1000)), errors,
+                           pauses=paused)
     except Exception as exc:  # noqa: BLE001
         return f"Could not read the ledgers ({type(exc).__name__}: {exc})."
 
@@ -538,8 +543,22 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
     except Exception as exc:  # noqa: BLE001
         return f"Ledger append failed: {type(exc).__name__}: {exc}"
-    return (f"appended {etype} to {space} as {ident['actor']} "
+    done = (f"appended {etype} to {space} as {ident['actor']} "
             f"(seq={getattr(ev, 'seq', '?')} hash={str(getattr(ev, 'hash', ''))[:12]})")
+    if etype == "item.create":
+        # Issue #296 (2026-11-06): "Tris has it" was said while Tris's claiming
+        # was paused for lack of credit. Filed regardless; the reply says so.
+        try:
+            import delegation_watch as dw  # noqa: PLC0415
+            who = payload.get("assignee") or payload.get("runner")
+            p = dw.pauses(root).get(who) if who else None
+            if p:
+                done += (f"\nNOTE: {dw.pause_text(who, p)} Tell the founder it is filed for "
+                         f"{dw._person(who)} but cannot start until then; do not say "
+                         f"{dw._person(who)} has it.")
+        except Exception:  # noqa: BLE001 -- the note never fails a filing
+            pass
+    return done
 
 # ── Approval button presses (owner decision 2026-09-27) ─────────────────────
 #

@@ -557,8 +557,45 @@ def test_who_has_what_is_a_read_tool_over_every_space(as_tris, monkeypatch):
     fake = types.SimpleNamespace(
         states=lambda root: (seen.setdefault("root", root), ({"2-datacore": "S"}, {}))[1],
         who_has_what=lambda folded, now_ms: [{"assignee": "data", "folded": folded}],
-        who_text=lambda rows, errors: f"data: {len(rows)} open")
+        pauses=lambda root: {},
+        who_text=lambda rows, errors, pauses=None: f"data: {len(rows)} open")
     monkeypatch.setitem(sys.modules, "delegation_watch", fake)
     monkeypatch.setattr(hp, "_lib", lambda: True)
     assert hp.who_has_what_handler() == "data: 1 open"
     assert seen["root"] == hp._root()
+
+
+def test_filing_for_a_paused_agent_files_it_and_says_they_cannot_start(as_tris, tmp_path, monkeypatch):
+    """Issue #296: Winston told the owner "Tris has it" while Tris's claiming was
+    paused for lack of credit. The item is still filed; the reply says so."""
+    import types
+    space = tmp_path / "2-plur" / ".datacore"
+    space.mkdir(parents=True)
+    (space.parent / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            pass
+        def append(self, etype, payload):
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
+    import delegation_watch as dw
+    monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
+    monkeypatch.setattr(dw, "pauses", lambda root, **kw: {
+        "tris": {"since_ms": 1_800_000_000_000, "retry_ms": 1_800_021_600_000, "why": "out of model credit"}})
+
+    out = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                   payload={"id": "r1", "title": "x", "assignee": "tris"})
+    assert out.startswith("appended item.create"), out
+    assert "cannot take work" in out and "out of model credit" in out
+    assert "do not say" in out.lower()
+
+    other = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                     payload={"id": "r2", "title": "x", "assignee": "miles"})
+    assert "cannot take work" not in other

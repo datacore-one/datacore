@@ -356,3 +356,70 @@ def test_a_finished_request_says_who_did_it_who_checked_it_and_where_the_result_
     assert "agent/c1" in c1 and "datacore-one/datacore" in c1, c1
     w1 = next(l for l in text.splitlines() if "task w1" in l)
     assert "Done by Data" in w1 and "not yet checked" in w1, w1
+
+
+# ── An agent that paused itself (issue #296, owner 2026-11-06) ────────────────
+# Tris paused her claiming at 17:21 after OpenRouter said "out of credit"; at
+# 21:11 Winston filed the owner's request for her and said "Tris has it", and
+# nothing told the owner she could not start. The pause is in the ledger: an
+# item.release by the agent whose error is a login, credit or usage-limit
+# failure, with no claim or completion after it.
+
+CREDIT = ("hermes: hermes exited 1: hermes_oneshot: incomplete provider result; "
+          "Error code: 402 - {'error': {'message': 'This request would exceed your available credits'")
+
+
+def ev(actor, etype, at, error=None, iid="x"):
+    payload = {"id": iid}
+    if error is not None:
+        payload["error"] = error
+    return NS(actor=actor, type=etype, hlc=f"{at}.0000.{actor}", payload=payload)
+
+
+def test_an_agent_whose_last_attempt_failed_on_credit_is_paused_with_its_retry_time():
+    events = [ev("tris", "item.claim", NOW - 5 * H), ev("tris", "item.release", NOW - 4 * H, CREDIT),
+              ev("data", "item.release", NOW - 4 * H, "check failed: wc -l says 2")]
+    p = dw.pauses_from(events)
+    assert set(p) == {"tris"}                               # an ordinary failure is not a pause
+    assert p["tris"]["since_ms"] == NOW - 4 * H
+    assert p["tris"]["retry_ms"] == NOW - 4 * H + 6 * H     # claim_backoff probes after 6 h
+    assert "credit" in p["tris"]["why"]
+
+
+def test_a_usage_limit_is_a_pause_and_a_later_claim_or_completion_ends_it():
+    limit = "claude: You've hit your weekly limit"
+    assert "usage limit" in dw.pauses_from([ev("miles", "item.release", NOW - H, limit)])["miles"]["why"]
+    assert dw.pauses_from([ev("tris", "item.release", NOW - 4 * H, CREDIT),
+                           ev("tris", "item.claim", NOW - H)]) == {}
+    assert dw.pauses_from([ev("tris", "item.release", NOW - 4 * H, CREDIT),
+                           ev("tris", "item.complete", NOW - H)]) == {}
+
+
+def test_the_pause_counts_from_the_first_of_the_failures_in_a_row():
+    p = dw.pauses_from([ev("tris", "item.release", NOW - 9 * H, CREDIT),
+                        ev("tris", "item.release", NOW - 3 * H, CREDIT)])["tris"]
+    assert p["since_ms"] == NOW - 9 * H and p["retry_ms"] == NOW - 3 * H + 6 * H
+
+
+def test_who_has_what_leads_with_the_agent_that_cannot_take_work():
+    rows = dw.who_has_what({"2-datacore": NS(items={"a": item("a", assignee="tris")})}, now_ms=NOW)
+    paused = {"tris": {"since_ms": NOW - 4 * H, "retry_ms": NOW + 2 * H, "why": "out of model credit"}}
+    text = dw.who_text(rows, {}, pauses=paused)
+    first = text.splitlines()[0]
+    assert "Tris" in first and "cannot take work" in first and "out of model credit" in first
+    assert "retries" in first
+    assert "Tris" not in dw.who_text(rows, {}).splitlines()[0]      # no pause, no line
+
+
+def test_the_owner_is_told_once_when_a_request_waits_on_a_paused_agent(tmp_path):
+    folded = {"2-datacore": NS(items={"r": req("r", "created", assignee="tris")})}
+    paused = {"tris": {"since_ms": NOW - 4 * H, "retry_ms": NOW + 2 * H, "why": "out of model credit"}}
+    st, sent = tmp_path / "s.json", []
+    out = dw.report_requests(folded, now_ms=NOW, state_path=st, pauses=paused,
+                             send=lambda t: sent.append(t) or True)
+    assert out["reported"] == ["2-datacore/r"]
+    text = "\n".join(sent)
+    assert "task r" in text and "Tris" in text and "cannot take work" in text and "out of model credit" in text
+    sent.clear()
+    dw.report_requests(folded, now_ms=NOW, state_path=st, pauses=paused, send=lambda t: sent.append(t) or True)
+    assert not any("cannot take work" in t for t in sent)          # once
