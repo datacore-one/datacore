@@ -219,3 +219,33 @@ def test_one_items_leftover_does_not_burn_a_model_call_on_the_next(tmp_path, cap
     assert "STOPPING" in out, out
     assert "left-behind.txt" in out, out
     assert "commit or discard it" in out
+
+
+def test_an_uncommitted_telemetry_log_does_not_block_verification(tmp_path):
+    """The telemetry log (`.datacore/telemetry/<writer>.jsonl`, plan phase C) is
+    an append-only ledger record like the event logs. On 2026-11-06 Winston's
+    verify-others run refused to check Tris's finished note -- "check FAILED
+    CLOSED ... (uncommitted: .datacore/telemetry/winston.jsonl)" -- because the
+    verifier's own writer appends telemetry continuously, so no check could ever
+    run in that copy. Its own records are not the agent's artifact."""
+    import subprocess
+    import ledger_claim
+    space = tmp_path / "space"
+    (space / ".datacore" / "events").mkdir(parents=True)
+    (space / ".datacore" / "telemetry").mkdir(parents=True)
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "d@example.invalid"],
+                 ["config", "user.name", "d"]):
+        subprocess.run(["git", "-C", str(space), *args], check=True, capture_output=True)
+    (space / "seed.txt").write_text("seed\n")
+    (space / ".datacore" / "telemetry" / "winston.jsonl").write_text("{}\n")
+    subprocess.run(["git", "-C", str(space), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(space), "commit", "-qm", "seed"], check=True, capture_output=True)
+
+    with open(space / ".datacore" / "telemetry" / "winston.jsonl", "a") as f:
+        f.write("{}\n")
+    assert ledger_claim._artifact_tree_clean(space)
+
+    (space / ".datacore" / "telemetry" / "notes.txt").write_text("not a log\n")
+    dirty: list = []
+    assert not ledger_claim._artifact_tree_clean(space, dirty)
+    assert dirty == [".datacore/telemetry/notes.txt"], dirty
