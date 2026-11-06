@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -341,6 +342,50 @@ DEFAULT_REQUESTS_STATE = STATE_DIR / "delegation-requests-reported.json"
 ENDED = {"verified": "✅ Done and checked", "completed": "☑️ Done, not yet checked by someone else",
          "dismissed": "❌ Not done"}
 
+_PATH = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+\.(?:md|txt|json|yaml|yml|py|csv|html))\b")
+
+
+def _person(actor) -> str:
+    """The principal behind a writer, as the owner calls it: nightshift -> Miles."""
+    if not actor:
+        return "nobody"
+    try:
+        from actor_identity import principal_of
+        name = principal_of(str(actor))[0] or str(actor)
+    except Exception:  # noqa: BLE001 -- a name is a courtesy, never a failure
+        name = str(actor)
+    return name[:1].upper() + name[1:]
+
+
+def _checker(it):
+    for line in reversed(it.history or []):
+        parts = line.split()
+        if len(parts) >= 3 and parts[2] == "item.verify:" and line.endswith("applied"):
+            return parts[1]
+    return None
+
+
+def _result(it) -> str:
+    """Where the owner looks: the files the check names, or the task branch."""
+    p = it.payload or {}
+    files = sorted(set(_PATH.findall(str(p.get("check") or ""))))
+    if files:
+        return ", ".join(files[:3])
+    repo = ((p.get("spec") or {}).get("properties") or {}).get("SURFACE")
+    if p.get("runner") and repo and "/" in str(repo):
+        return f"branch agent/{it.id} in {repo} (its pull request)"
+    return ""
+
+
+def _ended_head(it) -> str:
+    """Owner, 2026-11-06: a finished request says who did it and who checked it."""
+    doer = _person(getattr(it, "owner", None))
+    if it.status == "verified":
+        return f"✅ Done by {doer}, checked by {_person(_checker(it))}"
+    if it.status == "completed":
+        return f"☑️ Done by {doer}, not yet checked by someone else"
+    return ENDED.get(it.status, it.status)
+
 
 def _requests(folded: dict):
     for space in sorted(folded):
@@ -405,6 +450,12 @@ def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAU
     for k, stage, head, space, iid, it in due:
         p = it.payload or {}
         why = f": {str(it.closed_reason)[:200]}" if stage == "dismissed" and it.closed_reason else ""
+        if stage in ("verified", "completed"):
+            head = _ended_head(it)
+            res = _result(it)
+            why = f". Result: {res}" if res else ""
+            lines.append(f"{head}: {it.title[:100]} [{space} {iid}]{why}")
+            continue
         lines.append(f"{head}: {it.title[:100]} [{p.get('assignee') or p.get('runner') or 'nobody'}, "
                      f"{space} {iid}]{why}")
     keys = sorted({d[0] for d in due})
