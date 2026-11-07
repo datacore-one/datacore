@@ -315,13 +315,70 @@ def policy_block(tool_name: str, args) -> str | None:
         return "Datacore policy unavailable; tool execution refused"
 
 
-def pre_tool_call(tool_name: str = "", args=None, **_kw):
+# ---- Winston files first (issue #300, 2026-11-07) ---------------------------
+#
+# The persona rule and the narrowed Telegram toolsets held on 2026-11-06 and not
+# on 2026-11-07: the same model, asked for an incident note, set out to research
+# it itself (about 25 skill lookups), then asked the owner what had happened, and
+# never filed. Two guards, only in Winston's Telegram turns: a routing frame on
+# every owner message, and a stop on stalling. Filing and status are never blocked.
+
+_ROUTING: dict[str, dict] = {}
+_STALL_LIMIT = 4
+_ROUTING_FRAME = (
+    "[Winston routing] If this message asks for work to be done, your FIRST action is "
+    "datacore_ledger_append (type item.create, asked_by gregor, route do) for miles, tris "
+    "or data, with done_when and a check; then reply in one line who has it. Do not "
+    "research, investigate or do the work yourself, and do not ask the founder for the "
+    "facts: the agent you file it for finds them. Status questions: datacore_who_has_what.")
+
+
+def _winston() -> bool:
+    try:
+        return identity().get("actor") == "winston"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def pre_llm_call(session_id: str = "", turn_id: str = "", platform: str = "", **_kw):
+    """Hermes pre_llm_call: the routing frame for Winston's Telegram turns, else None."""
+    _ROUTING.pop(session_id, None)
+    if platform != "telegram" or not _winston():
+        return None
+    _ROUTING[session_id] = {"turn": turn_id, "calls": 0, "routed": False}
+    return {"context": _ROUTING_FRAME}
+
+
+def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -> str | None:
+    st = _ROUTING.get(session_id)
+    if not st or (turn_id and st["turn"] and turn_id != st["turn"]):
+        return None
+    name = str(tool_name or "")
+    if name.startswith("datacore_"):
+        a = args if isinstance(args, dict) else {}
+        if name == "datacore_who_has_what" or (
+                name == "datacore_ledger_append" and str(a.get("type", "")) == "item.create"):
+            st["routed"] = True
+        return None
+    if st["routed"]:
+        return None
+    st["calls"] += 1
+    if st["calls"] <= _STALL_LIMIT:
+        return None
+    return ("Stop: you are coordinating, not doing. If the founder asked for work, file it now "
+            "with datacore_ledger_append (item.create for miles, tris or data, asked_by gregor, "
+            "route do, done_when, check) and tell him who has it. The agent finds the facts. "
+            "If he asked about status, use datacore_who_has_what.")
+
+
+def pre_tool_call(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", **_kw):
     """Hermes pre_tool_call: {"action": "block", "message": ...} or None."""
     try:
         if not identity()["ok"]:
             return {"action": "block", "message": "Datacore identity unresolved; restore the principal registry"}
         text = call_text(tool_name, args)
-        reason = foreign_actor_write(text) or policy_block(tool_name, args)
+        reason = (foreign_actor_write(text) or policy_block(tool_name, args)
+                  or stall_block(tool_name, args, session_id, turn_id))
         if reason:
             return {"action": "block", "message": reason}
     except Exception as exc:  # noqa: BLE001
@@ -764,6 +821,7 @@ def _from_hermes(handler):
 
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
+    ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("on_session_start", on_session_start)
     for name, schema, handler, desc, emoji in (
         ("datacore_whoami", WHOAMI_SCHEMA, whoami_handler,

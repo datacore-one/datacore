@@ -267,7 +267,7 @@ def test_registration_wires_both_hooks_and_the_tool(as_tris):
         def register_tool(self, **kw): calls["tools"].append(kw["name"])
 
     hp.register(Ctx())
-    assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "on_session_start"]
+    assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "pre_llm_call", "on_session_start"]
     assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 5
 
 
@@ -311,7 +311,7 @@ def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
 
     c = Ctx()
     hp.register(c)                      # must not raise: the hooks are the point
-    assert c.hooks == ["pre_tool_call", "on_session_start"]
+    assert c.hooks == ["pre_tool_call", "pre_llm_call", "on_session_start"]
 
 
 # ── finding the fleet lib ───────────────────────────────────────────────────
@@ -635,3 +635,73 @@ def test_an_owner_request_with_a_weak_check_is_refused_before_anything_is_writte
     ok = hp.ledger_append_handler(space="2-plur", type="item.create", payload={
         **base, "check": "test -s f.md && grep -qi journal f.md && grep -qi 'item.complete' f.md"})
     assert ok.startswith("appended item.create") and len(written) == 1, ok
+
+
+# ── Issue #300: Winston files the owner's request before anything else ──────
+
+@pytest.fixture()
+def as_winston(monkeypatch):
+    w = {**TRIS, "actor": "winston", "principal": "winston", "display": "Winston",
+         "role": "chief of staff"}
+    monkeypatch.setattr(hp, "_IDENTITY", w)
+    monkeypatch.setattr(hp, "_lib", lambda: True)
+    monkeypatch.setattr(hp, "policy_block", lambda tool_name, args: None)
+    monkeypatch.setattr(hp, "_ROUTING", {})
+    return w
+
+
+def test_an_owner_message_on_telegram_gets_the_filing_frame(as_winston):
+    out = hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram",
+                          user_message="we need an incident note")
+    ctx = out["context"] if isinstance(out, dict) else out
+    assert "datacore_ledger_append" in ctx and "yourself" in ctx
+
+
+def test_no_frame_off_telegram(as_winston):
+    assert not hp.pre_llm_call(session_id="s1", turn_id="t1", platform="cron", user_message="x")
+
+
+def test_no_frame_for_another_principal(as_tris):
+    assert not hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram", user_message="x")
+
+
+def _turn(n_calls, tool="skill_view", sid="s1", turn="t1"):
+    hp.pre_llm_call(session_id=sid, turn_id=turn, platform="telegram", user_message="do x")
+    return [hp.pre_tool_call(tool, {}, session_id=sid, turn_id=turn) for _ in range(n_calls)]
+
+
+def test_the_fifth_lookup_without_filing_is_blocked_and_says_file_it(as_winston):
+    res = _turn(5)
+    assert res[:4] == [None] * 4
+    assert res[4] and res[4]["action"] == "block" and "datacore_ledger_append" in res[4]["message"]
+
+
+def test_datacore_tools_are_never_blocked(as_winston):
+    _turn(6)
+    assert hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {}},
+                            session_id="s1", turn_id="t1") is None
+
+
+def test_after_filing_nothing_is_blocked(as_winston):
+    _turn(2)
+    hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {}},
+                     session_id="s1", turn_id="t1")
+    assert all(r is None for r in [hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1")
+                                   for _ in range(6)])
+
+
+def test_a_status_question_answered_with_who_has_what_is_not_blocked(as_winston):
+    _turn(1)
+    hp.pre_tool_call("datacore_who_has_what", {}, session_id="s1", turn_id="t1")
+    assert all(hp.pre_tool_call("session_search", {}, session_id="s1", turn_id="t1") is None
+               for _ in range(6))
+
+
+def test_a_new_turn_resets_the_count(as_winston):
+    _turn(4)
+    assert all(r is None for r in _turn(4, turn="t2"))
+
+
+def test_cron_turns_are_never_counted(as_winston):
+    hp.pre_llm_call(session_id="c1", turn_id="t1", platform="cron", user_message="x")
+    assert all(hp.pre_tool_call("skill_view", {}, session_id="c1", turn_id="t1") is None for _ in range(8))
