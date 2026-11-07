@@ -206,6 +206,13 @@ def _send_telegram(message: str) -> bool:
 
 _NO_EMIT = False
 
+#: MSG-13: a failure that was never alerted persists this long → tell the owner once.
+_WITHHELD_ALERT_WINDOW_S = 24 * 3600
+
+#: MSG-11: when set by main(), escalations are collected here (keyed by machine)
+#: instead of being sent one-per-job; main() flushes one grouped message per machine.
+_pending_escalations: dict | None = None
+
 
 def _recurrence():
     """The recurrence module, by package import or by path (same fallback the
@@ -538,11 +545,23 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
             # the problem already sent; on a later day, if it was the
             # operator's (it was alerted), it is reminded -- once, below. A
             # problem handed to a repairer and never alerted stays with the
-            # repair path, whose escalations speak for it.
-            if not _record.get("last_alerted") or not _rec.should_alert(_record):
+            # repair path, whose escalations speak for it -- UNTIL 24h pass
+            # without delivery (MSG-13): then the owner is told once regardless.
+            already_cool = not _rec.should_alert(_record)
+            never_alerted = not _record.get("last_alerted")
+            if already_cool:
                 print(f"alert withheld: {job_name} failed on the same artifact already counted "
                       f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
                 return
+            if never_alerted:
+                first_t = _record.get("first_failed_time")
+                past_window = (first_t is not None
+                               and (time.time() - float(first_t)) > _WITHHELD_ALERT_WINDOW_S)
+                if not past_window:
+                    print(f"alert withheld: {job_name} failed on the same artifact already counted "
+                          f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
+                    return
+                # past the window, never alerted: fall through to escalate once
         # DELEGATE ON THE FIRST FAILURE, NOT THE THIRD.
         #
         # This waited for DIP-0031's recurring threshold, so failures one and
@@ -572,6 +591,32 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
             if state == "paused":
                 # The model usage limit: the dispatcher reported it once and
                 # paused; another repair would spend nothing but the wait.
+                # MSG-13: but if it stays paused past the window, tell the owner once.
+                first_t = _record.get("first_failed_time")
+                past_window = (first_t is not None
+                               and (time.time() - float(first_t)) > _WITHHELD_ALERT_WINDOW_S)
+                if past_window:
+                    if not _escalate_once(job_name, detail):
+                        print(f"alert withheld: {job_name} already escalated ({detail[:120]})",
+                              file=sys.stderr)
+                        return
+                    _rec.note_alerted(job_name)
+                    message = (f"job.verify NEEDS THE OWNER: {job_name} has been failing for "
+                               f">{_WITHHELD_ALERT_WINDOW_S // 3600}h while repairs are paused "
+                               f"({detail})")
+                    if mode in ("telegram", "command"):
+                        message += _failure_detail(job, failures)
+                    if mode == "telegram":
+                        if not _send_telegram(message):
+                            print(f"alert: telegram unavailable, logged only ({job_name})",
+                                  file=sys.stderr)
+                    elif mode == "command":
+                        if not _send_command(message):
+                            print(f"alert: no working alert command, logged only ({job_name}): "
+                                  f"{message}", file=sys.stderr)
+                    else:
+                        print(f"alert: {message}", file=sys.stderr)
+                    return
                 print(f"repairs paused for {job_name} ({detail}); operator not alerted",
                       file=sys.stderr)
                 return
@@ -591,6 +636,14 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
                 message = f"job.verify NEEDS THE OWNER: {detail}"
                 if mode in ("telegram", "command"):
                     message += _failure_detail(job, failures)
+                # MSG-11: when collecting per-machine escalations, defer the send so
+                # multiple jobs on the same machine that all escalate for the same
+                # host-state cause produce one grouped message instead of one each.
+                machine = getattr(job, "machine", None) if job is not None else None
+                if _pending_escalations is not None and machine:
+                    _pending_escalations.setdefault(machine, []).append(
+                        (job, job_name, detail, failures, mode, message))
+                    return
                 if mode == "telegram":
                     if not _send_telegram(message):
                         print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
@@ -822,8 +875,10 @@ def _attest_space() -> Path:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     # See _dispatch_alert: a dry run must not inflate the recurrence streak.
-    global _NO_EMIT
+    global _NO_EMIT, _pending_escalations
     _NO_EMIT = bool(getattr(args, "no_emit", False))
+    # MSG-11: collect escalations during the job loop; flush grouped at the end.
+    _pending_escalations = {}
 
     manifest_path = Path(args.manifest) if args.manifest else _default_manifest_path()
 
@@ -894,6 +949,29 @@ def main(argv: list[str] | None = None) -> None:
             # recovers must not carry its old count into an unrelated future
             # failure and escalate on the first one.
             _note_pass(job.name)
+
+    # MSG-11: flush grouped escalations — one message per machine.
+    # Multiple jobs on the same machine that all escalate for the same host-state
+    # fault are batched into one message so a single cause produces one alert.
+    for machine, items in (_pending_escalations or {}).items():
+        if len(items) == 1:
+            _, _, _, _, grp_mode, grp_msg = items[0]
+        else:
+            names = [jn for _, jn, _, _, _, _ in items]
+            lines = [f"  {jn}: {msg}" for _, jn, _, _, _, msg in items]
+            grp_mode = items[0][4]
+            grp_msg = (f"job.verify NEEDS THE OWNER: {len(items)} jobs on {machine} "
+                       f"all failing:\n" + "\n".join(lines))
+        if grp_mode == "telegram":
+            if not _send_telegram(grp_msg):
+                print(f"alert: telegram unavailable, logged only ({machine})", file=sys.stderr)
+        elif grp_mode == "command":
+            if not _send_command(grp_msg):
+                print(f"alert: no working alert command, logged only ({machine}): {grp_msg}",
+                      file=sys.stderr)
+        else:
+            print(f"alert: {grp_msg}", file=sys.stderr)
+    _pending_escalations = None
 
     if any_failed:
         sys.exit(1)
