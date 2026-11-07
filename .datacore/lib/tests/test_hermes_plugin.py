@@ -753,3 +753,73 @@ def test_the_load_check_fails_on_a_second_copy_and_a_missing_hook(tmp_path):
     assert vl.problems(plugins, good, {h: 1 for h in want}, want) == []
     assert any("pre_llm_call" in p for p in vl.problems(plugins, good, {"pre_tool_call": 1}, want))
     assert any("loaded from" in p for p in vl.problems(plugins, str(tmp_path / "x.py"), {h: 1 for h in want}, want))
+
+
+# ── 2026-11-07 dry runs: Winston's filing shapes ─────────────────────────────
+
+@pytest.fixture()
+def filing(as_tris, tmp_path, monkeypatch):
+    import types
+    space = tmp_path / "2-datacore" / ".datacore"
+    space.mkdir(parents=True)
+    (space.parent / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    written = []
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            pass
+        def append(self, etype, payload):
+            written.append((etype, payload))
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create", "item.update"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
+    import delegation_watch as dw
+    monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
+    monkeypatch.setattr(dw, "pauses", lambda root, **kw: {})
+    return written
+
+
+GOOD = {"title": "Incident note: agents' server disk outage", "assignee": "miles",
+        "asked_by": "gregor", "route": "do",
+        "done_when": "note at 1-tracks/ops/2026-11-07-disk-outage.md",
+        "check": "f=1-tracks/ops/2026-11-07-disk-outage.md; test -s $f && [ $(grep -c '^## ' $f) -ge 3 ] "
+                 "&& grep -qiE '[0-9]+ *(min|hour)' $f"}
+
+
+def test_fields_given_at_the_top_level_are_filed_as_the_payload(filing):
+    """Dry run 1: every field beside `type` and `space`, no `payload` -> 'payload must be a non-empty object'."""
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create", **GOOD)
+    assert out.startswith("appended item.create"), out
+    assert filing[0][1]["assignee"] == "miles" and filing[0][1]["check"].startswith("f=")
+
+
+def test_type_and_space_inside_the_payload_are_lifted_out(filing):
+    """Dry runs 1 and 2: the retry nested type and space inside payload."""
+    out = hp.ledger_append_handler(payload={"type": "item.create", "space": "2-datacore", **GOOD})
+    assert out.startswith("appended item.create"), out
+    etype, p = filing[0]
+    assert etype == "item.create" and "type" not in p and "space" not in p
+
+
+def test_a_filing_without_an_id_gets_one_and_the_reply_names_it(filing):
+    """An item.create without id is skipped by the fold: filed, and nobody would ever see it."""
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload=dict(GOOD))
+    p = filing[0][1]
+    assert p["id"].startswith("incident-note-agents-server-disk-outage-") and p["id"] in out
+
+
+def test_a_given_id_is_kept(filing):
+    hp.ledger_append_handler(space="2-datacore", type="item.create", payload={**GOOD, "id": "mine-1"})
+    assert filing[0][1]["id"] == "mine-1"
+
+
+def test_a_nested_item_create_counts_as_filed_for_the_guard(as_winston):
+    _turn(2)
+    hp.pre_tool_call("datacore_ledger_append", {"payload": {"type": "item.create", "title": "x"}},
+                     session_id="s1", turn_id="t1")
+    assert all(hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1") is None for _ in range(6))
