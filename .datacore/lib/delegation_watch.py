@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -315,6 +316,76 @@ def listening_problem(space_dir: Path, payload: dict, *, repo_of: Callable = _re
         return None
     return (f"{who} does not listen in {Path(space_dir).name} ({repo}); its dispatcher reads "
             f"{', '.join(entry['listens_in'])}. File it there, with a pointer to where the work lives.")
+
+
+_AGENT_NAMES = {"miles", "tris", "data", "winston", "nightshift", "gregor"}
+_COUNTED = re.compile(r"(grep\s+(-\w*\s+)*-\w*c|wc\s+-l)")
+_COMPARED = re.compile(r"-(ge|gt|eq)\s+\"?\d")
+_PR_SEARCH = ("api.github.com", "gh pr ")
+_CHECK_EXAMPLE = ("For example: test -s <new file> && grep -qi '<a term done_when requires>' <file> "
+                  "&& [ \"$(grep -c '^- ' <file>)\" -ge 3 ]")
+
+
+def _words(s: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", str(s).lower()))
+
+
+def _grep_patterns(check: str) -> list[str]:
+    """The pattern each grep/rg in a check looks for (its first non-option argument)."""
+    try:
+        toks = list(shlex.shlex(check, posix=True, punctuation_chars=True))
+    except ValueError:
+        return []
+    out, i = [], 0
+    while i < len(toks):
+        if toks[i] in ("grep", "rg", "egrep"):
+            j = i + 1
+            while j < len(toks) and toks[j] not in ("&&", "||", "|", ";"):
+                t = toks[j]
+                if t in ("-e", "--regexp") and j + 1 < len(toks):
+                    out.append(toks[j + 1])
+                    break
+                if not t.startswith("-"):
+                    out.append(t)
+                    break
+                j += 1
+            i = j
+        i += 1
+    return out
+
+
+def check_problem(payload: dict) -> str | None:
+    """Why the check on an owner's request would pass whatever the result says, or None.
+
+    Issue #298 (2026-11-07): Winston filed `test -s F && grep -qi tris F && grep -qi
+    data F` for a note comparing Tris and Data. Any note on the topic passes it.
+    Only items asked for by the owner are judged; everything else is left alone."""
+    if not isinstance(payload, dict) or not payload.get("asked_by"):
+        return None
+    check = str(payload.get("check") or "").strip()
+    if not check:
+        return ("an owner's request needs a `check`: a shell command, run from the space "
+                "folder, that passes only when the result says what done_when asks. "
+                + _CHECK_EXAMPLE)
+    if any(s in check for s in _PR_SEARCH):
+        return None
+    trivial = _words(payload.get("title")) | _words(payload.get("assignee")) | _AGENT_NAMES
+    content, weak = 0, []
+    for pat in _grep_patterns(check):
+        w = _words(pat)
+        if w and not w <= trivial:
+            content += 1
+        else:
+            weak.append(pat)
+    if _COUNTED.search(check) and _COMPARED.search(check):
+        content += len(_COMPARED.findall(check))
+    if content >= 2:
+        return None
+    said = f" It only looks for {', '.join(repr(p) for p in weak)}, words from the title or agent names." if weak else ""
+    return ("the check would pass for any file on the topic, whatever it says." + said
+            + " It needs at least two tests of what the result must contain: a grep for a "
+            "specific term, heading or finding that done_when requires, or a count compared "
+            "with a number (grep -c ... -ge N). " + _CHECK_EXAMPLE)
 
 
 def _load(path: Path) -> dict:

@@ -423,3 +423,50 @@ def test_the_owner_is_told_once_when_a_request_waits_on_a_paused_agent(tmp_path)
     sent.clear()
     dw.report_requests(folded, now_ms=NOW, state_path=st, pauses=paused, send=lambda t: sent.append(t) or True)
     assert not any("cannot take work" in t for t in sent)          # once
+
+
+# ── Issue #298: a check must test what the result says (2026-11-07) ──────────
+
+WEAK_1106 = ("test -s 1-tracks/research/2026-11-06-tris-data-task-logging-comparison.md && "
+             "grep -qi tris 1-tracks/research/2026-11-06-tris-data-task-logging-comparison.md && "
+             "grep -qi data 1-tracks/research/2026-11-06-tris-data-task-logging-comparison.md")
+REQ = {"id": "r1", "assignee": "tris", "asked_by": "gregor", "route": "do",
+       "title": "Write a short note comparing how Tris and Data each log their completed tasks"}
+
+
+def test_the_check_from_2026_11_06_is_refused_and_told_how_to_fix_it():
+    why = dw.check_problem({**REQ, "check": WEAK_1106})
+    assert why and "tris" in why and "data" in why
+    assert "grep -c" in why or "example" in why.lower()
+
+
+def test_an_owner_request_without_a_check_is_refused():
+    assert dw.check_problem(dict(REQ))
+
+
+def test_two_specific_greps_pass():
+    f = "1-tracks/research/2026-11-07-x.md"
+    ok = f"test -s {f} && grep -qi 'item.complete' {f} && grep -qi 'journal' {f}"
+    assert dw.check_problem({**REQ, "check": ok}) is None
+
+
+def test_a_count_compared_with_a_number_is_a_content_assertion():
+    f = "1-tracks/research/2026-11-07-x.md"
+    ok = (f"test -s {f} && [ \"$(grep -c '^- ' {f})\" -ge 3 ] && grep -q 'ledger event' {f}")
+    assert dw.check_problem({**REQ, "check": ok}) is None
+
+
+def test_one_content_assertion_is_not_enough():
+    f = "1-tracks/research/2026-11-07-x.md"
+    assert dw.check_problem({**REQ, "check": f"test -s {f} && grep -q 'ledger event' {f}"})
+
+
+def test_a_pull_request_search_counts_as_proof():
+    ok = ("curl -fsS 'https://api.github.com/search/issues?q=repo:o/r+is:pr+is:open+fix-x+in:title' "
+          "| grep -q '\"total_count\": [1-9]'")
+    assert dw.check_problem({**REQ, "assignee": "nightshift", "check": ok}) is None
+
+
+def test_items_not_asked_by_the_owner_are_left_alone():
+    p = {k: v for k, v in REQ.items() if k != "asked_by"}
+    assert dw.check_problem({**p, "check": WEAK_1106}) is None

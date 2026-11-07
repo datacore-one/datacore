@@ -599,3 +599,39 @@ def test_filing_for_a_paused_agent_files_it_and_says_they_cannot_start(as_tris, 
     other = hp.ledger_append_handler(space="2-plur", type="item.create",
                                      payload={"id": "r2", "title": "x", "assignee": "miles"})
     assert "cannot take work" not in other
+
+
+def test_an_owner_request_with_a_weak_check_is_refused_before_anything_is_written(as_tris, tmp_path, monkeypatch):
+    """Issue #298: the check filed on 2026-11-06 passed for any note on the topic."""
+    import types
+    space = tmp_path / "2-plur" / ".datacore"
+    space.mkdir(parents=True)
+    (space.parent / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    written = []
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            pass
+        def append(self, etype, payload):
+            written.append(payload)
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
+    import delegation_watch as dw
+    monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
+    monkeypatch.setattr(dw, "pauses", lambda root, **kw: {})
+
+    base = {"id": "r1", "title": "Compare how Tris and Data log tasks", "assignee": "tris",
+            "asked_by": "gregor"}
+    out = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                   payload={**base, "check": "test -s f.md && grep -qi tris f.md"})
+    assert out.startswith("Refused:") and not written, out
+
+    ok = hp.ledger_append_handler(space="2-plur", type="item.create", payload={
+        **base, "check": "test -s f.md && grep -qi journal f.md && grep -qi 'item.complete' f.md"})
+    assert ok.startswith("appended item.create") and len(written) == 1, ok
