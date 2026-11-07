@@ -328,6 +328,22 @@ def join(*, now: float | None = None, log: str | None = None) -> dict:
         return _join(now=now, log=log)
 
 
+def _parse_ingest_log(state_dir: Path) -> tuple[list[str], bool]:
+    """Return (failed_space_names, any_ok) from the last phase-1 ingest log.
+
+    Used to detect partial convergence: some spaces ingest-failed but were
+    named, while others succeeded. The whole-cycle-failed case (no ok lines,
+    no named failures) is left as unconverged.
+    """
+    try:
+        lines = (state_dir / "phase1-ingest.log").read_text().splitlines()
+    except OSError:
+        return [], False
+    failed = [line.split()[0] for line in lines if "FAILED:" in line]
+    has_ok = any(line.rstrip().endswith("ok") for line in lines)
+    return failed, has_ok
+
+
 def _join(*, now: float | None = None, log: str | None = None) -> dict:
     now = time.time() if now is None else now
     prev = _load(RECORD)
@@ -336,6 +352,15 @@ def _join(*, now: float | None = None, log: str | None = None) -> dict:
     rc, detail = converge()
     after = measure(fetch=False)
     converged = rc == 0 and after["gap"] == 0 and not after["errors"]
+
+    # Partial convergence: one or more named spaces failed but others converged.
+    # Duties still run; the record names the waiting space(s) but is not written
+    # (the join record's age is the alarm -- only a full success resets it).
+    failed_spaces: list[str] = []
+    partial = False
+    if not converged:
+        failed_spaces, has_ok = _parse_ingest_log(STATE)
+        partial = bool(failed_spaces) and has_ok
 
     record = {
         "joined_at": now,
@@ -354,6 +379,8 @@ def _join(*, now: float | None = None, log: str | None = None) -> dict:
         "arrival": arrival,
         "arrived_at": now if arrival else prev.get("arrived_at", now),
     }
+    if failed_spaces:
+        record["failed_spaces"] = failed_spaces
     _write_atomic(ATTEMPT, {"at": now, "ok": converged})
     LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with LOG.open("a") as fh:
@@ -368,6 +395,11 @@ def _join(*, now: float | None = None, log: str | None = None) -> dict:
         # did; the record's age is the alarm, and rewriting it on failure would
         # reset the very clock that is meant to be running.
         _write_atomic(RECORD, record)
+    elif partial:
+        # Some spaces converged; run duties for them. Do not write RECORD --
+        # the waiting space(s) mean this was not a full join, and the record's
+        # age must keep running.
+        record["duties"] = run_duties(arrival=arrival)
     return record
 
 
