@@ -1062,6 +1062,21 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     hook_detail = ""
     if autosaved:
         _git(space, "add", "-A")
+        # NEVER AUTOSAVE A DELETION (MEM-61). `add -A` stages a locally-absent
+        # tracked file as a deletion. A missing file on one machine is almost
+        # always a local defect — an incomplete checkout, a crashed agent — not
+        # work to broadcast fleet-wide. caa7d58 wiped 110 files from
+        # datafund-space by this path on 2026-07-21. Checked immediately after
+        # `add -A` and before `git rm --cached` for intentional untracks, so
+        # intentional removals (untracked_like_origin) are never confused with
+        # accidental deletions.
+        rc, del_names, _ = _git(space, "-c", "core.quotepath=off", "diff",
+                                "--cached", "--name-only", "--diff-filter=D")
+        for _path in (del_names or "").splitlines():
+            _path = _path.strip()
+            if _path:
+                _git(space, "restore", "--staged", "--", _path)
+                held_back[_path] = "deletion — not auto-committed (needs a human)"
         # `add -A` re-stages what origin untracked: this host's .gitignore does
         # not list it until the merge brings origin's.
         for path in untracked_like_origin:
