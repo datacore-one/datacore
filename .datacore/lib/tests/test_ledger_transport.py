@@ -872,3 +872,38 @@ def test_a_generated_file_origin_untracked_is_untracked_here_too(repo_pair: Path
     assert (repo_pair / "next_actions.org").read_text() == "regenerated projection, much longer\n"
     assert git(repo_pair, "ls-files", "next_actions.org").stdout.strip() == ""
     assert git(repo_pair, "status", "--porcelain").stdout.strip() == ""
+
+
+def test_converge_refuses_mass_deletion_from_origin(repo_pair: Path, tmp_path: Path):
+    """A mass deletion arriving from origin must be refused, not silently applied.
+
+    Without an incoming-loss check, another machine's deletion of 25 tracked
+    files arrives as a clean merge and removes them locally without any
+    warning (MEM-61).
+    """
+    # Seed repo_pair with 25 tracked files and push to origin.
+    for i in range(25):
+        (repo_pair / f"file{i:02d}.txt").write_text(f"content {i}\n")
+    git(repo_pair, "add", "-A")
+    git(repo_pair, "commit", "-qm", "seed 25 files")
+    git(repo_pair, "push", "-q", "origin", "main")
+
+    # Second clone: delete all 25 and push to origin.
+    origin = tmp_path / "origin.git"
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    git(other, "config", "user.email", "t@t")
+    git(other, "config", "user.name", "t")
+    for i in range(25):
+        (other / f"file{i:02d}.txt").unlink()
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "delete 25 files")
+    git(other, "push", "-q", "origin", "main")
+
+    # converge on repo_pair must refuse and preserve every file.
+    res = converge(repo_pair)
+
+    assert not res.ok, f"converge should refuse mass deletion but returned ok: {res.reason}"
+    for i in range(25):
+        assert (repo_pair / f"file{i:02d}.txt").exists(), \
+            f"file{i:02d}.txt was deleted by converge"
