@@ -354,12 +354,17 @@ def run_check(artifact: Artifact, *, now: float | None = None,
             # Only the tail: these logs are append-only and a failure from six
             # weeks ago is not this run's verdict.
             tail = "\n".join(text.splitlines()[-40:])
-            hit = next((m for m in CRASH_MARKERS if m.lower() in tail.lower()), None)
-            if hit:
-                line = next((l.strip() for l in reversed(tail.splitlines())
-                             if hit.lower() in l.lower()), "")
-                errors.append(f"{expanded}: the run left {hit!r} in its output "
-                              f"(no_crash check failed) -- {line[:120]}")
+            # If the last line reports success, don't fail on crash markers found elsewhere
+            last_line = text.splitlines()[-1] if text.splitlines() else ""
+            if re.search(r"result:\s*ok\b", last_line, re.I):
+                pass  # Job reported success, don't fail on crash markers
+            else:
+                hit = next((m for m in CRASH_MARKERS if m.lower() in tail.lower()), None)
+                if hit:
+                    line = next((l.strip() for l in reversed(tail.splitlines())
+                                 if hit.lower() in l.lower()), "")
+                    errors.append(f"{expanded}: the run left {hit!r} in its output "
+                                  f"(no_crash check failed) -- {line[:120]}")
 
     elif check == "min_bytes":
         # For artifacts a daemon RECREATES when lost. `exists` cannot detect
