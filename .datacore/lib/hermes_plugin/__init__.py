@@ -599,7 +599,9 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         # Issue #298 (2026-11-07): the check on an owner's request must test what
         # the result says. The persona rule alone did not hold.
         try:
-            from delegation_watch import check_problem  # noqa: PLC0415
+            from delegation_watch import check_problem, clean_check  # noqa: PLC0415
+            if payload.get("check"):
+                payload = {**payload, "check": clean_check(payload["check"])}
             why = check_problem(payload)
         except Exception:  # noqa: BLE001 -- the check never blocks on its own failure
             why = None

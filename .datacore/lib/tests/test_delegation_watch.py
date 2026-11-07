@@ -470,3 +470,17 @@ def test_a_pull_request_search_counts_as_proof():
 def test_items_not_asked_by_the_owner_are_left_alone():
     p = {k: v for k, v in REQ.items() if k != "asked_by"}
     assert dw.check_problem({**p, "check": WEAK_1106}) is None
+
+
+# ── 2026-11-07 rerun: variants of title words, and HTML-escaped checks ───────
+
+def test_variants_of_title_words_do_not_count_as_content():
+    p = {"asked_by": "gregor", "assignee": "miles",
+         "title": "Write incident note: agents' server outage (disk full, downtime, two prevention measures)",
+         "check": ("f=1-tracks/ops/x.md; grep -qiE \"disk\" \"$f\" && grep -qiE \"(down|downtime|outage|offline)\" \"$f\" "
+                   "&& grep -qiE \"(prevent|mitigat|avoid|stop it)\" \"$f\"")}
+    assert dw.check_problem(p)
+
+
+def test_an_html_escaped_check_is_unescaped():
+    assert dw.clean_check("test -s f &amp;&amp; grep -q 'a&lt;b' f") == "test -s f && grep -q 'a<b' f"

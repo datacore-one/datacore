@@ -633,8 +633,9 @@ def test_an_owner_request_with_a_weak_check_is_refused_before_anything_is_writte
     assert out.startswith("Refused:") and not written, out
 
     ok = hp.ledger_append_handler(space="2-plur", type="item.create", payload={
-        **base, "check": "test -s f.md && grep -qi journal f.md && grep -qi 'item.complete' f.md"})
+        **base, "check": "test -s f.md &amp;&amp; grep -qi journal f.md &amp;&amp; grep -qi 'item.complete' f.md"})
     assert ok.startswith("appended item.create") and len(written) == 1, ok
+    assert "&amp;" not in written[0]["check"] and "&& grep" in written[0]["check"]
 
 
 # ── Issue #300: Winston files the owner's request before anything else ──────
