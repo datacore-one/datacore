@@ -538,6 +538,15 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
             why = None
         if why:
             return f"Refused: {why}"
+        # Issue #298 (2026-11-07): the check on an owner's request must test what
+        # the result says. The persona rule alone did not hold.
+        try:
+            from delegation_watch import check_problem  # noqa: PLC0415
+            why = check_problem(payload)
+        except Exception:  # noqa: BLE001 -- the check never blocks on its own failure
+            why = None
+        if why:
+            return f"Refused: nothing was filed. {why[0].upper() + why[1:]} Fix the check and file it again."
     try:
         # No actor argument by design: it comes from the registry, never the model.
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
