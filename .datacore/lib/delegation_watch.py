@@ -35,6 +35,7 @@ checker and the briefing. Exit 0 unless the read failed for a space (1).
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import shlex
@@ -326,6 +327,29 @@ _CHECK_EXAMPLE = ("For example: test -s <new file> && grep -qi '<a term done_whe
                   "&& [ \"$(grep -c '^- ' <file>)\" -ge 3 ]")
 
 
+def clean_check(check) -> str:
+    """A check as a shell will read it. Winston's 2026-11-07 check arrived HTML-escaped
+    (`&amp;&amp;`), which no shell runs, so it could never pass."""
+    return html.unescape(str(check or "")).strip()
+
+
+def _covered(word: str, trivial: set[str]) -> bool:
+    """A word that is a title word, an agent name, or a variant of one ("down" in
+    "downtime", "prevent" in "prevention")."""
+    return word in trivial or any(
+        min(len(word), len(t)) >= 4 and (t.startswith(word) or word.startswith(t)) for t in trivial)
+
+
+def _trivial_pattern(pat: str, trivial: set[str]) -> bool:
+    """A grep pattern any note on the topic matches. An alternation is only as strong as
+    its weakest branch: `(down|offline)` passes on "down" alone."""
+    for branch in re.split(r"\|", pat):
+        w = _words(branch)
+        if not w or all(_covered(x, trivial) for x in w):
+            return True
+    return False
+
+
 def _words(s: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", str(s).lower()))
 
@@ -362,7 +386,7 @@ def check_problem(payload: dict) -> str | None:
     Only items asked for by the owner are judged; everything else is left alone."""
     if not isinstance(payload, dict) or not payload.get("asked_by"):
         return None
-    check = str(payload.get("check") or "").strip()
+    check = clean_check(payload.get("check"))
     if not check:
         return ("an owner's request needs a `check`: a shell command, run from the space "
                 "folder, that passes only when the result says what done_when asks. "
@@ -372,8 +396,7 @@ def check_problem(payload: dict) -> str | None:
     trivial = _words(payload.get("title")) | _words(payload.get("assignee")) | _AGENT_NAMES
     content, weak = 0, []
     for pat in _grep_patterns(check):
-        w = _words(pat)
-        if w and not w <= trivial:
+        if not _trivial_pattern(pat, trivial):
             content += 1
         else:
             weak.append(pat)
