@@ -714,3 +714,42 @@ def test_an_idle_guard_says_why_in_the_log(as_winston, caplog):
     with caplog.at_level("INFO"):
         hp.pre_tool_call("skill_view", {}, session_id="s2", turn_id="t9")
     assert "stall guard idle for skill_view" in caplog.text and "s2" in caplog.text
+
+
+# ── 2026-11-07: what Hermes loads is what was deployed ───────────────────────
+
+def _registered(monkeypatch):
+    hooks, tools = [], []
+    ctx = type("Ctx", (), {"register_hook": lambda s, n, cb: hooks.append(n),
+                           "register_tool": lambda s, **kw: tools.append(kw["name"])})()
+    monkeypatch.setattr(hp, "install_press_forwarder", lambda: False)
+    hp.register(ctx)
+    return hooks, tools
+
+
+def test_the_manifest_declares_every_hook_and_tool_register_adds(monkeypatch):
+    """pre_llm_call was registered but missing from plugin.yaml, so the manifest misdescribed the plugin."""
+    import yaml
+    m = yaml.safe_load((Path(hp.__file__).parent / "plugin.yaml").read_text())
+    hooks, tools = _registered(monkeypatch)
+    assert sorted(m["hooks"]) == sorted(m["provides_hooks"]) == sorted(hooks)
+    assert sorted(m["provides_tools"]) == sorted(tools)
+
+
+def test_the_load_check_fails_on_a_second_copy_and_a_missing_hook(tmp_path):
+    """A backup folder inside ~/.hermes/plugins/ loaded instead of the deployed copy (2026-11-07)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("vl", Path(hp.__file__).parent / "verify_loaded.py")
+    vl = importlib.util.module_from_spec(spec); spec.loader.exec_module(vl)
+    plugins = tmp_path / "plugins"
+    for d in ("datacore", "datacore.bak"):
+        (plugins / d).mkdir(parents=True)
+        (plugins / d / "plugin.yaml").write_text("name: datacore\n")
+    good = str(plugins / "datacore" / "__init__.py")
+    want = ["pre_tool_call", "pre_llm_call", "on_session_start"]
+    problems = vl.problems(plugins, good, {h: 1 for h in want}, want)
+    assert any("datacore.bak" in p for p in problems)
+    (plugins / "datacore.bak" / "plugin.yaml").unlink()
+    assert vl.problems(plugins, good, {h: 1 for h in want}, want) == []
+    assert any("pre_llm_call" in p for p in vl.problems(plugins, good, {"pre_tool_call": 1}, want))
+    assert any("loaded from" in p for p in vl.problems(plugins, str(tmp_path / "x.py"), {h: 1 for h in want}, want))
