@@ -345,7 +345,9 @@ def pre_llm_call(session_id: str = "", turn_id: str = "", platform: str = "", **
     """Hermes pre_llm_call: the routing frame for Winston's Telegram turns, else None."""
     _ROUTING.pop(session_id, None)
     if platform != "telegram" or not _winston():
+        logger.info("datacore: routing frame skipped (platform=%r, session=%s)", platform, session_id)
         return None
+    logger.info("datacore: routing frame on (session=%s, turn=%s)", session_id, turn_id)
     _ROUTING[session_id] = {"turn": turn_id, "calls": 0, "routed": False}
     return {"context": _ROUTING_FRAME}
 
@@ -353,6 +355,8 @@ def pre_llm_call(session_id: str = "", turn_id: str = "", platform: str = "", **
 def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -> str | None:
     st = _ROUTING.get(session_id)
     if not st or (turn_id and st["turn"] and turn_id != st["turn"]):
+        logger.info("datacore: stall guard idle for %s (session=%s known=%s, turn=%s vs %s)",
+                    tool_name, session_id, bool(st), turn_id, st and st["turn"])
         return None
     name = str(tool_name or "")
     if name.startswith("datacore_"):

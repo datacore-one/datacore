@@ -706,3 +706,11 @@ def test_a_new_turn_resets_the_count(as_winston):
 def test_cron_turns_are_never_counted(as_winston):
     hp.pre_llm_call(session_id="c1", turn_id="t1", platform="cron", user_message="x")
     assert all(hp.pre_tool_call("skill_view", {}, session_id="c1", turn_id="t1") is None for _ in range(8))
+
+
+def test_an_idle_guard_says_why_in_the_log(as_winston, caplog):
+    """2026-11-07: the guard stayed silent on a live turn; the log must show which id did not match."""
+    hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram", user_message="x")
+    with caplog.at_level("INFO"):
+        hp.pre_tool_call("skill_view", {}, session_id="s2", turn_id="t9")
+    assert "stall guard idle for skill_view" in caplog.text and "s2" in caplog.text
