@@ -339,12 +339,17 @@ def check_identity(rep: Report) -> None:
     except (UnicodeError, ValueError, yaml.YAMLError):
         rep.add("0044", "actor registry", False, "invalid or ambiguous identity configuration")
         return
-    missing = [n for n, c in servers.items()
+    active = {n: c for n, c in servers.items() if not c.get('retired')}
+    missing = [n for n, c in active.items()
                if not isinstance(c['access'].get('actor'), str)
                or not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', c['access']['actor'])]
-    rep.add("0044", "every machine has an actor", not missing,
-            f"{len(servers) - len(missing)}/{len(servers)}" +
-            (f"; missing: {', '.join(missing)}" if missing else ""))
+    retired = len(servers) - len(active)
+    detail = f"{len(active) - len(missing)}/{len(active)}"
+    if retired:
+        detail += f" (+ {retired} retired)"
+    if missing:
+        detail += f"; missing: {', '.join(missing)}"
+    rep.add("0044", "every machine has an actor", not missing, detail)
     invalid = []
     for name, config in servers.items():
         access = config['access']
