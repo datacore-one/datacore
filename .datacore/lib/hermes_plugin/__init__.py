@@ -326,11 +326,12 @@ def policy_block(tool_name: str, args) -> str | None:
 _ROUTING: dict[str, dict] = {}
 _STALL_LIMIT = 4
 _ROUTING_FRAME = (
-    "[Winston routing] If this message asks for work to be done, your FIRST action is "
-    "datacore_ledger_append (type item.create, asked_by gregor, route do) for miles, tris "
-    "or data, with done_when and a check; then reply in one line who has it. Do not "
-    "research, investigate or do the work yourself, and do not ask the founder for the "
-    "facts: the agent you file it for finds them. Status questions: datacore_who_has_what.")
+    "[Winston charter] You orchestrate; you do not do tasks. If this message asks for work, "
+    "your FIRST action is datacore_ledger_append (type item.create, asked_by gregor, route do) "
+    "for miles, tris or data, with done_when and a check; then reply in one line who has it. "
+    "Do not research or investigate it yourself, and do not ask the founder for facts the agent "
+    "can find. Only if no agent can take it (datacore_who_has_what shows them paused or down) "
+    "say so and that you will do it yourself. Status questions: datacore_who_has_what.")
 
 
 def _winston() -> bool:
