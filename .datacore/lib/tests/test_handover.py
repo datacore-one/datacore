@@ -115,6 +115,10 @@ def test_session_is_live():
     # local edits there would block a commit coming in: stop before changing any repo
     ((True, False, True, True, True), "stop:local-edits"),
     ((True, True, True, False, True), "ok"),
+    # a repo created this session is not on dayshift yet: clone it when it has
+    # a remote to clone from (owner, 2026-11-07), otherwise stop as before
+    ((False, False, False, False, False, True), "clone"),
+    ((False, False, False, False, False, False), "stop:missing"),
 ])
 def test_repo_action(args, expected):
     assert repo_action(*args) == expected

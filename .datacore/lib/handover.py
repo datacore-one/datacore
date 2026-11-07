@@ -117,19 +117,22 @@ def session_is_live(pid: int, cmdline_of: Callable[[int], str | None]) -> bool:
 
 
 def repo_action(exists: bool, contains_sha: bool, on_branch: bool, can_ff: bool,
-                local_edits: bool = False) -> str:
+                local_edits: bool = False, can_clone: bool = False) -> str:
     """What `go` may do with one repo on dayshift.
 
     Only a fast-forward of the branch the session was on is done unasked;
-    a missing repo, another checked-out branch or a diverged one stops the
-    handover (no stash, reset, checkout or clone on anyone's behalf).
+    another checked-out branch or a diverged one stops the handover (no stash,
+    reset or checkout on anyone's behalf). A missing repo is cloned when the
+    checkpoint recorded where to clone it from (`can_clone`): the path does not
+    exist there, so nothing anyone has is touched. Owner, 2026-11-07: a repo
+    created in the session itself stopped `go` as missing.
     Uncommitted edits there block it only when an incoming commit touches one
     of those files (`local_edits`), found before any repo is changed. Observed
     2026-10-28: dayshift's root repo carried a stray package-lock.json edit that
     a clean-tree rule would have let block every handover.
     """
     if not exists:
-        return "stop:missing"
+        return "clone" if can_clone else "stop:missing"
     if not on_branch:
         return "stop:other-branch"
     if contains_sha:
@@ -377,7 +380,12 @@ def _repo_entry(repo: Path, issues: list[str]) -> dict | None:
     if ahead not in ("", "0"):
         issues.append(f"{rel}: {ahead} commit(s) not pushed — push them, then rerun")
         return None
-    return {"path": rel, "branch": branch, "sha": upstream.stdout.strip()}
+    entry = {"path": rel, "branch": branch, "sha": upstream.stdout.strip()}
+    remote = _git(repo, "config", "--get", f"branch.{branch}.remote") or "origin"
+    url = _git(repo, "remote", "get-url", remote)
+    if url:
+        entry["url"] = url      # lets go clone a repo dayshift does not have yet
+    return entry
 
 
 def cmd_checkpoint(a: argparse.Namespace) -> None:
@@ -460,7 +468,7 @@ def _probe(r: dict) -> str:
               f"rm -f /tmp/handover-in.$$; echo $c $b $f $e")
     out = _remote(script).stdout.strip()
     if out == "missing":
-        return repo_action(False, False, False, False)
+        return repo_action(False, False, False, False, can_clone=bool(r.get("url")))
     try:
         c, b, f, e = (x == "1" for x in out.split())
     except ValueError:
@@ -542,6 +550,13 @@ def _go(sid: str) -> None:
     if stops:
         _die(stops)
     for r, act in actions:
+        if act == "clone":
+            dest = f"~/Data/{q(r['path'])}"
+            cl = _remote(f"mkdir -p \"$(dirname {dest})\" && "
+                         f"git clone -q --branch {q(r['branch'])} {q(r['url'])} {dest} && "
+                         f"git -C {dest} merge-base --is-ancestor {q(r['sha'])} HEAD", timeout=600)
+            if cl.returncode != 0:
+                _die([f"{r['path']} on {HOST}: clone failed: {cl.stderr.strip()[-200:]}"])
         if act == "fast-forward":
             ff = _remote(f"cd ~/Data/{q(r['path'])} && git merge -q --ff-only {q(r['sha'])}")
             if ff.returncode != 0:

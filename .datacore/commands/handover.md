@@ -58,7 +58,10 @@ no new terminal window, no subprocess that does it for you.
    left alone). If it prints `handover stopped:`, show the owner each line in
    plain words and stop here — something would be missing on dayshift. Code
    repos under `2-projects/` are never committed by it: commit and push those
-   (or open the PR) first, then rerun.
+   (or open the PR) first, then rerun. A repo dayshift does not have yet —
+   one created in this session — is fine once it is pushed: the checkpoint
+   records where to clone it from, and `handover <id>` clones it on dayshift
+   (only where nothing exists at that path).
 
    A long session may have touched repos that have nothing to do with the work
    being handed over. When the owner says such a repo stays on the Mac, rerun
