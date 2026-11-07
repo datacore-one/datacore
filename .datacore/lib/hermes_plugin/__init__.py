@@ -361,8 +361,10 @@ def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -
     name = str(tool_name or "")
     if name.startswith("datacore_"):
         a = args if isinstance(args, dict) else {}
+        inner = a.get("payload") if isinstance(a.get("payload"), dict) else {}
         if name == "datacore_who_has_what" or (
-                name == "datacore_ledger_append" and str(a.get("type", "")) == "item.create"):
+                name == "datacore_ledger_append"
+                and "item.create" in (str(a.get("type", "")), str(inner.get("type", "")))):
             st["routed"] = True
         return None
     if st["routed"]:
@@ -488,7 +490,12 @@ LEDGER_APPEND_SCHEMA = {
             "properties": {
                 "space": {"type": "string", "description": "Discovered space directory relative to the data root, including nested spaces."},
                 "type": {"type": "string", "description": "Event type, e.g. item.create, item.update, item.complete."},
-                "payload": {"type": "object", "description": "Event payload. For item.create include id and title."},
+                "payload": {"type": "object", "description": (
+                    "Event payload. For item.create: title, assignee (miles, tris or data), "
+                    "asked_by, route (do), done_when and check; id is generated when left out. "
+                    "Example: {\"space\": \"2-datacore\", \"type\": \"item.create\", \"payload\": "
+                    "{\"title\": \"...\", \"assignee\": \"miles\", \"asked_by\": \"gregor\", "
+                    "\"route\": \"do\", \"done_when\": \"...\", \"check\": \"...\"}}")},
             },
             "required": ["space", "type", "payload"],
         },
@@ -551,6 +558,38 @@ def approval_decide_handler(id: str = "", decision: str = "", **_kw) -> str:  # 
 
 
 
+# 2026-11-07 dry runs of Winston on a real request: the model put every field
+# beside `type` and `space` (no `payload`), or nested `type` and `space` inside
+# `payload`, was refused, and gave up. Both shapes mean one thing; accept them.
+_ENVELOPE = ("type", "space", "payload")
+
+
+def _normalise_filing(space, payload, kw):
+    kw = dict(kw)
+    extra = {k: v for k, v in kw.items() if k not in _ENVELOPE and k != "actor"}
+    p = dict(payload) if isinstance(payload, dict) else {}
+    if extra and not p:
+        p = extra
+        for k in extra:
+            kw.pop(k, None)
+    for k in ("type", "space"):
+        if k in p:
+            v = p.pop(k)
+            if k == "type" and not kw.get("type"):
+                kw["type"] = v
+            if k == "space" and not space:
+                space = v
+    return space, (p or payload), kw
+
+
+def _new_item_id(payload) -> str:
+    """An item.create without `id` is skipped by the fold: filed and never seen."""
+    import secrets  # noqa: PLC0415
+    import time as _t  # noqa: PLC0415
+    words = re.findall(r"[a-z0-9]+", str(payload.get("title") or "item").lower())
+    return "-".join(words[:6] or ["item"]) + _t.strftime("-%Y%m%d-") + secrets.token_hex(2)
+
+
 def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
     # The event type arrives as `type` (the schema's property name). It is read
     # from kwargs rather than taken as a parameter, because binding the name
@@ -567,6 +606,7 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         from spaces import discover_spaces  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
+    space, payload, kw = _normalise_filing(space, payload, kw)
     etype = str(kw.get("type") or "").strip()
     if etype not in EVENT_TYPES:
         return (f"Refused: {etype!r} is not a declared event type. "
@@ -590,6 +630,8 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
             return "Refused: directory is not a space under the configured data root."
     except (OSError, RuntimeError, ValueError):
         return "Refused: directory is not a space under the configured data root, or discovery is invalid."
+    if etype == "item.create" and not str(payload.get("id") or "").strip():
+        payload = {**payload, "id": _new_item_id(payload)}
     if etype == "item.create":
         # Winston path step 4 (2026-11-05): a delegation is filed only where the
         # assignee's dispatcher listens, or it waits forever (AGT-12's wrong space).
@@ -618,6 +660,8 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         return f"Ledger append failed: {type(exc).__name__}: {exc}"
     done = (f"appended {etype} to {space} as {ident['actor']} "
             f"(seq={getattr(ev, 'seq', '?')} hash={str(getattr(ev, 'hash', ''))[:12]})")
+    if etype == "item.create":
+        done += f" item id {payload['id']}"
     if etype == "item.create":
         # Issue #296 (2026-11-06): "Tris has it" was said while Tris's claiming
         # was paused for lack of credit. Filed regardless; the reply says so.
