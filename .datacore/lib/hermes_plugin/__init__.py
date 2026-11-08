@@ -564,6 +564,43 @@ def approval_decide_handler(id: str = "", decision: str = "", **_kw) -> str:  # 
 _ENVELOPE = ("type", "space", "payload")
 
 
+_EXAMPLE = ('{"space": "2-datacore", "type": "item.create", "payload": {"title": "...", '
+            '"assignee": "miles", "asked_by": "gregor", "route": "do", "done_when": "...", "check": "..."}}')
+
+
+def _unwrap_events(payload, kw):
+    """2026-11-08 dry run: the model sent {"events": [ {...} ]}; the item filed had no
+    title or assignee at the top and no dispatcher would ever see it. One wrapped
+    event is that event; several are refused (one call files one event)."""
+    for holder in (kw, payload if isinstance(payload, dict) else {}):
+        evs = holder.get("events")
+        if not isinstance(evs, list):
+            continue
+        if len(evs) != 1 or not isinstance(evs[0], dict):
+            return None, None, "file one event per call, e.g. " + _EXAMPLE
+        inner = dict(evs[0])
+        body = dict(inner["payload"]) if isinstance(inner.get("payload"), dict) else \
+            {k: v for k, v in inner.items() if k not in _ENVELOPE}
+        # type/space travel inside the body; _normalise_filing lifts them out.
+        body.update({k: inner[k] for k in ("type", "space") if k in inner})
+        if holder is kw:
+            kw = {k: v for k, v in kw.items() if k != "events"}
+            return body, kw, None
+        return {**{k: v for k, v in payload.items() if k != "events"}, **body}, kw, None
+    return payload, kw, None
+
+
+def _space_from_text(payload, root, known):
+    """With no space given, the one space named in done_when, title or check.
+
+    A given space is never rewritten: a non-canonical spelling is refused
+    (an alias or a path is not a route to another space's ledger)."""
+    names = {str(p.relative_to(root)) for p in known}
+    text = " ".join(str(payload.get(k) or "") for k in ("done_when", "title", "check"))
+    hits = {n for n in names if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", text)}
+    return hits.pop() if len(hits) == 1 else ""
+
+
 def _normalise_filing(space, payload, kw):
     kw = dict(kw)
     extra = {k: v for k, v in kw.items() if k not in _ENVELOPE and k != "actor"}
@@ -606,17 +643,32 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         from spaces import discover_spaces  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
+    payload, kw, why = _unwrap_events(payload, kw)
+    if why:
+        return f"Refused: nothing was filed; {why}"
     space, payload, kw = _normalise_filing(space, payload, kw)
     etype = str(kw.get("type") or "").strip()
+    if not etype and isinstance(payload, dict) and payload.get("title") and payload.get("assignee"):
+        etype = "item.create"  # a task-shaped payload with no type is a delegation
     if etype not in EVENT_TYPES:
         return (f"Refused: {etype!r} is not a declared event type. "
-                f"Known: {', '.join(sorted(EVENT_TYPES))}.")
+                f"Known: {', '.join(sorted(EVENT_TYPES))}. To delegate, file: {_EXAMPLE}")
     if not isinstance(payload, dict) or not payload:
-        return "Refused: payload must be a non-empty object."
+        return f"Refused: payload must be a non-empty object, e.g. {_EXAMPLE}"
+    try:
+        _r = _root().resolve(strict=True)
+        _known = [e.path for e in discover_spaces(_r, reject_aliases=True, reject_invalid=True)]
+        if not str(space or "").strip() and isinstance(payload, dict):
+            space = _space_from_text(payload, _r, _known)
+    except Exception:  # noqa: BLE001 -- the checks below still judge the raw value
+        pass
+    if not space:
+        return f"Refused: nothing was filed; say which space, e.g. {_EXAMPLE}"
     if (not isinstance(space, str) or not space or "\0" in space
             or Path(space).is_absolute() or ".." in Path(space).parts
             or str(Path(space)) != space or space == "."):
-        return "Refused: space must be a canonical relative space directory."
+        return ("Refused: nothing was filed; space must be exactly a space folder name relative to "
+                f"the data root, with no path inside it, e.g. {_EXAMPLE}")
     try:
         root = _root().resolve(strict=True)
         space_dir = root / space
@@ -627,9 +679,15 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         if (space_dir.resolve(strict=True) != space_dir
                 or space_dir not in {entry.path for entry in known}
                 or not (space_dir / ".datacore").is_dir()):
-            return "Refused: directory is not a space under the configured data root."
+            return f"Refused: directory is not a space under the configured data root. Use the space folder name, e.g. {_EXAMPLE}"
     except (OSError, RuntimeError, ValueError):
-        return "Refused: directory is not a space under the configured data root, or discovery is invalid."
+        return f"Refused: directory is not a space under the configured data root, or discovery is invalid. Use the space folder name, e.g. {_EXAMPLE}"
+    if etype == "item.create" and (payload.get("asked_by") or payload.get("route")):
+        # A delegation with no title or assignee is filed and never picked up.
+        gone = [k for k in ("title", "assignee") if not str(payload.get(k) or "").strip()]
+        if gone:
+            return (f"Refused: nothing was filed; the item has no {' or '.join(gone)}, so no agent "
+                    f"would pick it up. File: {_EXAMPLE}")
     if etype == "item.create" and not str(payload.get("id") or "").strip():
         payload = {**payload, "id": _new_item_id(payload)}
     if etype == "item.create":

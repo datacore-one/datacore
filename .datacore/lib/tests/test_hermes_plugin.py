@@ -823,3 +823,57 @@ def test_a_nested_item_create_counts_as_filed_for_the_guard(as_winston):
     hp.pre_tool_call("datacore_ledger_append", {"payload": {"type": "item.create", "title": "x"}},
                      session_id="s1", turn_id="t1")
     assert all(hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1") is None for _ in range(6))
+
+
+# 2026-11-08 dry runs: Winston spun through 11 refusals and finally filed an item
+# whose real fields sat inside {"events": [...]}: no title or assignee at the top,
+# so no dispatcher would ever pick it up.
+
+def test_a_single_event_wrapped_in_an_events_list_is_unwrapped(filing):
+    out = hp.ledger_append_handler(payload={"events": [{"type": "item.create", "space": "2-datacore",
+                                                         "payload": dict(GOOD)}]})
+    assert out.startswith("appended item.create"), out
+    assert filing[0][1]["assignee"] == "miles" and "events" not in filing[0][1]
+
+
+def test_an_events_list_inside_an_item_create_payload_is_unwrapped(filing):
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload={"events": [dict(GOOD)]})
+    assert out.startswith("appended item.create"), out
+    assert filing[0][1]["title"] == GOOD["title"]
+
+
+def test_several_events_in_one_call_are_refused_with_how_to_file(filing):
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create",
+                                   payload={"events": [dict(GOOD), dict(GOOD)]})
+    assert out.startswith("Refused") and "one" in out and not filing
+
+
+def test_a_missing_type_on_a_task_shaped_payload_means_item_create(filing):
+    out = hp.ledger_append_handler(space="2-datacore", payload=dict(GOOD))
+    assert out.startswith("appended item.create"), out
+
+
+def test_a_space_written_as_a_path_is_refused_with_the_form_to_use(filing):
+    for given in ("2-datacore/", "./2-datacore", "2-datacore/1-tracks/ops"):
+        out = hp.ledger_append_handler(space=given, type="item.create", payload=dict(GOOD))
+        assert out.startswith("Refused") and '"space": "2-datacore"' in out, (given, out)
+    assert not filing
+
+
+def test_a_missing_space_is_taken_from_done_when_when_it_names_one(filing):
+    out = hp.ledger_append_handler(type="item.create",
+                                   payload={**GOOD, "done_when": "note at 2-datacore/1-tracks/ops/x.md"})
+    assert out.startswith("appended item.create to 2-datacore"), out
+
+
+def test_a_missing_space_with_no_hint_is_refused_with_an_example(filing):
+    out = hp.ledger_append_handler(type="item.create", payload=dict(GOOD))
+    assert out.startswith("Refused") and "2-datacore" in out and not filing
+
+
+def test_an_item_create_without_title_or_assignee_is_refused(filing):
+    for missing in ("title", "assignee"):
+        p = {k: v for k, v in GOOD.items() if k != missing}
+        out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload=p)
+        assert out.startswith("Refused") and missing in out, (missing, out)
+    assert not filing
