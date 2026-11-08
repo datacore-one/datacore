@@ -627,6 +627,24 @@ def _new_item_id(payload) -> str:
     return "-".join(words[:6] or ["item"]) + _t.strftime("-%Y%m%d-") + secrets.token_hex(2)
 
 
+def _publish_soon(space_dir) -> None:
+    """Send a new filing out now, in the background; never blocks or raises.
+
+    2026-11-08: the filing waited for Winston's next scheduled converge (up to
+    15 minutes) before any agent could see it, which alone could use up the
+    owner's 15-minute pickup bar (AGT-14)."""
+    try:
+        import subprocess  # noqa: PLC0415
+        transport = Path(sys.path[0]) / "ledger_transport.py"
+        if not transport.is_file():
+            return
+        subprocess.Popen(["python3", str(transport), "converge", "--space", str(space_dir)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:  # noqa: BLE001 -- the scheduled converge still publishes it
+        pass
+
+
 def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
     # The event type arrives as `type` (the schema's property name). It is read
     # from kwargs rather than taken as a parameter, because binding the name
@@ -716,6 +734,8 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
     except Exception as exc:  # noqa: BLE001
         return f"Ledger append failed: {type(exc).__name__}: {exc}"
+    if etype == "item.create":
+        _publish_soon(space_dir)
     done = (f"appended {etype} to {space} as {ident['actor']} "
             f"(seq={getattr(ev, 'seq', '?')} hash={str(getattr(ev, 'hash', ''))[:12]})")
     if etype == "item.create":

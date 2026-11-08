@@ -85,9 +85,38 @@ def _task_text(title: str, payload: dict, last_error: str = "") -> str:
     check's one-line verdict (W1, 2026-10-23)."""
     body = str((payload or {}).get("body") or "").strip()
     parts = [title] + ([body] if body else [])
+    # 2026-11-08: Winston's filings carry done_when and check, not a body, and
+    # the doer never saw them: it learned the check only from a failed attempt.
+    done_when = str((payload or {}).get("done_when") or "").strip()
+    check = str((payload or {}).get("check") or "").strip()
+    if done_when:
+        parts.append(f"Done when: {done_when}")
+    if check:
+        parts.append("The result is accepted only if this check passes, run from the root of "
+                     "this space on your committed work (paths in it are relative to that root; "
+                     f"commit the result):\n{check}")
     if last_error:
         parts.append(f"The previous attempt failed: {last_error[:600]}")
     return "\n\n".join(parts)
+
+
+def _publish_claim(space: Path) -> str:
+    """Publish the claim before the work starts. "published", "skipped" or "failed"; never raises.
+
+    The claim used to leave this machine only with the converge after the work,
+    so for the whole run the owner's watcher saw no claim and the 15-minute
+    "not picked up" (AGT-14) fired on requests being worked (2026-11-08)."""
+    try:
+        r = subprocess.run(["git", "-C", str(space), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return "skipped"
+        transport = Path(__file__).resolve().parent / "ledger_transport.py"
+        r = subprocess.run([sys.executable, str(transport), "converge", "--space", str(space)],
+                           capture_output=True, text=True, timeout=180)
+        return "published" if r.returncode == 0 else "failed"
+    except Exception:  # noqa: BLE001 -- publishing early is a courtesy; the run converges at the end
+        return "failed"
 
 
 def _outcome(payload: dict, outcome: str, detail: str = "", actor: str = "") -> None:
@@ -1005,6 +1034,8 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             print(f"REFUSED  {title[:70]}: {exc}")
             refused += 1
             continue
+        if args.execute:
+            _publish_claim(space)
         ok, detail, meta = run_task(_task_text(title, item.payload or {}, last_error.get(item.id, "")),
                                     route, space, item.id, actor=args.actor)
         if ok:

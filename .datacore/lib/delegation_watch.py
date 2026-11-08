@@ -654,6 +654,30 @@ def briefing_line(found: list[dict], errors: dict) -> str:
     return "Delegation gaps: " + ", ".join(f"{n} {LABEL[k]}" for k, n in sorted(by.items())) + "."
 
 
+def _converge(path) -> bool:
+    try:
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "ledger_transport.py"),
+                            "converge", "--space", str(path)], capture_output=True, text=True, timeout=180)
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def refresh_open_requests(root, folded: dict) -> list[str]:
+    """Bring in the latest copy of every space holding an owner request still open.
+
+    The watcher read its own copy, synced on the quarter hour it runs at, so a
+    claim made minutes earlier was not seen and "not picked up" went out for
+    work in progress (2026-11-08). Returns the spaces refreshed."""
+    names = [name for name, st in folded.items()
+             if any((it.payload or {}).get("asked_by") and it.status not in ENDED
+                    and it.status not in ("verified", "dismissed")
+                    for it in getattr(st, "items", {}).values())]
+    for name in names:
+        _converge(Path(root) / name)
+    return names
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("cmd", choices=("check", "briefing", "who"))
@@ -684,6 +708,9 @@ def main(argv=None) -> int:
                 st.write_text(a.state.read_text())
             result = alert(found, state_path=st, send=lambda t: print("WOULD SEND:\n" + t) or True)
     else:
+        if refresh_open_requests(a.root, folded):
+            folded, errors = states(a.root)
+            found = [g for name, state in folded.items() for g in gaps_in(name, state, now_ms=now_ms)]
         _save(a.artifact, {"checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                            "errors": errors, "gaps": found,
                            "line": briefing_line(found, errors) + " " + requests_line(folded)})
