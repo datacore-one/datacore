@@ -163,12 +163,31 @@ def _changed(repo: Path, *diff_args: str) -> list[str]:
     return [p for p in r.stdout.decode().split("\0") if p.endswith(".jsonl") and "/.datacore/events/" in f"/{p}"]
 
 
+def never_published(repo: Path, path: str) -> bool:
+    """True only when remote-tracking refs exist and none has ever held `path`.
+
+    A log no remote ever had is not shared history, so removing it rewrites
+    nothing another machine has seen. On 2026-11-07 a test fixture's log leaked
+    into a real space locally; the relay refused every push until it went, and
+    this gate refused removing it, deadlocking 115 commits. No remote refs at
+    all means it cannot be told, so it counts as published.
+    """
+    if not _git(repo, "for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes").stdout.strip():
+        return False
+    r = _git(repo, "log", "--remotes", "-1", "--format=%H", "--", path)
+    return r.returncode == 0 and not r.stdout.strip()
+
+
 def staged(repo: Path) -> list[str]:
     has_head = _git(repo, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
     errors = []
     for p in _changed(repo, "--cached"):
         old = (_blob(repo, f"HEAD:{p}") or b"") if has_head else b""
-        errors += check_change(p, old, _blob(repo, f":{p}"))
+        new = _blob(repo, f":{p}")
+        if new is None and old and never_published(repo, p):
+            print(f"ledger-write-gate: {p} removed; no remote has ever held it", file=sys.stderr)
+            continue
+        errors += check_change(p, old, new)
     return errors
 
 
