@@ -888,3 +888,30 @@ def test_a_filed_request_is_published_at_once_and_a_refused_one_is_not(filing, m
     assert sent == []
     hp.ledger_append_handler(space="2-datacore", type="item.create", payload=dict(GOOD))
     assert sent == ["2-datacore"]
+
+
+# 2026-11-08 late dry run: ten calls in a row refused "'' is not a declared event
+# type" and nothing was filed; the model repeated the same shape every time.
+
+def test_a_delegation_shaped_payload_without_a_type_is_an_item_create(filing):
+    for extra in ({}, {"route": "do"}):
+        p = {k: v for k, v in GOOD.items() if k != "title"} | {"title": "T"} | extra
+        out = hp.ledger_append_handler(payload={**p, "space": "2-datacore"})
+        assert out.startswith("appended item.create"), out
+
+
+def test_the_type_under_another_common_name_is_used(filing):
+    for key in ("event_type", "event", "kind"):
+        out = hp.ledger_append_handler(space="2-datacore", payload={**GOOD, key: "item.create"})
+        assert out.startswith("appended item.create"), (key, out)
+        assert key not in filing[-1][1]
+
+
+def test_a_typeless_payload_without_a_title_says_the_title_is_missing(filing):
+    p = {k: v for k, v in GOOD.items() if k != "title"}
+    out = hp.ledger_append_handler(space="2-datacore", payload=p)
+    assert out.startswith("Refused") and "has no title" in out and not filing
+
+
+def test_the_frame_says_earlier_sessions_do_not_mean_filing_fails_now():
+    assert "earlier session" in hp._ROUTING_FRAME.lower()
