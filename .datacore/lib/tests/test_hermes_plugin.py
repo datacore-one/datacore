@@ -781,6 +781,7 @@ def filing(as_tris, tmp_path, monkeypatch):
     import delegation_watch as dw
     monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
     monkeypatch.setattr(dw, "pauses", lambda root, **kw: {})
+    monkeypatch.setattr(hp, "_publish_soon", lambda space_dir: None)  # no real converge in tests
     return written
 
 
@@ -877,3 +878,13 @@ def test_an_item_create_without_title_or_assignee_is_refused(filing):
         out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload=p)
         assert out.startswith("Refused") and missing in out, (missing, out)
     assert not filing
+
+
+def test_a_filed_request_is_published_at_once_and_a_refused_one_is_not(filing, monkeypatch):
+    """2026-11-08: Winston's filing waited for his next scheduled converge to leave the pod."""
+    sent = []
+    monkeypatch.setattr(hp, "_publish_soon", lambda space_dir: sent.append(Path(space_dir).name))
+    hp.ledger_append_handler(space="2-datacore", type="item.create", payload={**GOOD, "check": "true"})
+    assert sent == []
+    hp.ledger_append_handler(space="2-datacore", type="item.create", payload=dict(GOOD))
+    assert sent == ["2-datacore"]

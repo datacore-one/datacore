@@ -35,6 +35,11 @@ tests:
   - test: .datacore/lib/tests/test_promise_AGT10_only_own_log.py
     needs: [file:.datacore/registry/principals.yaml, file:.datacore/config/approvals_policy.local.yaml]
     why: which writer owns which log is the install's principal registry
+  - test: .datacore/lib/tests/test_request_pickup_fast_and_briefed.py
+    only:
+      - test_the_claim_is_published_before_the_agent_starts
+    needs: [file:.datacore/registry/principals.yaml]
+    why: the drill files and claims as the install's declared agents
   - test: .datacore/lib/tests/test_promise_MSG8_morning_repair_before_i_wake.py
     needs: [file:.datacore/registry/principals.yaml]
     why: the repair goes to whoever holds the chief-of-operations role in the registry
