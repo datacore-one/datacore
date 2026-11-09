@@ -268,7 +268,7 @@ def test_registration_wires_both_hooks_and_the_tool(as_tris):
 
     hp.register(Ctx())
     assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "pre_llm_call", "on_session_start"]
-    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 5
+    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 6
 
 
 def test_registered_tools_accept_the_hermes_calling_convention(as_tris, monkeypatch):
@@ -495,7 +495,7 @@ def test_approval_tools_say_so_on_a_host_without_the_script(as_tris, monkeypatch
     assert "not available on this host" in hp.approval_decide_handler(id="a1", decision="approve")
 
 
-def test_all_five_tools_register(as_tris):
+def test_all_six_tools_register(as_tris):
     names = []
 
     class Ctx:
@@ -505,7 +505,7 @@ def test_all_five_tools_register(as_tris):
     hp.register(Ctx())
     assert names == ["datacore_whoami", "datacore_approvals_pending",
                      "datacore_approval_decide", "datacore_ledger_append",
-                     "datacore_who_has_what"]
+                     "datacore_delegate", "datacore_who_has_what"]
 
 
 
@@ -655,7 +655,7 @@ def test_an_owner_message_on_telegram_gets_the_filing_frame(as_winston):
     out = hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram",
                           user_message="we need an incident note")
     ctx = out["context"] if isinstance(out, dict) else out
-    assert "datacore_ledger_append" in ctx and "yourself" in ctx
+    assert "datacore_delegate" in ctx and "yourself" in ctx
 
 
 def test_no_frame_off_telegram(as_winston):
@@ -674,7 +674,7 @@ def _turn(n_calls, tool="skill_view", sid="s1", turn="t1"):
 def test_the_fifth_lookup_without_filing_is_blocked_and_says_file_it(as_winston):
     res = _turn(5)
     assert res[:4] == [None] * 4
-    assert res[4] and res[4]["action"] == "block" and "datacore_ledger_append" in res[4]["message"]
+    assert res[4] and res[4]["action"] == "block" and "datacore_delegate" in res[4]["message"]
 
 
 def test_datacore_tools_are_never_blocked(as_winston):
@@ -931,3 +931,51 @@ def test_an_empty_call_says_its_json_did_not_parse_and_how_to_fix_it(filing):
 def test_the_schema_asks_for_a_one_line_check_without_backslashes():
     desc = hp.LEDGER_APPEND_SCHEMA["function"]["parameters"]["properties"]["payload"]["description"]
     assert "backslash" in desc and "one line" in desc
+
+
+# 2026-11-09 dry runs: in two of five runs every filing call (13 and 16 of them)
+# arrived as {}, though the model's reasoning held a correct call. A check full
+# of double quotes nested inside a payload object is the hardest JSON a model
+# writes; one unescaped quote and Hermes drops the whole call. One flat tool,
+# every field a plain string, is the filing path.
+
+def test_the_delegate_tool_is_flat_strings_only():
+    props = hp.DELEGATE_SCHEMA["function"]["parameters"]["properties"]
+    assert set(hp.DELEGATE_SCHEMA["function"]["parameters"]["required"]) == {
+        "space", "title", "assignee", "done_when", "check"}
+    assert all(p["type"] == "string" for p in props.values())
+    assert "single quote" in props["check"]["description"]
+
+
+def test_delegate_files_an_item_create_for_the_owner(filing):
+    out = hp.delegate_handler(space="2-datacore", title=GOOD["title"], assignee="miles",
+                              done_when=GOOD["done_when"], check=GOOD["check"])
+    assert out.startswith("appended item.create"), out
+    etype, p = filing[0]
+    assert etype == "item.create" and p["asked_by"] == "gregor" and p["route"] == "do"
+    assert p["assignee"] == "miles" and p["check"] == GOOD["check"]
+
+
+def test_delegate_goes_through_every_filing_check(filing):
+    out = hp.delegate_handler(space="2-datacore", title="x", assignee="miles", done_when="d", check="true")
+    assert out.startswith("Refused") and not filing
+
+
+def test_an_empty_delegate_call_says_why(filing):
+    out = hp.delegate_handler()
+    assert out.startswith("Refused") and "did not parse" in out and not filing
+
+
+def test_a_delegate_call_counts_as_filed_for_the_stall_guard(as_winston):
+    _turn(2)
+    hp.pre_tool_call("datacore_delegate", {"title": "x"}, session_id="s1", turn_id="t1")
+    assert all(hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1") is None for _ in range(6))
+
+
+def test_the_frame_and_the_stop_name_the_delegate_tool():
+    assert "datacore_delegate" in hp._ROUTING_FRAME
+
+
+def test_the_weak_check_example_has_no_double_quote():
+    import delegation_watch as dw
+    assert '"' not in dw._CHECK_EXAMPLE

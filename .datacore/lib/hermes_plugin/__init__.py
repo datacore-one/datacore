@@ -327,8 +327,8 @@ _ROUTING: dict[str, dict] = {}
 _STALL_LIMIT = 4
 _ROUTING_FRAME = (
     "[Winston charter] You orchestrate; you do not do tasks. If this message asks for work, "
-    "your FIRST action is datacore_ledger_append (type item.create, asked_by gregor, route do) "
-    "for miles, tris or data, with done_when and a check; then reply in one line who has it. "
+    "your FIRST action is datacore_delegate (space, title, assignee miles, tris or data, "
+    "done_when, check) and then reply in one line who has it. "
     "Do not research or investigate it yourself, and do not ask the founder for facts the agent "
     "can find. Only if no agent can take it (datacore_who_has_what shows them paused or down) "
     "say so and that you will do it yourself. Status questions: datacore_who_has_what. "
@@ -364,7 +364,7 @@ def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -
     if name.startswith("datacore_"):
         a = args if isinstance(args, dict) else {}
         inner = a.get("payload") if isinstance(a.get("payload"), dict) else {}
-        if name == "datacore_who_has_what" or (
+        if name in ("datacore_who_has_what", "datacore_delegate") or (
                 name == "datacore_ledger_append"
                 and "item.create" in (str(a.get("type", "")), str(inner.get("type", "")))):
             st["routed"] = True
@@ -375,8 +375,8 @@ def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -
     if st["calls"] <= _STALL_LIMIT:
         return None
     return ("Stop: you are coordinating, not doing. If the founder asked for work, file it now "
-            "with datacore_ledger_append (item.create for miles, tris or data, asked_by gregor, "
-            "route do, done_when, check) and tell him who has it. The agent finds the facts. "
+            "with datacore_delegate (space, title, assignee miles, tris or data, done_when, check) "
+            "and tell him who has it. The agent finds the facts. "
             "If he asked about status, use datacore_who_has_what.")
 
 
@@ -505,6 +505,44 @@ LEDGER_APPEND_SCHEMA = {
         },
     },
 }
+
+
+DELEGATE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_delegate",
+        "description": ("File the founder's request for one agent: miles (code, infrastructure, ops), "
+                        "tris (research, analysis) or data (writing for people). Every field is "
+                        "plain text. The reply names the item id."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "space": {"type": "string", "description": "Space folder name, e.g. 2-datacore."},
+                "title": {"type": "string", "description": "What is to be done, in one line."},
+                "assignee": {"type": "string", "description": "miles, tris or data."},
+                "done_when": {"type": "string", "description": "What the finished result is and where it is saved."},
+                "check": {"type": "string", "description": (
+                    "A shell test, run from the space root, that passes only when the result says "
+                    "what done_when requires: at least two greps for required content, or a count "
+                    "compared with a number. One line, single quotes only, no double quote and no "
+                    "backslash. Example: test -s 1-tracks/ops/note.md && grep -qi 'root cause' "
+                    "1-tracks/ops/note.md && test $(grep -c '^- ' 1-tracks/ops/note.md) -ge 2")},
+            },
+            "required": ["space", "title", "assignee", "done_when", "check"],
+        },
+    },
+}
+
+
+def delegate_handler(space: str = "", title: str = "", assignee: str = "", done_when: str = "",
+                     check: str = "", **_kw) -> str:
+    """2026-11-09: nested payload JSON arrived empty in 2 of 5 runs; flat strings are the filing path."""
+    payload = {k: v for k, v in (("title", title), ("assignee", assignee), ("done_when", done_when),
+                                 ("check", check)) if str(v or "").strip()}
+    if not str(space or "").strip() and not payload:
+        return ledger_append_handler()  # the empty-call explanation
+    return ledger_append_handler(space=space, type="item.create",
+                                 payload={**payload, "asked_by": "gregor", "route": "do"})
 
 
 WHO_HAS_WHAT_SCHEMA = {
@@ -981,6 +1019,8 @@ def register(ctx) -> None:
          "Approve or dismiss one approval the principal decided explicitly.", "✅"),
         ("datacore_ledger_append", LEDGER_APPEND_SCHEMA, ledger_append_handler,
          "Append an event to a space ledger as this agent's own actor.", "📒"),
+        ("datacore_delegate", DELEGATE_SCHEMA, delegate_handler,
+         "File the founder's request for one agent (flat fields).", "📨"),
         ("datacore_who_has_what", WHO_HAS_WHAT_SCHEMA, who_has_what_handler,
          "Who has what: open delegated work across spaces, by assignee and status.", "🗂️"),
     ):
