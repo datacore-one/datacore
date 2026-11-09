@@ -317,8 +317,12 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         # journal commit and a later autosave commit for the uncommitted events.
         # Only the events file for this actor is staged -- never `git add -A`,
         # which would sweep up unverified agent artifacts.
+        # Only paths that exist: `git add` is all-or-nothing, so naming an
+        # events file this run never wrote ("pathspec did not match") staged
+        # NOTHING, and the journal was left dirty -- the very failure above.
         events_path = space / ".datacore" / "events" / f"{actor}.jsonl"
-        subprocess.run(["git", "-C", str(space), "add", "--", str(path), str(events_path)],
+        paths = [str(p) for p in (path, events_path) if p.exists()]
+        subprocess.run(["git", "-C", str(space), "add", "--", *paths],
                        capture_output=True, timeout=60)
         subprocess.run(["git", "-C", str(space), "commit", "-q", "-m",
                         f"journal: {actor} ledger claim run"],

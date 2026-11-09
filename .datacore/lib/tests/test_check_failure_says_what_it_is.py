@@ -162,6 +162,9 @@ def test_a_passing_check_has_nothing_to_explain(tmp_path):
 # -- the dispatcher records the cause where the owner's escalation reads it ----
 
 from tests.test_promise_NS_9_waiting_on_owner_is_not_a_failure import fleet  # noqa: E402,F401
+# Delegates as winston and dispatches as miles: a declared roster, not the
+# host's private registry (conftest.install_roster).
+pytestmark = pytest.mark.usefixtures("install_roster")
 
 
 def _events(space, iid, kind):
@@ -172,7 +175,13 @@ def _events(space, iid, kind):
 def test_the_release_and_the_give_up_carry_the_cause(fleet, monkeypatch):  # noqa: F811
     from jobs import autofix
     from ledger_claim import MAX_ATTEMPTS
+    from delegation_drill import _install_local_executor
     root, space, drill = fleet
+    # The drill's executor does the task; the CHECK is what must fail. Without
+    # it this ran the default claude-code executor: a real model call on a host
+    # that has `claude`, "binary not found" (not the check's cause) on one that
+    # does not. The fleet fixture restores the environment afterwards.
+    _install_local_executor()
     monkeypatch.setattr(autofix, "_acked", lambda: set())
     iid = drill.delegate(space, by="winston", to="miles", id="autofix-box-x-20261002",
                          title="write K into k.txt", check=f"test -f k.txt && {FIX_CHECK_CMD}",

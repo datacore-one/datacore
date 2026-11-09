@@ -67,6 +67,10 @@ POLICY = {
 #: repoints `actor_identity.PRINCIPALS` at its own copy.
 import actor_identity as _actor_identity  # noqa: E402
 _INSTALL_PRINCIPALS = _actor_identity.PRINCIPALS
+#: ... and its approvals policy (the tracked file plus its gitignored
+#: `.local.yaml` overlay). Module attributes, both, so a test can hand the
+#: drill a declared install roster instead of whatever the host happens to have.
+_INSTALL_POLICY = LIB.parent / "config" / "approvals_policy.yaml"
 
 
 def _install_roster() -> tuple[dict, dict]:
@@ -85,7 +89,7 @@ def _install_roster() -> tuple[dict, dict]:
     except ValueError:
         return {}, {}
     try:
-        limits = load_policy(LIB.parent / "config" / "approvals_policy.yaml").principals or {}
+        limits = load_policy(_INSTALL_POLICY).principals or {}
     except Exception:  # noqa: BLE001 -- no usable policy: enrol names without limits
         limits = {}
     taken = set(ROSTER) | {w for p in ROSTER.values() for w in p["writes_as"]}
