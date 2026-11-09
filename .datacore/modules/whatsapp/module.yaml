@@ -1,6 +1,7 @@
 manifest_version: 2
 name: whatsapp
 version: 0.1.0
+author: datacore-one
 description: |
   WhatsApp integration for Datacore.
   Import contacts and track interactions via CRM adapter.
