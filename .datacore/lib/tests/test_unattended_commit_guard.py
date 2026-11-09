@@ -42,13 +42,13 @@ def _git(cwd, *args, env=None, check=True):
     return p
 
 
-def _repo(tmp_path, remote_name, branch="main"):
+def _repo(tmp_path, remote_name, branch="main", hooks=GITHOOKS):
     remote = tmp_path / f"{remote_name}.git"
     _git(tmp_path, "init", "-q", "--bare", "-b", branch, str(remote))
     work = tmp_path / "work"
     _git(tmp_path, "init", "-q", "-b", branch, str(work))
     for k, v in (("user.name", "eval"), ("user.email", "eval@example.invalid"),
-                 ("core.hooksPath", str(GITHOOKS))):
+                 ("core.hooksPath", str(hooks))):
         _git(work, "config", k, v)
     _git(work, "remote", "add", "origin", str(remote))
     (work / "a.txt").write_text("base\n")
@@ -89,8 +89,25 @@ def test_human_commit_on_main_is_untouched(tmp_path):
     assert _commit(work).returncode == 0
 
 
+def _install_registering(tmp_path, remote_name, category):
+    """A data root whose own repository registry classifies `remote_name`.
+
+    The registry is installation-private (gitignored since 2026-10-17), so a
+    checkout registers nothing and the test brings its own. The hooks find their
+    data root from their own location, so this root links the REAL githooks,
+    hooks and lib in and carries the registry beside them."""
+    root = tmp_path / "install"
+    (root / ".datacore" / "registry").mkdir(parents=True)
+    for name in ("githooks", "hooks", "lib"):
+        (root / ".datacore" / name).symlink_to(ROOT / ".datacore" / name)
+    (root / ".datacore" / "registry" / "repositories.yaml").write_text(
+        f"repositories:\n  {remote_name}:\n    category: {category}\n    repo: {remote_name}\n")
+    return root / ".datacore" / "githooks"
+
+
 def test_knowledge_space_keeps_its_direct_path(tmp_path):
-    work = _repo(tmp_path, "datacore-space")                # registered knowledge (2-datacore)
+    hooks = _install_registering(tmp_path, "datacore-space", "knowledge")
+    work = _repo(tmp_path, "datacore-space", hooks=hooks)   # registered knowledge (2-datacore)
     assert _commit(work, env=UNATTENDED).returncode == 0
 
 

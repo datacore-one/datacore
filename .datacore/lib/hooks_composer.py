@@ -15,7 +15,10 @@ except ImportError:
     print("PyYAML required: pip install pyyaml", file=sys.stderr)
     sys.exit(1)
 
-DATACORE_ROOT = os.path.expanduser("~/Data")
+# The install's data root, as every other lib script reads it: DATACORE_ROOT when
+# set (CI, a runner clone, a test), else ~/Data. A hard-coded ~/Data checked the
+# script paths of some other tree than the one being composed.
+DATACORE_ROOT = os.environ.get("DATACORE_ROOT") or os.path.expanduser("~/Data")
 REGISTRY_PATH = os.path.join(DATACORE_ROOT, ".datacore", "registry", "hooks.yaml")
 MODULES_GLOB = os.path.join(DATACORE_ROOT, ".datacore", "modules", "*", "module.yaml")
 OUTPUT_PATH = os.path.join(DATACORE_ROOT, ".claude", "settings.json")

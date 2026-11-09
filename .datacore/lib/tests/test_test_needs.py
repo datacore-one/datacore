@@ -35,12 +35,34 @@ def test_the_declarations_exist_and_are_not_empty():
     assert ENTRIES, "config/test-needs.yaml declares nothing"
 
 
+def _separate_repository(test: str) -> str | None:
+    """The repository a test lives in when it is not this one: a module
+    (.datacore/modules/<name>) or a space (<N>-<name>) this checkout does not
+    track. None for a test in this repository."""
+    parts = Path(test).parts
+    if parts[:2] == (".datacore", "modules") and len(parts) > 3:
+        home = "/".join(parts[:3])
+    elif parts and re.match(r"\d+-", parts[0]):
+        home = parts[0]
+    else:
+        return None
+    return None if _tracked(home) else home
+
+
 @pytest.mark.parametrize("entry", ENTRIES, ids=lambda e: ng.keys(e)[0])
 def test_every_entry_names_a_real_test_with_a_reason(entry):
-    path = ng.ROOT / entry["test"]
-    assert path.is_file(), f"{entry['test']} does not exist"
     assert str(entry.get("why") or "").strip(), f"{entry['test']}: no `why`"
     assert entry.get("needs"), f"{entry['test']}: no needs"
+    path = ng.ROOT / entry["test"]
+    home = _separate_repository(entry["test"])
+    if home and not (ng.ROOT / home).exists():
+        # The test lives in a module or space repository this checkout does not
+        # have (a CI runner): whether it exists can only be judged where that
+        # repository is installed, and there it is (the branch below). CI,
+        # 2026-11-09: 12 entries for module and app-daemon evals were "does not
+        # exist" on every run, a red that said nothing about any change.
+        return
+    assert path.is_file(), f"{entry['test']} does not exist"
     source = path.read_text(encoding="utf-8")
     for name in entry.get("only") or []:
         func = name.split("[", 1)[0]

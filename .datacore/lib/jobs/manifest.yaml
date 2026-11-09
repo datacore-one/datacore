@@ -631,10 +631,12 @@ jobs:
         check: last_line_regex
         arg: "^OK \\d+ hub space"
         max_age_hours: 26
-      # Checkpoint verification result: ledger_checkpoint.py verify writes here (OPS-22)
+      # Checkpoint verification result: ledger_checkpoint.py verify writes here (OPS-22).
+      # Its last line counts the spaces that would NOT restore; only 0 is a pass.
+      # (Was regex "ok|FAIL", which a failed verify matched as well.)
       - path: "~/.datacore/state/checkpoint-verify.log"
-        check: regex
-        arg: "ok|FAIL"
+        check: last_line_regex
+        arg: '^checkpoint-verify: \d+ space\(s\), 0 that would NOT restore$'
         max_age_hours: 26
 
   # THE HUB KEEPS SEALING (plan 2026-10-31, phase D). The hub (datacored in
