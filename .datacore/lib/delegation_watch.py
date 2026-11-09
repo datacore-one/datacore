@@ -324,7 +324,7 @@ _COUNTED = re.compile(r"(grep\s+(-\w*\s+)*-\w*c|wc\s+-l)")
 _COMPARED = re.compile(r"-(ge|gt|eq)\s+\"?\d")
 _PR_SEARCH = ("api.github.com", "gh pr ")
 _CHECK_EXAMPLE = ("For example: test -s <new file> && grep -qi '<a term done_when requires>' <file> "
-                  "&& [ \"$(grep -c '^- ' <file>)\" -ge 3 ]")
+                  "&& test $(grep -c '^- ' <file>) -ge 3")
 
 
 def clean_check(check) -> str:
