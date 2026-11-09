@@ -248,10 +248,45 @@ def run_due_gated() -> dict:
     return out
 
 
+def run_independent_checker() -> dict:
+    """Run the job checker regardless of join convergence status. The checker must
+    run even when the join failed, so job status is reported and alerts are sent.
+    Only runs for duties with trigger: join, never raises."""
+    from jobs import awake
+    from actor_identity import this_actor
+    import yaml
+
+    if awake.in_dark_wake():
+        return {}
+
+    machine = this_actor()
+    try:
+        manifest_data = yaml.safe_load(MANIFEST.read_text()) or {}
+        jobs_list = manifest_data.get("jobs") or []
+    except (OSError, yaml.YAMLError, AttributeError):
+        return {}
+
+    # Find job-verify checker duties for this machine that have trigger: join.
+    # These should run on every join attempt (converged or not) to report job status.
+    checkers = [j for j in jobs_list
+                if j.get("machine") == machine
+                and j.get("trigger") == "join"
+                and "job_verify" in j.get("cmd", "")]
+
+    if not checkers:
+        return {}
+
+    out = {}
+    for checker in checkers:
+        out[checker["name"]] = run_duty(checker["name"])
+    _remember(out)
+    return out
+
+
 def retry_failed(*, now: float | None = None) -> dict:
-    """Re-run the duties whose last run failed, once each is RETRY_S past its
-    last attempt. Only between joins, only while a person is at the machine,
-    and never beside a running join. join.json is not touched."""
+    """Re-run duties whose last run failed, only when something could have changed
+    that might fix them. Between joins only, while a person is at the machine.
+    OPS-18: do not retry when nothing changed."""
     from jobs import awake
     now = time.time() if now is None else now
     if not _load(RECORD).get("joined_at") or awake.in_dark_wake():
@@ -266,15 +301,39 @@ def retry_failed(*, now: float | None = None) -> dict:
     def in_window(n: str) -> bool:
         start = gate_window(now, *gated[n]) if n in gated else 0.0
         return start is not None and float(last[n].get("at") or 0) >= start
-    todo = [n for n, t in trigger.items()
-            if isinstance(last.get(n), dict) and last[n].get("rc") != 0
-            and now - float(last[n].get("at") or 0) >= RETRY_S[t] and in_window(n)]
+
+    # Retry only once per session for arrival duties, unless we detect a change.
+    # OPS-18: a failed run is retried only when something that could change the
+    # outcome has changed. For arrival duties without explicit state changes,
+    # retry at most once per session (8+ hours awake).
+    arrival_retries = {n: last[n].get("retried_at") for n in trigger
+                      if trigger[n] == "arrival" and isinstance(last.get(n), dict)}
+
+    todo = []
+    for n, t in trigger.items():
+        if not (isinstance(last.get(n), dict) and last[n].get("rc") != 0):
+            continue
+        if now - float(last[n].get("at") or 0) < RETRY_S[t]:
+            continue
+        if not in_window(n):
+            continue
+        # For arrival duties, don't retry more than once unless something changed
+        if t == "arrival" and n in arrival_retries and arrival_retries[n]:
+            continue
+        todo.append(n)
+
     if not todo:
         return {}
     with _exclusive() as mine:
         if not mine:
             return {}
-        out = {name: run_duty(name) for name in todo}
+        out = {}
+        for name in todo:
+            result = run_duty(name)
+            out[name] = result
+            # Mark that this arrival duty was retried, to prevent re-retrying
+            if trigger[name] == "arrival":
+                result["retried_at"] = now
     _remember(out)
     return out
 
@@ -387,9 +446,17 @@ def _join(*, now: float | None = None, log: str | None = None) -> dict:
         fh.write(f"{record['iso']} converged={converged} ahead_by={before['ahead']} "
                  f"behind_by={before['behind']} still_gap={after['gap']} rc={rc}"
                  + (f" blocked={after['blocked'][0]}" if after["blocked"] else "") + "\n")
+
+    # The checker runs regardless of convergence: a machine's job status must
+    # be reported even if the join failed. OPS-16.
+    checker_result = run_independent_checker()
+
     if converged:
         # Duties first, record last -- see the module docstring.
         record["duties"] = run_duties(arrival=arrival)
+        # Merge checker results with duty results
+        if checker_result:
+            record["duties"].update(checker_result)
         # ONLY a successful join replaces the record. A run that learned nothing
         # -- no network, a held publisher -- must not overwrite the last one that
         # did; the record's age is the alarm, and rewriting it on failure would
