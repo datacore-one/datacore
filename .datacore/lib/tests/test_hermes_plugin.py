@@ -679,14 +679,15 @@ def test_the_fifth_lookup_without_filing_is_blocked_and_says_file_it(as_winston)
 
 def test_datacore_tools_are_never_blocked(as_winston):
     _turn(6)
-    assert hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {}},
+    # Filing (datacore_delegate) and status are never blocked, however long the turn ran.
+    assert hp.pre_tool_call("datacore_delegate", {"space": "2-datacore", "title": "x"},
                             session_id="s1", turn_id="t1") is None
+    assert hp.pre_tool_call("datacore_who_has_what", {}, session_id="s1", turn_id="t1") is None
 
 
 def test_after_filing_nothing_is_blocked(as_winston):
     _turn(2)
-    hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {}},
-                     session_id="s1", turn_id="t1")
+    hp.pre_tool_call("datacore_delegate", {"title": "x"}, session_id="s1", turn_id="t1")
     assert all(r is None for r in [hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1")
                                    for _ in range(6)])
 
@@ -819,11 +820,11 @@ def test_a_given_id_is_kept(filing):
     assert filing[0][1]["id"] == "mine-1"
 
 
-def test_a_nested_item_create_counts_as_filed_for_the_guard(as_winston):
+def test_a_nested_item_create_in_an_owner_turn_is_sent_to_the_delegate_tool(as_winston):
     _turn(2)
-    hp.pre_tool_call("datacore_ledger_append", {"payload": {"type": "item.create", "title": "x"}},
-                     session_id="s1", turn_id="t1")
-    assert all(hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1") is None for _ in range(6))
+    r = hp.pre_tool_call("datacore_ledger_append", {"payload": {"type": "item.create", "title": "x"}},
+                         session_id="s1", turn_id="t1")
+    assert r and r["action"] == "block" and "datacore_delegate" in r["message"]
 
 
 # 2026-11-08 dry runs: Winston spun through 11 refusals and finally filed an item
@@ -979,3 +980,25 @@ def test_the_frame_and_the_stop_name_the_delegate_tool():
 def test_the_weak_check_example_has_no_double_quote():
     import delegation_watch as dw
     assert '"' not in dw._CHECK_EXAMPLE
+
+
+# 2026-11-09: with datacore_delegate available, Winston still loaded his skill and
+# filed with datacore_ledger_append; one run sent 15 empty calls. In an owner turn
+# a request (or an empty call) to the old tool is sent to the flat one.
+
+def test_an_empty_ledger_call_in_an_owner_turn_is_sent_to_the_delegate_tool(as_winston):
+    _turn(1)
+    r = hp.pre_tool_call("datacore_ledger_append", {}, session_id="s1", turn_id="t1")
+    assert r and r["action"] == "block" and "datacore_delegate" in r["message"]
+
+
+def test_other_ledger_events_in_an_owner_turn_still_go_through(as_winston):
+    _turn(1)
+    assert hp.pre_tool_call("datacore_ledger_append", {"type": "item.update", "space": "2-datacore",
+                                                        "payload": {"id": "x"}},
+                            session_id="s1", turn_id="t1") is None
+
+
+def test_outside_an_owner_turn_the_ledger_tool_is_not_redirected(as_winston):
+    assert hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {"title": "x"}},
+                            session_id="cron-1", turn_id="t9") is None

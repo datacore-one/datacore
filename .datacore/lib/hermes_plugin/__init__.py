@@ -380,6 +380,25 @@ def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -
             "If he asked about status, use datacore_who_has_what.")
 
 
+def delegate_redirect(tool_name: str, args, session_id: str = "", turn_id: str = "") -> str | None:
+    """In an owner turn, a request filed with the nested ledger tool goes to the flat one.
+
+    2026-11-09: with datacore_delegate available, Winston still loaded his skill
+    and filed with datacore_ledger_append; one run sent 15 calls that arrived
+    empty (a quoted check inside nested JSON). Other event types pass."""
+    st = _ROUTING.get(session_id)
+    if tool_name != "datacore_ledger_append" or not st or (turn_id and st["turn"] and turn_id != st["turn"]):
+        return None
+    a = args if isinstance(args, dict) else {}
+    inner = a.get("payload") if isinstance(a.get("payload"), dict) else {}
+    kind = str(a.get("type") or inner.get("type") or "")
+    if a and kind and kind != "item.create":
+        return None
+    return ("File the founder's request with datacore_delegate instead: space, title, assignee "
+            "(miles, tris or data), done_when and check, each plain text; write check on one line "
+            "with single quotes only. datacore_ledger_append is for other event types.")
+
+
 def pre_tool_call(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", **_kw):
     """Hermes pre_tool_call: {"action": "block", "message": ...} or None."""
     try:
@@ -387,6 +406,7 @@ def pre_tool_call(tool_name: str = "", args=None, session_id: str = "", turn_id:
             return {"action": "block", "message": "Datacore identity unresolved; restore the principal registry"}
         text = call_text(tool_name, args)
         reason = (foreign_actor_write(text) or policy_block(tool_name, args)
+                  or delegate_redirect(tool_name, args, session_id, turn_id)
                   or stall_block(tool_name, args, session_id, turn_id))
         if reason:
             return {"action": "block", "message": reason}
