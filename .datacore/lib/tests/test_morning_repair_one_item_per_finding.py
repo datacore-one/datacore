@@ -34,7 +34,9 @@ def _seed_item(space, iid):
 
 
 def test_delegate_still_creates_when_no_prior_item(tmp_path, monkeypatch):
-    """Baseline: when no prior ledger item exists, delegate() creates one as before."""
+    """Baseline: when no prior ledger item exists, delegate() creates one, under the
+    fault's stable id -- one fault, one open item (owner, 2026-11-05); a dated id is
+    only for a fault whose earlier item closed and came back."""
     import ledger.policy
 
     _make_space(tmp_path)
@@ -49,7 +51,7 @@ def test_delegate_still_creates_when_no_prior_item(tmp_path, monkeypatch):
     finding = {"id": "v2-egress-declared", "kind": "v2", "title": "v2-verify: egress declared"}
     iid = M.delegate(dict(finding), "2026-10-16")
 
-    assert iid == "repair-v2-egress-declared-20261016"
+    assert iid == "repair-v2-egress-declared"
     assert len(appended) == 1 and appended[0]["id"] == iid
 
 

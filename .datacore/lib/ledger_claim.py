@@ -348,8 +348,12 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         # journal commit and a later autosave commit for the uncommitted events.
         # Only the events file for this actor is staged -- never `git add -A`,
         # which would sweep up unverified agent artifacts.
+        # Only when it exists: `git add` with a pathspec that matches nothing
+        # stages NOTHING, so a run that wrote no event left its journal
+        # uncommitted too (the dirty tree this commit exists to prevent).
         events_path = space / ".datacore" / "events" / f"{actor}.jsonl"
-        subprocess.run(["git", "-C", str(space), "add", "--", str(path), str(events_path)],
+        staged = [str(path)] + ([str(events_path)] if events_path.exists() else [])
+        subprocess.run(["git", "-C", str(space), "add", "--", *staged],
                        capture_output=True, timeout=60)
         subprocess.run(["git", "-C", str(space), "commit", "-q", "-m",
                         f"journal: {actor} ledger claim run"],

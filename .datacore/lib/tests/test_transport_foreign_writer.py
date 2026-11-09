@@ -78,10 +78,13 @@ def test_foreign_writer_log_is_unstaged_named_and_stops_the_converge(repo_pair, 
     _dirty_log(repo_pair, "tris")
     foreign = _dirty_log(repo_pair, "winston")
     res = lt.converge(repo_pair)
+    # Held back and named, the rest synced (SYN-3, SYN-8: b60f19f2 replaced the
+    # stop with "hold back only what must not be shared, name it, sync the rest").
     assert not res.ok
-    assert res.reason.startswith("foreign writer log left uncommitted: .datacore/events/winston.jsonl belongs to winston")
-    assert "this host writes as tris for tris" in res.reason
-    assert res.context["foreign"] == [".datacore/events/winston.jsonl"]
+    assert res.reason.startswith("held back, still only on this machine: .datacore/events/winston.jsonl "
+                                 "(foreign writer log: belongs to winston (DIP-0044))"), res.reason
+    assert res.reason.endswith("everything else synced"), res.reason
+    assert res.context["held_back"] == [".datacore/events/winston.jsonl"]
     # Tris's own log was autosaved; winston's stayed in the working tree, uncommitted.
     assert _committed(repo_pair, ".datacore/events/tris.jsonl")
     assert not _committed(repo_pair, ".datacore/events/winston.jsonl")
@@ -127,13 +130,28 @@ def test_writer_log_pattern_matches_only_event_logs():
 
 # ── registry fallback ───────────────────────────────────────────────────────
 
-def test_registry_falls_back_to_the_shipped_copy(tmp_path):
+def test_registry_falls_back_to_the_shipped_copy(tmp_path, monkeypatch):
     """hermes: `--root ~/Data` is a directory of space clones with no
-    `.datacore/registry`; the registry that ships with the code tree applies."""
-    assert not (tmp_path / ".datacore" / "registry" / "repositories.yaml").exists()
-    reg = lt._registry(tmp_path)
-    assert isinstance(reg, dict) and reg, "the shipped registry is non-empty"
-    assert "<root>" in reg or any(k[0].isdigit() for k in reg)
+    `.datacore/registry`; the registry beside the code tree applies.
+
+    That copy is installation-private (gitignored since 2026-10-17), so a bare
+    checkout has none; the test puts one beside a stand-in code tree."""
+    beside = tmp_path / "code" / ".datacore" / "registry" / "repositories.yaml"
+    beside.parent.mkdir(parents=True)
+    beside.write_text("repositories:\n  <root>:\n    category: code\n  1-team:\n    category: knowledge\n")
+    monkeypatch.setattr(lt, "SHIPPED_REGISTRY", beside)
+    root = tmp_path / "data"
+    root.mkdir()
+    assert not (root / ".datacore" / "registry" / "repositories.yaml").exists()
+    reg = lt._registry(root)
+    assert reg == {"<root>": {"category": "code"}, "1-team": {"category": "knowledge"}}, reg
+
+
+def test_no_registry_anywhere_is_an_empty_one(tmp_path, monkeypatch):
+    """A checkout with no installation registry classifies by space marker only
+    (ledger upgrade Phase 3, audit C12): the registry reads as empty, not an error."""
+    monkeypatch.setattr(lt, "SHIPPED_REGISTRY", tmp_path / "absent.yaml")
+    assert lt._registry(tmp_path) == {}
 
 
 def test_root_copy_wins_over_the_shipped_one(tmp_path):

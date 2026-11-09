@@ -106,7 +106,15 @@ def test_code_repo_pushes_when_the_only_new_commit_is_the_sweeps_own(make):
     assert _git(origin, "rev-parse", "main") == _git(repo, "rev-parse", "HEAD")
 
 
-def test_knowledge_space_keeps_its_direct_path(make):
+def test_knowledge_space_keeps_its_direct_path(make, tmp_path, monkeypatch):
+    # The repository registry is installation-private (gitignored since
+    # 2026-10-17): a checkout registers nothing, so the install's own registry
+    # is given here, naming the space by its remote, as a real one does.
+    root = tmp_path / "install"
+    (root / ".datacore" / "registry").mkdir(parents=True)
+    (root / ".datacore" / "registry" / "repositories.yaml").write_text(
+        "repositories:\n  2-datacore:\n    category: knowledge\n    repo: datacore-space\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(root))
     repo, origin = make("datacore-space")                # registered knowledge (2-datacore)
     _agent_commit(repo)
     (repo / "notes.md").write_text("journal\n")

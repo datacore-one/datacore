@@ -1,0 +1,10 @@
+# fixture for box-ledger-verify artifact[2]
+# producer artifact: ~/.datacore/state/checkpoint-verify.log on box (ledger_checkpoint.py verify, run over two throwaway spaces after ledger_checkpoint.py write)
+# harvested: 2026-11-09
+# regex under test: ^checkpoint-verify: \d+ space\(s\), 0 that would NOT restore$
+# represents: SUCCESS
+# ---
+  ok   8-other        1 item(s), including full payloads and history, restored from saved checkpoint
+  ok   9-trial        1 item(s), including full payloads and history, restored from saved checkpoint
+
+checkpoint-verify: 2 space(s), 0 that would NOT restore
