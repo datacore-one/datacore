@@ -915,3 +915,19 @@ def test_a_typeless_payload_without_a_title_says_the_title_is_missing(filing):
 
 def test_the_frame_says_earlier_sessions_do_not_mean_filing_fails_now():
     assert "earlier session" in hp._ROUTING_FRAME.lower()
+
+
+# 2026-11-09 dry run: five calls arrived as {} -- Hermes replaces tool-call JSON
+# that does not parse (a backslash such as \d or \s, or a raw newline, inside
+# check) with "{}" -- and each got "'' is not a declared event type", so the
+# model resent the same broken call.
+
+def test_an_empty_call_says_its_json_did_not_parse_and_how_to_fix_it(filing):
+    out = hp.ledger_append_handler()
+    assert out.startswith("Refused") and "did not parse" in out and "backslash" in out
+    assert "[0-9]" in out and not filing
+
+
+def test_the_schema_asks_for_a_one_line_check_without_backslashes():
+    desc = hp.LEDGER_APPEND_SCHEMA["function"]["parameters"]["properties"]["payload"]["description"]
+    assert "backslash" in desc and "one line" in desc
