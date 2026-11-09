@@ -1113,11 +1113,14 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # log carrying events its principal never made, signed into main by
         # a host that is not its principal's. The verifier caught it after the
         # fact; the transport must not carry it in the first place. Unstage
-        # it, commit the rest, and stop: the file stays in the working tree,
-        # visible, for whoever owns the process that wrote it.
+        # it and hold it back (SYN-8): the file stays in the working tree,
+        # visible, for whoever owns the process that wrote it; the rest of the
+        # space converges normally so incoming commits are received and other
+        # good edits are published.
         foreign = foreign_writer_logs(space)
-        for path, _writer, _principal in foreign:
+        for path, _writer, principal in foreign:
             _git(space, "restore", "--staged", "--", path)
+            held_back[path] = f"foreign writer log: belongs to {principal} (DIP-0044)"
 
         # A WRONG WEEKDAY IS REPAIRED, NOT A REASON TO STOP THE FLEET. The
         # weekday in `[2026-09-23 Tue]` is derived from the date, so a wrong one
@@ -1178,15 +1181,6 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                 return Result(False, "autosave refused by pre-commit hook",
                               {"detail": detail[:400], "held_back": sorted(held_back)})
             hook_detail = detail
-        if foreign:
-            own_principal, own_actor = _own_principal()
-            named = "; ".join(f"{path} belongs to {principal} (writer {writer})"
-                              for path, writer, principal in foreign)
-            return Result(False,
-                          f"foreign writer log left uncommitted: {named} — this host writes "
-                          f"as {own_actor or '?'} for {own_principal or 'an undeclared principal'}; "
-                          f"find the process writing under that name and stop it (DIP-0044)",
-                          {"branch": db, "foreign": [p for p, _, _ in foreign]})
 
     rewrites = _incoming_rewrites(space, f"origin/{db}")
     if rewrites:

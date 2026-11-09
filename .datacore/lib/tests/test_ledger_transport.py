@@ -843,6 +843,47 @@ def test_everything_published_still_says_so(monkeypatch, tmp_path):
     assert result.ok and result.reason == "all published"
 
 
+def test_foreign_writer_log_is_held_back_while_space_converges(repo_pair: Path, tmp_path: Path, monkeypatch):
+    """SYN-8 / audit #220: a foreign-principal writer log must not stall the
+    whole space.  Converge should unstage the log, hold it back, merge origin's
+    new commit, and push the good local edit — all in one pass."""
+    import ledger_transport as lt
+
+    # Plant an unpulled commit on origin via a second clone.
+    other = _second_clone(repo_pair, tmp_path)
+    (other / "origin_note.md").write_text("from origin\n")
+    git(other, "add", "-A"); git(other, "commit", "-qm", "origin commit")
+    git(other, "push", "-q", "origin", "main")
+
+    # A good local edit and a foreign writer log both dirty the working tree.
+    log_path = ".datacore/events/winston.jsonl"
+    (repo_pair / log_path).parent.mkdir(parents=True, exist_ok=True)
+    (repo_pair / log_path).write_text('{"event":"foreign"}\n')
+    (repo_pair / "good_note.md").write_text("good local work\n")
+
+    # Simulate: foreign_writer_logs says the log belongs to a different principal.
+    monkeypatch.setattr(lt, "foreign_writer_logs",
+                        lambda space: [(log_path, "winston", "winston-principal")])
+
+    res = lt.converge(repo_pair)
+
+    # The foreign log is held back, so res.ok is False — but the space went through.
+    assert res.context.get("went_through"), res
+    assert log_path in res.context.get("held_back", []), res
+    assert "foreign writer log" in res.reason
+
+    # The good local edit reached origin.
+    git(repo_pair, "fetch", "-q", "origin")
+    assert git(repo_pair, "cat-file", "-e", "origin/main:good_note.md").returncode == 0
+
+    # Origin's new commit reached this machine.
+    assert (repo_pair / "origin_note.md").exists()
+
+    # The foreign log is still in the working tree (not committed, not deleted).
+    assert (repo_pair / log_path).exists()
+    assert git(repo_pair, "ls-files", "--", log_path).stdout.strip() == ""
+
+
 def test_a_generated_file_origin_untracked_is_untracked_here_too(repo_pair: Path, tmp_path: Path):
     """Origin stopped tracking a generated file; this host still tracks it and
     has regenerated it. Git refused the merge forever ("your local changes would
