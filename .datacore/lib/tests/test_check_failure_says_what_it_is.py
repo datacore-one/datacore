@@ -180,7 +180,11 @@ def test_the_release_and_the_give_up_carry_the_cause(fleet, monkeypatch):  # noq
     # The drill's executor does the task; the CHECK is what must fail. Without
     # it this ran the default claude-code executor: a real model call on a host
     # that has `claude`, "binary not found" (not the check's cause) on one that
-    # does not. The fleet fixture restores the environment afterwards.
+    # does not. The fleet fixture restores the environment afterwards, and the
+    # registry is restored here, so the drill adapter does not outlive the test
+    # (test_executors pins the set of registered adapters).
+    from executors import base as executors_base
+    monkeypatch.setattr(executors_base, "_REGISTRY", dict(executors_base._REGISTRY))
     _install_local_executor()
     monkeypatch.setattr(autofix, "_acked", lambda: set())
     iid = drill.delegate(space, by="winston", to="miles", id="autofix-box-x-20261002",
