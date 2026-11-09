@@ -394,11 +394,15 @@ def delegate(f: dict, day: str, existing: dict | None = None) -> str:
                       "remediation did not clear it.", "", f"What: {f['title']}",
                       f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
                       "", "Done means the sweep's 03:30 re-check no longer finds it.", "", PR_RULE])
+    # Pass when the detector no longer reports this finding: the claim job can
+    # complete the item on evidence instead of writing a needs_review verify and
+    # leaving it permanently claimed (audit 2026-10-17: 103 stuck verifies).
+    check = f"! python3 .datacore/lib/morning_repair.py findings 2>/dev/null | grep -q '^{f['id']} '"
     try:
         guarded_append(EventLog(space, this_actor()), "item.create",
                        {"id": iid, "title": f"Repair: {f['title']}", "assignee": f["assignee"], "route": "dev",
                         "body": body, "requested_by": this_actor(), "morning_repair": True,
-                        "fault": f["id"]})
+                        "fault": f["id"], "check": check})
     except Exception as exc:  # noqa: BLE001 -- report, never crash the sweep
         f["delegation_error"] = f"{type(exc).__name__}: {exc}"[:200]
         return ""
