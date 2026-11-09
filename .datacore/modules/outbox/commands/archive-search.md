@@ -191,6 +191,12 @@ python lib/archive_search.py sync --space 0-personal
 python lib/archive_search.py index 0-personal ~/Data/0-personal-archive
 ```
 
+## Your Boundaries
+
+- **Can:** search local archive snapshots and, with `--fetch`, read one archived file.
+- **Cannot:** change, move or delete anything in an archive repository.
+- **Must:** ask before syncing snapshots from the server, and say when a snapshot is stale.
+
 ## Error Handling
 
 | Error | Recovery |
