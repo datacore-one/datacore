@@ -133,6 +133,32 @@ def ssh_alias(machine: str, path: Path | None = None) -> str | None:
     return machine
 
 
+def actor_to_machine(actor: str, path: Path | None = None) -> str | None:
+    """Resolve an actor name to its machine name in the roster.
+
+    When a machine is renamed (e.g., Winston moved, hostname changed to
+    'winston' but manifest still lists 'box'), the infrastructure file's
+    servers.<machine>.access.actor maps the old machine name to the new actor.
+    This function goes backwards: given an actor, find its machine name.
+
+    Returns None if the actor is not found in the roster, or the actor itself
+    if it matches a manifest_machine alias (e.g. the actor IS already a machine name).
+    """
+    for machine_name, cfg in _servers(path).items():
+        if isinstance(cfg, dict):
+            access = cfg.get("access") or {}
+            if str(access.get("actor", "")).lower() == actor.lower():
+                return machine_name
+    # If the actor is a manifest alias or roster key, return it
+    for machine_name, cfg in _servers(path).items():
+        if machine_name.lower() == actor.lower():
+            return machine_name
+        manifest_alias = cfg.get("manifest_machine")
+        if manifest_alias and str(manifest_alias).lower() == actor.lower():
+            return machine_name
+    return None
+
+
 def ssh_hosts(path: Path | None = None) -> list[str]:
     """Every roster machine ssh can reach, by ssh alias, in roster order."""
     return [a for a in (_reachable_alias(c) for c in _servers(path).values()) if a]
@@ -270,6 +296,10 @@ class Job:
     #: is circular: on 2026-09-22 box-autofix-escalation was delegated to
     #: Miles, dead-lettered after three attempts, and then listed itself.
     delegate: bool = True
+    #: "host": this job's failures are the machine's state (a detector whose
+    #: finding needs a person on the host), never code an agent can repair --
+    #: autofix escalates them to the owner once instead of filing repairs (W1).
+    repair: str = "agent"
     #: A visitor's session trigger (TRIGGERS); None on a resident.
     trigger: str | None = None
     #: An arrival duty's gate (EVERY, local "HH:MM"); None when ungated.
@@ -501,6 +531,10 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
     if not isinstance(delegate, bool):
         errors.append(f"{ref}: field 'delegate' must be true or false (got {delegate!r})")
 
+    repair = raw.get("repair", "agent")
+    if repair not in ("agent", "host"):
+        errors.append(f"{ref}: field 'repair' must be agent or host (got {repair!r})")
+
     trigger = raw.get("trigger")
     if trigger is not None and trigger not in TRIGGERS:
         errors.append(f"{ref}: unknown trigger {trigger!r} "
@@ -532,6 +566,7 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         on_fail=on_fail,
         require_synced_repos=list(require_synced_repos),
         delegate=delegate,
+        repair=repair,
         trigger=trigger,
         every=every,
         after=after,

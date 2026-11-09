@@ -60,7 +60,8 @@ def _compare(space_dir: Path, org_file: Path | None = None) -> ShadowDiff:
         diff.problems.append('source file is missing')
         return diff
     try:
-        candidate = project(fold(read_events(space_dir)), space=space_dir.name).text
+        from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        candidate = project(authoritative_state(space_dir), space=space_dir.name).text
         candidate = _with_org_header(space_dir, org_file, candidate, remember=False)
         projected_path = space_dir / '.datacore/state/projections' / (org_file.stem + '.projected.org')
         write_org_text(projected_path, candidate)

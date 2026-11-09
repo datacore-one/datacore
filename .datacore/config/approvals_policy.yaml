@@ -41,7 +41,13 @@ cosign_effects:
   - message.send
   # MEM-17: a hosted page or shared link waits for the owner's go.
   - page.publish
+  # Hiring and retiring an agent (k3s fleet-hire, 2026-10-25): an agent may
+  # propose; only the owner's grant lets the controller carry it out.
+  - agent.hire
+  - agent.retire
 known_effects:
+  - agent.hire
+  - agent.retire
   - email.send
   - payment
   - prod.deploy

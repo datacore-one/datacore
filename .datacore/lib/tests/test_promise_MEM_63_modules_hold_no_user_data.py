@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 ROOT = Path(__file__).resolve().parents[3]
 MODULES = ROOT / ".datacore" / "modules"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
@@ -62,14 +64,16 @@ def test_no_module_on_this_machine_holds_user_data():
 
 
 @pytest.mark.production
-@pytest.mark.parametrize("host", ["winston", "nightshift", "hermes", "plur-claw"])
+@pytest.mark.parametrize("host", ["box", "nightshift", "hermes", "plur-claw"])   # roster: host or k3s pod
 def test_no_module_on_an_agent_host_holds_user_data(host):
     cmd = ("for d in ~/Data/.datacore/modules /root/Data/.datacore/modules; do [ -d $d ] || continue; "
            "cd $d && find . \\( -name node_modules -o -name .git -o -name .venv -o -name venv -o -name tests "
            "-o -name __pycache__ \\) -prune -o -type f \\( -regextype posix-extended -regex '\\./[^/]+/(data|state)/.*' "
            "-o -name '*.db' -o -name '*.jsonl' -o -name '*.sqlite*' \\) -print "
            "| grep -v -i -E 'sample|example|fixture|/README|\\.gitkeep$|\\.pyc$' | head -50; done; true")
-    r = subprocess.run([*SSH, host, cmd], capture_output=True, text=True, timeout=50)
-    assert r.returncode == 0, f"{host}: could not read ({r.stderr.strip()[-160:]})"
-    found = [l for l in r.stdout.splitlines() if l.strip()]
+    found = []
+    for pl in fleet_reach.places(host):
+        r = fleet_reach.run_at(pl, cmd, timeout=50)
+        assert r.returncode == 0, f"{host} ({pl.kind}): could not read ({r.stderr.strip()[-160:]})"
+        found += [f"{pl.kind}: {l}" for l in r.stdout.splitlines() if l.strip()]
     assert not found, f"{host}: user-data files inside modules, e.g. {found[:8]}"

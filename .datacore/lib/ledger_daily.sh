@@ -94,6 +94,26 @@ mv -f "$verify_tmp" "$verify_out" || exit 2
 echo "verify rc=$verify_rc"
 cat "$verify_out"
 
+# SEALS, EVERY DAY (plan 2026-10-31, phase H). Verify checks chains and
+# signatures, not that the seals -- which define "final" -- still recompute.
+# Every hub space's newest seal must be the sequencer's and verify over the
+# admitted events: the hub's own seal-age check (ledger.hub.seal_report) with
+# the age limit off; the hourly box-ledger-seal-age contract judges age.
+# ledger-seal.log's last line is OK / FAIL / NONE and a manifest contract
+# reads it. FAIL fails this job. NONE (no hub space here) or a checker that
+# could not run (rc 2) is written down and left to that contract, which never
+# reads it as a pass; it does not fail the history verify.
+seal_out="$STATE/ledger-seal.log"
+seal_tmp="$(mktemp "$seal_out.XXXXXX")" || exit 2
+"$PY" "$LIB/ledger_seal_age_check.py" --root "$DATACORE_ROOT" --no-age > "$seal_tmp" 2>&1
+seal_rc=$?
+if [ "$seal_rc" -ne 0 ] && [ "$seal_rc" -ne 1 ] && ! tail -1 "$seal_tmp" | grep -q '^NONE '; then
+  echo "NOT CHECKED the seal check could not run (rc=$seal_rc)" >> "$seal_tmp"
+fi
+mv -f "$seal_tmp" "$seal_out" || exit 2
+echo "seal   rc=$seal_rc"
+tail -1 "$seal_out"
+
 # Run the check even if the most recent ingest had a non-zero exit: its result
 # is still the truth about drift, and suppressing it would hide the consequence
 # of the ingest failure.
@@ -120,4 +140,5 @@ tail -1 "$STATE/checkpoint-verify.log"
 
 [ "$ckpt_rc" -eq 0 ] || exit "$ckpt_rc"
 [ "$check_rc" -eq 0 ] || exit "$check_rc"
+[ "$seal_rc" -ne 1 ] || exit 1
 exit "$verify_rc"

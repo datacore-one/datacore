@@ -111,3 +111,15 @@ def test_the_core_suites_are_gated(path):
     assert audit.is_gated(f".datacore/{path}/test_anything.py", gated), (
         f".datacore/{path} is not run by CI"
     )
+
+
+@pytest.mark.parametrize("rel", [
+    "worktrees/li2-jimo-from-repo/lib/gateio/strategies/test_a.py",
+    "state/backup/lib/tests/test_a.py",
+])
+def test_a_checkout_parked_under_datacore_is_not_a_suite(rel):
+    """A worktree checked out at .datacore/worktrees/ (2026-10-28, a trading-module
+    branch) is a second copy of another repository's tests, not a suite of this
+    one; scanning it made the gate demand a declaration for a scratch checkout and
+    made the nightly suite audit run a stale branch's 2000+ tests as its own."""
+    assert not audit.is_source(Path(rel))

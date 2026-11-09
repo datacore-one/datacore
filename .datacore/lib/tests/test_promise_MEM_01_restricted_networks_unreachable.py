@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_eval as AE  # noqa: E402
 
@@ -94,10 +96,8 @@ def test_guard_wired_on_every_agent_host():
     local = Path.home() / ".claude" / "settings.json"
     if not (local.is_file() and _wired(local.read_text())):
         missing.append("mac")
-    for host in ("nightshift", "winston"):          # both run `claude -p` unattended
-        p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host,
-                            "cat ~/.claude/settings.json 2>/dev/null || true"],
-                           capture_output=True, text=True, timeout=30)
+    for host in ("nightshift", "box"):          # both run `claude -p` unattended; Winston in his pod (roster)
+        p = fleet_reach.run(host, "cat ~/.claude/settings.json 2>/dev/null || true", timeout=30)
         if p.returncode != 0 or not _wired(p.stdout):
             missing.append(host)
     assert not missing, f"restricted_hosts_guard not wired for Bash on: {missing}"

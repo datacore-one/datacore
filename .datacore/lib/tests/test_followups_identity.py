@@ -54,6 +54,7 @@ def test_ledger_claim_refuses_at_startup_on_an_undeclared_host(tmp_path, undecla
     (tmp_path / ".datacore" / "events").mkdir(parents=True)
     monkeypatch.setattr(sys, "argv", ["ledger_claim.py", "--space", str(tmp_path)])
     monkeypatch.setattr(m, "read_events", lambda *_: pytest.fail("read the ledger before resolving"))
+    monkeypatch.setattr(m, "read_task_events", lambda *_: pytest.fail("read the ledger before resolving"))
     _refused(capsys, m.main())
 
 

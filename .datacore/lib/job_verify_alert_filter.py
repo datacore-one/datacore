@@ -28,13 +28,15 @@ import sys
 #: Lines that begin a failure block.
 _BLOCK_START = "job '"
 #: Decision lines that END a block. The first token decides.
-_QUIET = ("alert withheld:", "delegated repair of", "alert suppressed:")
+#: "repairs paused for" (model usage limit): missing here, it was relayed to The
+#: Firm on every run of 2026-10-28, each copy ending "operator not alerted".
+_QUIET = ("alert withheld:", "delegated repair of", "alert suppressed:", "repairs paused for")
 _LOUD = ("alert:",)
 #: Lines inside or beside a block that carry no decision.
 #: "recovered: task ... closed" is bookkeeping -- the repair task of a failure the
 #: operator was never told about. Relayed alone it arrived as "job_verify FAILED
 #: on mac" (2026-09-25) for a job that had just come right.
-_NOISE = ("recurrence: forgot ", "recurring: filed task ", "could NOT delegate ", "sent ", "recovered: task ")
+_NOISE = ("not yet due: ", "first-seen record not saved", "recurrence: forgot ", "recurring: filed task ", "could NOT delegate ", "sent ", "recovered: task ")
 
 
 def operator_facing(text: str) -> str:

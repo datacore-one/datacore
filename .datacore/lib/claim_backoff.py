@@ -22,8 +22,26 @@ PROBE_AFTER = timedelta(hours=6)
 #: Provider phrases meaning "nothing will run until a person acts", beyond the
 #: login markers ops_markers already lists. Rate limits are transient and stay
 #: with the ordinary retry.
+#: "requires more credits" / "error code: 402" is OpenRouter's empty-account
+#: reply (2026-10-26: about 21.9 USD of retries ran until the account hit zero).
 CREDIT_MARKERS = ("no credits remaining", "insufficient_quota", "quota exceeded",
-                  "billing hard limit", "payment required")
+                  "billing hard limit", "payment required", "requires more credits",
+                  "error code: 402")
+
+
+#: A model usage limit -- the weekly or session allowance, not a transient rate
+#: limit. Nothing more runs until it resets, so a host that hits it pauses like
+#: an access failure (W1: ~60 repair attempts on 2026-10-21 were spent against
+#: "You've hit your weekly limit" and each was counted as a failed repair).
+#: "api_error_status=429" is how claude-code reports it; the reason text is
+#: often cut off after "weekly li" by the 250-character error cap.
+USAGE_LIMIT_MARKERS = ("weekly limit", "hit your weekly", "hit your limit", "usage limit",
+                       "out of extra usage", "status=429", "status 429", "http 429")
+
+
+def is_usage_limit(detail: str) -> bool:
+    low = (detail or "").lower()
+    return any(m in low for m in USAGE_LIMIT_MARKERS)
 
 
 def is_access_failure(detail: str) -> bool:

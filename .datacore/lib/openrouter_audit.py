@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--key-file", default="")
     ap.add_argument("--max-tokens", type=int, default=16000)
+    ap.add_argument("--reasoning-effort", choices=["low", "medium", "high"], default="",
+                    help="cap a reasoning model's thinking so the answer is not starved of tokens")
     a = ap.parse_args()
 
     key = os.environ.get("OPENROUTER_API_KEY", "")
@@ -82,14 +84,17 @@ def main():
     approx = (len(SYSTEM) + len(prompt)) // 4
     print(f"model={a.model}  approx input tokens={approx:,}", file=sys.stderr)
 
-    body = json.dumps({
+    request = {
         "model": a.model,
         "messages": [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": a.max_tokens,
-    }).encode()
+    }
+    if a.reasoning_effort:
+        request["reasoning"] = {"effort": a.reasoning_effort}
+    body = json.dumps(request).encode()
 
     req = urllib.request.Request(
         ENDPOINT, data=body,

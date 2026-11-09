@@ -68,7 +68,8 @@ def scan(space: Path) -> list[tuple[str, str]]:
     ids, headings = org_state(space)
     if not ids:
         return []
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     out = []
     for iid, item in state.items.items():
         if item.status not in LIVE or iid in ids:

@@ -11,9 +11,22 @@ DATA_DIR="${DATA_DIR:-$HOME/Data}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # The owner whose queue this is. On the nightshift host gh is logged in as the
 # bot account, so the owner is never inferred from `gh api user`.
+# A setting the job's environment does not carry is read from the machine's one
+# env file (config_plane: ~/.datacore/datacore.env, or $DATACORE_ENV_FILE). The
+# cron lines do not source it, and when the owner defaults left this public code
+# on 2026-10-17 no host had the setting anywhere else: every run stopped here.
+_from_env_file() {
+    python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; import config_plane as c
+p = Path(sys.argv[2])
+print(c.load(p).get(sys.argv[3], "") if p.is_file() else "")' "$1" "${DATACORE_ENV_FILE:-$HOME/.datacore/datacore.env}" "$2" 2>/dev/null || true
+}
+CORE_LIB="$SKILL/../../lib"
+[ -n "${TRIAGE_OWNER:-}" ] || TRIAGE_OWNER="$(_from_env_file "$CORE_LIB" TRIAGE_OWNER)"
+[ -n "${GITHUB_TRIAGE_USERNAME:-}" ] || GITHUB_TRIAGE_USERNAME="$(_from_env_file "$CORE_LIB" GITHUB_TRIAGE_USERNAME)"
+[ -n "${TRIAGE_ENTERPRISE_REPO:-}" ] || TRIAGE_ENTERPRISE_REPO="$(_from_env_file "$CORE_LIB" TRIAGE_ENTERPRISE_REPO)"
 OWNER="${TRIAGE_OWNER:-${GITHUB_TRIAGE_USERNAME:-}}"
 if [ -z "$OWNER" ]; then
-  echo "[github-triage] no owner: set TRIAGE_OWNER or GITHUB_TRIAGE_USERNAME" >&2
+  echo "[github-triage] no owner: set TRIAGE_OWNER or GITHUB_TRIAGE_USERNAME (environment or ${DATACORE_ENV_FILE:-~/.datacore/datacore.env})" >&2
   exit 2
 fi
 # The private repository the enterprise run covers (owner/repo). Configured per

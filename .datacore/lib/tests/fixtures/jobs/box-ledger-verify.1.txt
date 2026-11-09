@@ -1,0 +1,17 @@
+# fixture for box-ledger-verify artifact[1]
+# producer artifact: ~/.datacore/state/ledger-seal.log on box (ledger_seal_age_check.py --no-age, run on dayshift against the same hub copies)
+# harvested: 2026-11-01
+# regex under test: ^OK \d+ hub space
+# represents: SUCCESS
+# ---
+  ok   0-personal     sealed 34 min ago by winston, verifies
+  ok   1-datafund     sealed 233 min ago by winston, verifies
+  ok   2-datacore     sealed 50 min ago by winston, verifies
+  ok   3-fds          sealed 3716 min ago by winston, verifies
+  ok   4-forge        sealed 10782 min ago by winston, verifies
+  ok   5-plur         sealed 29 min ago by winston, verifies
+  ok   6-meridian     sealed 230 min ago by winston, verifies
+  ok   7-megaphone    sealed 12609 min ago by winston, verifies
+  ok   8-firm         sealed 794 min ago by winston, verifies
+  ok   9-practice     sealed 4527 min ago by winston, verifies
+OK 10 hub space(s): by the grantor, verifies

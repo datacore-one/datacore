@@ -42,7 +42,13 @@ is_core() { case "$(git -C "$1" remote get-url origin 2>/dev/null)" in
   *datacore-one/datacore|*datacore-one/datacore.git|*/datacore.git|*/datacore) return 0;; esac; return 1; }
 [ -d "$D/.git" ] && echo "data_branch=$(git -C "$D" rev-parse --abbrev-ref HEAD 2>/dev/null)"
 [ -d "$D/.git" ] && is_core "$D" && echo "data_core=1"
+# How many commits this checkout is behind origin/main — 0 means current, non-zero
+# means stale even when the branch name is "main" (SYN-4 follow-up).
+[ -d "$D/.git" ] && is_core "$D" && \
+  echo "data_behind=$(git -C "$D" rev-list --count HEAD..origin/main 2>/dev/null)"
 [ -n "$R" ] && [ -d "$R/.git" ] && echo "runner_branch=$(git -C "$R" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+[ -n "$R" ] && [ -d "$R/.git" ] && \
+  echo "runner_behind=$(git -C "$R" rev-list --count HEAD..origin/main 2>/dev/null)"
 # Core version can live in the data root OR the runner. On a satellite agent
 # host the "Data" tree is the AGENT'S OWN SPACE repo, not the datacore core —
 # so reading VERSION only from there reported it as having no core at all,
@@ -118,7 +124,7 @@ echo "org_workspace=$("$PY3" -c 'import org_workspace as o;print(getattr(o,"__ve
 # hoping the login shell exports it.
 for c in datacore "$HOME/.hermes/node/bin/datacore" "$HOME/.local/bin/datacore" \
          /usr/local/bin/datacore /usr/bin/datacore; do
-  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>&1 | head -1)"; break; }
+  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>/dev/null | head -1)"; break; }
 done
 '''
 
@@ -150,12 +156,23 @@ def probe(name: str, cfg: dict) -> dict:
     if svc and ssh_user and svc != ssh_user:
         inner = f"sudo -u {svc} bash -lc 'echo {b64} | base64 -d | bash'"
 
-    if alias == "-" or name == "mac":
+    out = {"machine": name, "reachable": False}
+    # A pod, or an agent living as a user on a shared host, is reached the way
+    # fleet_reach resolves it. Treating ssh_alias '-' as "run it here" printed
+    # the Mac's versions under Tris's and Data's names (2026-10-30).
+    if access.get("k8s", {}).get("deployment") and alias == "-" or access.get("host_machine"):
+        import fleet_reach
+        try:
+            pl = fleet_reach.place(name, ROOT / ".datacore/registry/infrastructure.yaml")
+        except fleet_reach.Unreachable as exc:
+            out["error"] = str(exc)[:70]
+            return out
+        cmd = fleet_reach.argv(pl, f"echo {b64} | base64 -d | bash")
+    elif alias == "-" or name == "mac":
         cmd = ["bash", "-lc", inner]
     else:
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, inner]
 
-    out = {"machine": name, "reachable": False}
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -174,14 +191,29 @@ def probe(name: str, cfg: dict) -> dict:
 
 
 def off_main(row: dict) -> list[str]:
-    """Datacore code checkouts on this machine that are not on main (SYN-4)."""
+    """Datacore code checkouts on this machine that are not on main, or are on
+    main but behind origin/main (SYN-4)."""
     out = []
     rb = row.get("runner_branch")
     if rb and rb != "main":
         out.append(f"runner on {rb}" if rb != "HEAD" else "runner on a detached HEAD")
+    elif rb == "main":
+        try:
+            behind = int(row.get("runner_behind") or 0)
+        except (ValueError, TypeError):
+            behind = 0
+        if behind:
+            out.append(f"runner on main but {behind} commit(s) behind origin/main")
     db = row.get("data_branch")
     if row.get("data_core") and db and db != "main":
         out.append(f"data root on {db}" if db != "HEAD" else "data root on a detached HEAD")
+    elif row.get("data_core") and db == "main":
+        try:
+            behind = int(row.get("data_behind") or 0)
+        except (ValueError, TypeError):
+            behind = 0
+        if behind:
+            out.append(f"data root on main but {behind} commit(s) behind origin/main")
     return out
 
 

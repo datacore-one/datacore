@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""fleetctl -- the fleet kill switch.
+
+    fleetctl stop-all     scale every agent Deployment to zero
+    fleetctl resume-all   bring back exactly the agents stop-all stopped
+    fleetctl status       one line per agent
+
+An agent is any Deployment labelled `datacore.one/agent`, in any namespace.
+stop-all writes each agent's replica count into the annotation
+`datacore.one/resume-replicas` BEFORE scaling it, so resume-all restores what
+was running and leaves an agent that was already off, off. A repeated stop-all
+keeps the remembered count instead of overwriting it with zero.
+
+Every kubectl failure stops the run with a non-zero exit: a kill switch that
+reports success while an agent keeps running is worse than one that fails loudly.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+LABEL = "datacore.one/agent"
+REMEMBER = "datacore.one/resume-replicas"
+
+
+def kubectl(*args: str) -> str:
+    r = subprocess.run(["kubectl", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"fleetctl: kubectl {' '.join(args)} failed: {r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout
+
+
+def agents() -> list[dict]:
+    # FLEET_NAMESPACES (comma-separated) keeps an operator whose credential is
+    # limited to the team namespaces -- Winston's chat command -- from asking
+    # for deployments cluster-wide.
+    namespaces = [n for n in os.environ.get("FLEET_NAMESPACES", "").split(",") if n]
+    if not namespaces:
+        return json.loads(kubectl("get", "deploy", "-A", "-l", LABEL, "-o", "json"))["items"]
+    items = []
+    for ns in namespaces:
+        items += json.loads(kubectl("get", "deploy", "-n", ns, "-l", LABEL, "-o", "json"))["items"]
+    return items
+
+
+def ref(d: dict) -> tuple[str, str]:
+    return d["metadata"]["namespace"], d["metadata"]["name"]
+
+
+def stop_all() -> int:
+    for d in agents():
+        ns, name = ref(d)
+        replicas = d["spec"].get("replicas", 0) or 0
+        remembered = d["metadata"].get("annotations", {}).get(REMEMBER)
+        if remembered is None or replicas > 0:
+            kubectl("annotate", f"deploy/{name}", "-n", ns, "--overwrite", f"{REMEMBER}={replicas}")
+        kubectl("scale", f"deploy/{name}", "-n", ns, "--replicas=0")
+        print(f"stopped {ns}/{name}")
+    return 0
+
+
+def resume_all() -> int:
+    for d in agents():
+        ns, name = ref(d)
+        remembered = d["metadata"].get("annotations", {}).get(REMEMBER)
+        if remembered is None:
+            continue
+        kubectl("scale", f"deploy/{name}", "-n", ns, f"--replicas={int(remembered)}")
+        kubectl("annotate", f"deploy/{name}", "-n", ns, f"{REMEMBER}-")
+        print(f"resumed {ns}/{name} ({remembered})")
+    return 0
+
+
+def status() -> int:
+    for d in agents():
+        ns, name = ref(d)
+        want = d["spec"].get("replicas", 0) or 0
+        ready = d.get("status", {}).get("readyReplicas", 0) or 0
+        state = "stopped" if want == 0 else ("running" if ready >= want else "starting")
+        print(f"{ns}/{name}\t{state}\t{ready}/{want}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    commands = {"stop-all": stop_all, "resume-all": resume_all, "status": status}
+    if len(argv) != 1 or argv[0] not in commands:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    return commands[argv[0]]()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

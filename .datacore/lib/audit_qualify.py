@@ -71,7 +71,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--findings', type=Path,
-                    default=ROOT / '0-personal/4-outbox/datacore-audit-2026-09-14'
+                    default=ROOT / '0-personal/4-archive/datacore-audit-2026-09-14'
                                    '/Datacore-audit-evidence-2026-09-14/findings.json')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()

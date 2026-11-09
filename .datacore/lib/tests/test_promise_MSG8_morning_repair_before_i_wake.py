@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 LIB = Path(__file__).resolve().parents[1]
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
@@ -124,7 +126,10 @@ def test_on_the_box_the_repair_runs_before_the_briefing():
            "f=$(ls -1 ~/.datacore/cos/fragments/*/repairs.json | sort | tail -1); echo FRAG $f; cat $f; "
            "s=$(ls -1 ~/.datacore/state/morning-repair/*.json | sort | tail -1); echo; echo SWEPT "
            "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[\"swept_at\"])' $s)")
-    r = subprocess.run([*BOX, cmd], capture_output=True, text=True, timeout=45)
+    # Winston's duties run in his k3s pod on the box (roster, fleet_reach); its schedule
+    # is the supercronic file.
+    pod = fleet_reach.place("box")
+    r = fleet_reach.run_at(pod, cmd.replace("crontab -l", fleet_reach.schedule_listing(pod)), timeout=45)
     assert r.returncode == 0, r.stderr[-300:]
     out = r.stdout
     assert "0 2 * * *" in out and "sweep" in out, "the 02:00 UTC sweep is not scheduled on the box"

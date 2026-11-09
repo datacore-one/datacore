@@ -17,6 +17,9 @@ owner read "…(plur-ai/ent" and lines broken where a column count fell
     record_undelivered(sender, reason, text)
                       one JSON line in ~/.datacore/state/undelivered-alerts.jsonl
                       ($DATACORE_UNDELIVERED_LOG), which the morning sweep reads
+    record_sent(sender, text)
+                      append the full message to $DATACORE_STATE/sent-alerts.log
+                      with sender and time (MSG-12); never raises
 
 Nothing fails silently (MSG-10): a sender that cannot deliver -- no group, no
 token, a non-200 answer, an exception -- records it here instead of printing
@@ -128,6 +131,31 @@ def undelivered_log() -> Path:
                 or Path.home() / ".datacore" / "state" / "undelivered-alerts.jsonl")
 
 
+def sent_log() -> Path:
+    """$DATACORE_STATE/sent-alerts.log — every delivered message, full text, sender, time."""
+    state = os.environ.get("DATACORE_STATE") or str(Path.home() / ".datacore" / "state")
+    return Path(state) / "sent-alerts.log"
+
+
+def record_sent(sender: str, text: str) -> bool:
+    """Append a successfully delivered message to the sent log. Never raises.
+
+    Plain-text format so the full message is recoverable verbatim (MSG-12):
+      === sent <ISO-8601> sender=<sender> ===
+      <full message text>
+    """
+    try:
+        p = sent_log()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = f"=== sent {stamp} sender={sender} ===\n{text}\n"
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(entry)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def keep_full(text: str, sender: str) -> str:
     """Save the unshortened text beside the undelivered log; '' when it cannot be saved."""
     try:
@@ -163,10 +191,14 @@ def main() -> int:
     ap.add_argument("--more", default=None)
     ap.add_argument("--save-as", default=None)
     ap.add_argument("--undelivered", nargs=2, metavar=("SENDER", "REASON"))
+    ap.add_argument("--sent", metavar="SENDER",
+                    help="record a successful delivery: tg_format.py --sent SENDER (text on stdin)")
     a = ap.parse_args()
     raw = sys.stdin.read()
     if a.undelivered:
         return 0 if record_undelivered(a.undelivered[0], a.undelivered[1], raw) else 1
+    if a.sent:
+        return 0 if record_sent(a.sent, raw) else 1
     text = normalize(raw)
     if a.fit:
         short = fit(text, more=a.more)

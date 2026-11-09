@@ -139,7 +139,8 @@ def flip(space_dir: Path, org_file: Path | None = None, force: bool = False) -> 
     if result.refused_because:
         return result
 
-    projection = project(fold(read_events(space_dir)), space=space_dir.name)
+    from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    projection = project(authoritative_state(space_dir), space=space_dir.name)
     try:
         expected = _last_sha(space_dir)
         if expected is None and org_file.exists():

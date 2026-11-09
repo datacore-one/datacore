@@ -1,0 +1,10 @@
+# fixture for mac-review-board artifact[0]
+# producer artifact: ~/.datacore/state/review-board.log on mac
+# harvested: 2026-10-29
+# regex under test: ^review-board: \d+ items \(\d+ passed by rules\) from \d+ files, \d+ skipped -> 
+# represents: SUCCESS
+# Harvested from this mac's local file. The JSON line before it (which names a
+# skipped space) is dropped, and the home directory in the output path is
+# written as ~ -- neither is part of what the regex tests.
+# ---
+review-board: 201 items (0 passed by rules) from 15 files, 1 skipped -> ~/.datacore/state/decision-boards/2026-10-29-morning-review.html

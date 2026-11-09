@@ -8,7 +8,7 @@ context: on_match
 
 ## Purpose
 
-Routes content out of active workspaces into permanent storage. The outbox (`4-outbox/`) is a staging area — the mirror of `0-inbox/`. Archive is the primary destination; delivery, publish, and dispose are planned.
+Routes content out of active workspaces into permanent storage. A space's `4-archive/` is its single exit folder (DIP-0017 as amended 2026-10-18; there is no `4-outbox/`). The processor copies `4-archive/` content into the space's archive repo and then removes the local copy, so it runs only when the owner starts it. Delivery, publish, and dispose are planned.
 
 ## Quick Start
 
@@ -19,11 +19,11 @@ Routes content out of active workspaces into permanent storage. The outbox (`4-o
 ### Routing Flow
 
 ```
-[space]/4-outbox/archive/  →  outbox-processor  →  [space]-archive/ (server)
+[space]/4-archive/  →  outbox-processor  →  [space]-archive/ (server)
                                                   →  archive-indexer (datacortex embeddings)
 ```
 
-- Content placed in `4-outbox/archive/` is routed to server archive repos
+- Content placed in `4-archive/` is routed to server archive repos
 - Semantic path structure is preserved
 - Companion files (`.companion.md`) always travel with their source
 - Archive is permanent — no automatic retention cleanup
@@ -40,7 +40,7 @@ Routes content out of active workspaces into permanent storage. The outbox (`4-o
 
 | Name | Type | When to use |
 |------|------|-------------|
-| `outbox-processor` | agent | Route 4-outbox/ content to archive repos |
+| `outbox-processor` | agent | Route 4-archive/ content to archive repos |
 | `archive-indexer` | agent | Build datacortex search index for archives |
 | `/outbox` | command | Process outbox queue (supports --dry-run, --space) |
 
@@ -50,8 +50,7 @@ Tools: `pending` (list outbox items), `archive_search` (search archives), `dispo
 
 | Path | Purpose |
 |------|---------|
-| `[space]/4-outbox/archive/` | Staging queue for archive |
-| `[space]/4-outbox/_routing.yaml` | Space-specific routing rules |
+| `[space]/4-archive/` | The space's archive; the processor's queue |
 | Server: `[space]-archive/` | Permanent archive repos |
 | `lib/archive_sync.py` | CLI: `--dry-run`, `--space`, `--json` |
 

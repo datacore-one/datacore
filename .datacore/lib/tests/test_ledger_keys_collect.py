@@ -139,3 +139,20 @@ def test_an_uncollected_actor_still_verifies_from_the_local_registry(tmp_path, m
                         + own.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex() + "\n")
     monkeypatch.setattr(keys, "DATACORE_ROOT", tmp_path)
     assert keys.verify("newwriter", b"x", own.sign(b"x").hex(), registry_path=registry) is True
+
+
+def test_the_local_host_is_collected_without_ssh(monkeypatch):
+    """The owner's own machine runs no ssh server: `--hosts local` derives
+    the public halves here, with the same derivation, and never calls ssh."""
+    calls = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "mac " + "ab" * 32 + "\n", ""
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return Done()
+    monkeypatch.setattr(kc.subprocess, "run", run)
+    found = kc.candidates(["local"])
+    assert found == {"mac": {"local": "ab" * 32}}
+    assert calls and calls[0][0] != "ssh" and kc._DERIVE in calls[0]

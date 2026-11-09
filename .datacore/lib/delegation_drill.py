@@ -329,7 +329,8 @@ class DelegationDrill(Drill):
     def item(self, space, iid: str):
         from ledger.fold import fold
         from ledger.log import read_events
-        return fold(read_events(space)).items.get(iid)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        return authoritative_state(space).items.get(iid)
 
     # -- scenarios ------------------------------------------------------
     def the_happy_path(self) -> None:

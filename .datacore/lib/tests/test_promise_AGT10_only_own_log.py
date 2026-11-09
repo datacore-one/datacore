@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ledger.events import Event, body_dict, compute_hash, to_line
 from ledger.log import EventLog
@@ -83,6 +84,17 @@ runpy.run_path({guard!r}, run_name="__main__")
 """
 
 
+def _host_of(actor):
+    """The hostname the roster gives the machine an actor writes from today (Tris: his k3s
+    pod since 2026-10-25; his retired droplet was 'transporter')."""
+    reg = yaml.safe_load((ROOT / ".datacore" / "registry" / "infrastructure.yaml").read_text())
+    for e in (reg.get("servers") or {}).values():
+        acc = (e or {}).get("access") or {}
+        if acc.get("actor") == actor and not e.get("retired") and acc.get("hostname"):
+            return acc["hostname"]
+    pytest.fail(f"the roster names no machine for {actor} (could not tell)")
+
+
 def _push_check_as(sp, host):
     base = _git(sp, "rev-parse", "origin/main").stdout.strip()
     tip = _git(sp, "rev-parse", "HEAD").stdout.strip()
@@ -95,14 +107,14 @@ def test_the_push_guard_refuses_a_host_writing_another_agents_log(space):
     """hermes (tris's host) appends a perfectly canonical miles record and tries to push it."""
     EventLog(space, "miles").append("metric.attest", {"metric": "cadence.run", "phase": "end", "result": "ok"})
     _git(space, "add", "-A"); _git(space, "commit", "-q", "-m", "forged as miles")
-    r = _push_check_as(space, "transporter")
+    r = _push_check_as(space, _host_of("tris"))
     assert r.returncode == 1 and "miles.jsonl" in r.stderr, r.stdout + r.stderr
 
 
 def test_the_push_guard_lets_an_agent_publish_its_own_log(space):
     EventLog(space, "tris").append("metric.attest", {"metric": "cadence.run", "phase": "end", "result": "ok"})
     _git(space, "add", "-A"); _git(space, "commit", "-q", "-m", "own")
-    r = _push_check_as(space, "transporter")
+    r = _push_check_as(space, _host_of("tris"))
     assert r.returncode == 0, r.stdout + r.stderr
 
 

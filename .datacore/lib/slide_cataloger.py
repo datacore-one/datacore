@@ -9,7 +9,7 @@ Usage:
     python slide_cataloger.py <source_dir> <output_dir>
 
 Example:
-    python slide_cataloger.py 1-teamspace/4-outbox/archive/presentations 1-teamspace/presentations
+    python slide_cataloger.py 1-teamspace/4-archive/presentations 1-teamspace/presentations
 """
 
 import json

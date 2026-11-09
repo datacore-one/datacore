@@ -29,6 +29,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import fleet_reach
+
 import tool_policy
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -94,11 +96,16 @@ def test_a_repair_hands_over_a_pull_request_and_stops():
 
 @pytest.mark.production
 def test_no_host_runs_an_unattended_merger():
-    running = []
-    for host in ("nightshift", "winston", "hermes", "plur-claw"):
-        r = subprocess.run([*SSH, host, "(crontab -l 2>/dev/null; systemctl list-timers --all --no-pager 2>/dev/null; "
-                                         "systemctl --user list-timers --all --no-pager 2>/dev/null) | grep -i -E 'merge.shepherd|pr merge' || true"],
-                           capture_output=True, text=True, timeout=45)
-        assert r.returncode == 0, f"{host}: could not read its schedules ({r.stderr.strip()[-160:]})"
-        running += [f"{host}: {l.strip()[:120]}" for l in r.stdout.splitlines() if l.strip()]
+    running, unread = [], []
+    host_listing = ("(crontab -l 2>/dev/null; systemctl list-timers --all --no-pager 2>/dev/null; "
+                    "systemctl --user list-timers --all --no-pager 2>/dev/null)")
+    # Where each agent machine works today comes from the roster: its host, its k3s pod, or both.
+    for machine in ("nightshift", "box", "hermes", "plur-claw"):
+        for pl in fleet_reach.places(machine):
+            listing = fleet_reach.schedule_listing(pl) if pl.kind == "pod" else host_listing
+            r = fleet_reach.run_at(pl, listing + " | grep -i -E 'merge.shepherd|pr merge' || true", timeout=45)
+            if r.returncode != 0:   # could not tell is never a pass; the other machines are still read
+                unread.append(f"{machine} ({pl.kind}): could not read its schedules ({r.stderr.strip()[-160:]})")
+            running += [f"{machine} ({pl.kind}): {l.strip()[:120]}" for l in r.stdout.splitlines() if l.strip()]
+    assert not unread, "; ".join(unread)
     assert not running, "an agent host merges pull requests on a schedule: " + " | ".join(running)

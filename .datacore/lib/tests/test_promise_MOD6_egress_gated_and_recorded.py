@@ -24,6 +24,9 @@ import pytest
 
 LIB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIB))
+# Winston's scripts live in the chief-of-staff module (server/lib), the copy git holds;
+# the box's setup installs them into .datacore/lib. Judge the source, not an install.
+sys.path.insert(0, str(LIB.parent / "modules" / "chief-of-staff" / "server" / "lib"))
 
 ROOT_SENDERS = [  # (module, attribute path) -- each sends a message, email or post
     ("winston_send", "_post"),                    # Telegram (Winston's messages)

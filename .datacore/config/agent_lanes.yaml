@@ -1,0 +1,32 @@
+# Agent lanes: which work each agent may claim, and how much per period.
+#
+# THIS SHIPPED FILE NAMES NO AGENTS (INS-3). An install keeps its own lanes in
+# its firm space -- the space install.yaml names as `roles: firm` -- at
+# <firm space>/.datacore/config/agent_lanes.yaml, same format; agent_lanes.py
+# reads that file first and falls back to this one, under which no agent is
+# gated. Example entry (an agent principal named `builder`):
+#   lanes:
+#     builder:
+#       roles: [coo, cto, dev, operator]
+#       tags: [technical, pm]
+#       priorities: []
+#       budget: {tasks: 20}
+# Read by .datacore/lib/agent_lanes.py; applied by claim_gate.check_claim to
+# every ledger claim (task W5). This is the ONE place lane budgets live.
+#
+# The lane of an item is read from the item: an explicit `lane:`, its `role:`,
+# its `:AI:<kind>:` tags, or a `priority:` id listed below. An item with none
+# of these is the assignee's; an unaddressed one is nobody's. A role, tag or
+# priority id may be in one lane only. An agent not named here is not gated.
+#
+# Roles are the venture roles (venture.yaml `roles:`, owned per AGT-1:
+# cio -> tris, cmo/comms -> data, coo/cto -> miles) and the role templates in
+# .datacore/templates/roles/ that the role-pool work loads for an unaddressed
+# task; a lane is the set of roles one agent may take.
+#
+# `priorities:` maps the owner's quarterly priority ids to a lane. The ids
+# live in the owner's private priorities file and are NOT copied into this
+# public file: the owner adds the ones they want routed.
+version: 1
+period: day          # day (UTC) | week (ISO, from Monday) | month
+lanes: {}

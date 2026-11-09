@@ -1,0 +1,131 @@
+{{- $e := .Values.egress -}}
+{{- $sshIps := list -}}{{- $sshNames := list -}}{{- $sshPorts := list -}}
+{{- range $e.allowSsh -}}
+{{- if regexMatch "^[0-9.:]+$" .host -}}{{- $sshIps = append $sshIps .host -}}{{- else -}}{{- $sshNames = append $sshNames .host -}}{{- end -}}
+{{- $sshPorts = append $sshPorts (toString .port) -}}
+{{- end -}}
+{{- $httpIps := list -}}{{- $httpNames := list -}}{{- $httpPorts := list "80" -}}
+{{- range $e.allowHttp -}}
+{{- if regexMatch "^[0-9.:]+$" .host -}}{{- $httpIps = append $httpIps .host -}}{{- else -}}{{- $httpNames = append $httpNames .host -}}{{- end -}}
+{{- $httpPorts = append $httpPorts (toString .port) -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-config
+  namespace: {{ .Values.sharedNamespace }}
+data:
+  squid.conf: |
+    http_port 3128
+    pid_filename none
+    cache deny all
+    access_log stdio:/dev/stdout
+    cache_log stdio:/dev/stderr
+    logfile_rotate 0
+    # The proxy is the agents' only way out; it never forwards their identity.
+    forwarded_for delete
+    via off
+    acl CONNECT method CONNECT
+    acl ssl_ports port 443
+    acl deny_nets dst {{ join " " $e.denyNets }}
+    {{- if $e.allowDomains }}
+    acl allowed_domains dstdomain {{ join " " $e.allowDomains }}
+    {{- end }}
+    {{- if $sshIps }}
+    acl allowed_ssh dst {{ join " " $sshIps }}
+    {{- end }}
+    {{- if $sshNames }}
+    acl allowed_ssh_names dstdomain {{ join " " $sshNames }}
+    {{- end }}
+    {{- if $e.allowSsh }}
+    acl ssh_ports port {{ join " " (uniq $sshPorts) }}
+    {{- end }}
+    {{- if $httpIps }}
+    acl allowed_http dst {{ join " " $httpIps }}
+    {{- end }}
+    {{- if $httpNames }}
+    acl allowed_http_names dstdomain {{ join " " $httpNames }}
+    {{- end }}
+    acl http_ports port {{ join " " (uniq $httpPorts) }}
+    {{- if $sshIps }}
+    http_access allow CONNECT ssh_ports allowed_ssh
+    {{- end }}
+    {{- if $sshNames }}
+    http_access allow CONNECT ssh_ports allowed_ssh_names
+    {{- end }}
+    {{- if $httpIps }}
+    http_access allow !CONNECT http_ports allowed_http
+    {{- end }}
+    {{- if $httpNames }}
+    http_access allow !CONNECT http_ports allowed_http_names
+    {{- end }}
+    {{- if $e.allowDomains }}
+    http_access allow CONNECT ssl_ports allowed_domains
+    http_access allow !CONNECT allowed_domains
+    {{- end }}
+    http_access deny deny_nets
+    {{- if $e.openHttps }}
+    # Research mode: any public https destination, logged.
+    http_access allow CONNECT ssl_ports
+    http_access allow !CONNECT http_ports
+    {{- end }}
+    http_access deny all
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress
+  namespace: {{ .Values.sharedNamespace }}
+  labels: {app.kubernetes.io/name: egress, app.kubernetes.io/part-of: datacore-fleet}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: egress}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: egress}
+      annotations:
+        checksum/config: {{ $e | toJson | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: squid
+          image: {{ $e.image }}
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 3128, name: proxy}]
+          readinessProbe:
+            tcpSocket: {port: 3128}
+            periodSeconds: 10
+          resources: {{- toYaml $e.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - {name: config, mountPath: /etc/squid/squid.conf, subPath: squid.conf, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: egress-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress
+  namespace: {{ .Values.sharedNamespace }}
+spec:
+  selector: {app.kubernetes.io/name: egress}
+  ports: [{port: 3128, targetPort: 3128, protocol: TCP, name: proxy}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-ingress-from-team
+  namespace: {{ .Values.sharedNamespace }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: egress}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .Values.teamNamespace }}}
+      ports:
+        - {protocol: TCP, port: 3128}

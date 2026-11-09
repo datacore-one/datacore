@@ -151,6 +151,8 @@ Long sessions get compacted — earlier conversation turns are summarized, losin
 
 **Store this inventory internally** — every subsequent step draws from it. Without this step, wrap-up misses work done before compaction or in external directories.
 
+**This is enforced.** The archive records every day the owner wrote on (`owner_days`) and how many compactions happened (`compactions`); `meta` prints both. The §10 `report` refuses a narrative whose `phases` do not cover every one of those days, so a wrap-up built from the latest compaction summary alone cannot reach the journal.
+
 ### 0a-bis. Detect Focus Mode
 
 Check if running from a project folder inside a Datacore space:
@@ -996,7 +998,12 @@ identical in Claude Code, Codex, Cursor and any other harness that can run Pytho
 2. **Write the judgement as JSON** to a scratch file. `wrap_up_report.py`'s
    docstring lists the keys. Required: `goal`, `done`, `next`, `meta.arc`,
    `meta.observation`, `social.{personal_x, project_x, linkedin}`, and `checklist`
-   (exactly 12 rows: the §12 audit). Optional: `decisions`, `rejected`,
+   (exactly 12 rows: the §12 audit). **`phases` is required** whenever the session
+   archive shows the owner writing on more than one day or any compaction: one
+   `{dates, summary}` per stretch, and together they must cover every day in
+   `meta`'s `owner_days`. Build them from the owner's messages and every compaction
+   summary in the transcript (§0a), not from the latest summary alone; `report`
+   refuses and names the uncovered days. Optional: `decisions`, `rejected`,
    `continuation`, `tasks_completed`, `learnings`, `engrams`, `gtd_proposals`,
    `delegations`, `coverage`, `files`, `artifacts`, `pulse`, `title`.
 

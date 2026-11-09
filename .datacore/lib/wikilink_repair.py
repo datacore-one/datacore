@@ -278,7 +278,7 @@ def main():
     mode.add_argument('--dry-run', action='store_true', help='print planned rewrites (default)')
     mode.add_argument('--apply', action='store_true', help='rewrite RESOLVABLE links')
     mode.add_argument('--classify', action='store_true', help='TSV of every broken link and its class')
-    ap.add_argument('spaces', nargs='+', help='space directories, e.g. 1-datafund')
+    ap.add_argument('spaces', nargs='+', help='space directories, e.g. 1-teamspace')
     args = ap.parse_args()
 
     for s in args.spaces:

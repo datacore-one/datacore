@@ -256,15 +256,16 @@ def test_dip_0005_install_manifest_and_lockfile_parse():
 
 
 # --- DIP-0017: Outbox & Archive Pattern ------------------------------------
-# Normative: every space routes content out through 4-outbox/. A space without
-# one has no exit path, so content either stays or is moved by hand.
+# Normative (amended 2026-10-18): 4-archive/ is a space's single exit folder.
+# The planned rename to 4-outbox/ was dropped by the owner; a 4-outbox/ next
+# to it splits archived content across two places.
 
 @pytest.mark.parametrize("space", SPACES, ids=lambda p: p.name)
-def test_dip_0017_every_space_has_an_outbox(space):
-    outbox = space / "4-outbox"
-    assert outbox.is_dir(), (
-        f"{space.name} has no 4-outbox/. DIP-0017 makes it the single exit "
-        f"path; without it content leaves by hand or not at all.")
+def test_dip_0017_no_space_has_a_second_exit_folder(space):
+    assert not (space / "4-outbox").exists(), (
+        f"{space.name} has a 4-outbox/. DIP-0017 (amended 2026-10-18) keeps "
+        f"4-archive/ as the single exit; fold it in with "
+        f".datacore/lib/merge_outbox_into_archive.py.")
 
 
 # --- DIP-0029: Command-Scoped Engram Recall --------------------------------

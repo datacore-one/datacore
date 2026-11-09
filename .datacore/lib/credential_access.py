@@ -368,6 +368,44 @@ def replication_warning(entry: dict) -> str | None:
     return None
 
 
+#: Which (credential, consumer, value) reads were attested today, on this host.
+#: Short-lived scripts that fetch the same credential every few seconds wrote
+#: ~12,000 identical attestations a day and pushed a telemetry log past the
+#: 50 MB sharing limit (2026-10-24); the first read of the day answers the
+#: audit question, and a new consumer, value or day is attested again.
+READ_ATTEST_STATE = Path.home() / ".datacore" / "state" / "credential-read-attested.json"
+
+
+def _today() -> str:
+    import datetime as _dt
+    return _dt.date.today().isoformat()
+
+
+def _first_read_today(ref: str, consumer: str, fp: str) -> bool:
+    """True when this read must be attested; records it. Never blocks access:
+    an unreadable or unwritable record means attest."""
+    import json
+    key, today = f"{ref}|{consumer}|{fp}", _today()
+    try:
+        seen = json.loads(READ_ATTEST_STATE.read_text(encoding="utf-8"))
+        if not isinstance(seen, dict):
+            seen = {}
+    except (OSError, ValueError):
+        seen = {}
+    if seen.get(key) == today:
+        return False
+    seen = {k: v for k, v in seen.items() if v == today}
+    seen[key] = today
+    try:
+        READ_ATTEST_STATE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = READ_ATTEST_STATE.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(seen, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, READ_ATTEST_STATE)
+    except OSError:
+        pass
+    return True
+
+
 def get_value(name: str, *, consumer: str = "") -> str:
     """The value, attested. Raises rather than returning a value it guessed at."""
     c = _entry(name)
@@ -382,10 +420,10 @@ def get_value(name: str, *, consumer: str = "") -> str:
     else:
         value = _read_var(path, var)
 
-    attest("credential.read",
-           ref=str(c.get("id") or name),
-           detail=f"{var} from {path} ({why}) by {consumer or 'unspecified'} "
-                  f"-> {fingerprint(value or '')}")
+    ref, fp = str(c.get("id") or name), fingerprint(value or "")
+    if _first_read_today(ref, consumer or "unspecified", fp):
+        attest("credential.read", ref=ref,
+               detail=f"{var} from {path} ({why}) by {consumer or 'unspecified'} -> {fp}")
 
     if value is None:
         raise CredentialUnresolvable(

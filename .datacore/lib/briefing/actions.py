@@ -56,7 +56,7 @@ from pathlib import Path
 
 from ledger.events import Event
 from ledger.fold import fold
-from ledger.log import EventLog, read_events
+from ledger.log import EventLog, read_events, read_task_events
 from ledger.policy import Policy, PolicyError, guarded_append
 from file_utils import file_lock
 
@@ -107,6 +107,18 @@ class MaterializeResult:
     created: list[Event] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     blocked: list[tuple[str, str]] = field(default_factory=list)
+    #: Where the new items went beyond this copy (plan phase D2): "sent" (the
+    #: hub holds them, so a claimer reading the hub sees them on its next tick,
+    #: with no git publish), "buffered" (hub unreachable: git carries them, as
+    #: before), "refused: <code>", or "off" (no hub space, no hub named, or
+    #: nothing created).
+    hub: str = "off"
+    #: What the up-front fold read: "hub" or "git".
+    read_from: str = "git"
+
+
+#: `transport` default: the hub named by DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID.
+FROM_ENV = object()
 
 
 def materialize(
@@ -114,11 +126,12 @@ def materialize(
     space_dir: Path,
     actor: str,
     policy: Policy | None = None,
+    transport=FROM_ENV,
 ) -> MaterializeResult:
     """Turn `items` (each `{"text": str, "effects": [...]?}`) into ledger
     `item.create` events, one per item, skipping anything already known.
 
-    Folds `read_events(space_dir)` exactly ONCE, up front -- not once per
+    Folds `read_task_events(space_dir)` exactly ONCE, up front -- not once per
     item -- so the whole call sees one consistent snapshot of existing
     item ids. For each item, in order:
 
@@ -149,18 +162,37 @@ def materialize(
     concurrent calls cannot both see an id as absent and both create it.
     Like the policy lock, it serializes cooperating processes on this host
     only; another host is reconciled by the fold's create-is-a-no-op rule.
+
+    IN A HUB SPACE (plan 2026-10-31, phase D2) the up-front fold reads the
+    hub's admitted log when it answers (`ledger.hub.task_events_hub_first`),
+    and the new items are then sent to the hub (`send_own_log`): a claimer
+    that reads the hub can claim them on its next tick, with no git publish
+    in between. `transport`: a hub transport, None for none, or by default
+    the hub DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID name. An unreachable hub
+    changes nothing: the items are in this writer's log and git carries them.
     """
+    from ledger.hub import send_own_log, transport_from_env
+    if transport is FROM_ENV:
+        transport = transport_from_env(space_dir, "briefing-materialize")
     lock_target = Path(space_dir).resolve() / ".datacore" / MATERIALIZE_LOCK[0] / MATERIALIZE_LOCK[1]
     with file_lock(lock_target, timeout=MATERIALIZE_LOCK_TIMEOUT):
-        return _materialize_locked(items, space_dir, actor, policy)
+        result = _materialize_locked(items, space_dir, actor, policy, transport)
+    if result.created:
+        result.hub = send_own_log(space_dir, actor, transport)
+    return result
 
 
-def _materialize_locked(items, space_dir, actor, policy) -> MaterializeResult:
-    state = fold(read_events(space_dir))
+def _materialize_locked(items, space_dir, actor, policy, transport=None) -> MaterializeResult:
+    # hub spaces: admission + policy (Codex re-audit, finding 2); the hub's
+    # admitted log first, the git copy when it does not answer (phase D2)
+    from ledger.hub import authoritative_events, task_events_hub_first
+    raw, read_from = task_events_hub_first(space_dir, transport)
+    events, fold_inputs = authoritative_events(space_dir, raw)
+    state = fold(events, **fold_inputs)
     seen_ids: set[str] = set(state.items.keys())
 
     log = EventLog(space_dir, actor)
-    result = MaterializeResult()
+    result = MaterializeResult(read_from=read_from)
 
     for item in items:
         text = item["text"]
@@ -191,6 +223,15 @@ def _materialize_locked(items, space_dir, actor, policy) -> MaterializeResult:
         assignee = item.get("assignee")
         if assignee:
             payload["assignee"] = assignee
+        # `runner` names the executor that takes the item (plan 2026-10-31,
+        # phase E: "nightshift" is Miles's hourly run; the claim loop leaves such
+        # an item to it). `spec` is the task's specification as the runner reads
+        # it (tags, properties such as DONE_WHEN and SURFACE, body), so a task a
+        # person adds to nightshift.org keeps it on the way into the ledger.
+        # Forwarded like the fields above: present only when supplied.
+        for key in ("runner", "spec"):
+            if item.get(key):
+                payload[key] = item[key]
 
         try:
             event = guarded_append(log, "item.create", payload, policy=policy, space_dir=space_dir)

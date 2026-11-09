@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 LIB = Path(__file__).resolve().parents[1]
 INSTALLER = LIB / "agent_host_setup.sh"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
@@ -54,13 +56,20 @@ done
 
 
 @pytest.mark.production
-@pytest.mark.parametrize("host", ["winston", "nightshift", "hermes", "plur-claw"])
+@pytest.mark.parametrize("host", ["box", "nightshift", "hermes", "plur-claw"])
 def test_every_machine_has_every_protection(host):
-    try:
-        out = subprocess.run(SSH + [host, _PROBE], capture_output=True, text=True, timeout=45)
-    except subprocess.TimeoutExpired:
-        pytest.fail(f"{host}: could not look (timeout) -- could not tell is not a pass")
-    lines = out.stdout.splitlines()
-    assert any(l.startswith("GUARD") for l in lines), f"{host}: could not look: {out.stderr[-200:]}"
-    missing = [l for l in lines if l.endswith("NONE")]
-    assert missing == [], f"{host} lacks protections the others have: {missing}"
+    # Where the machine works (roster): its host, its k3s pod, or both. A pod's
+    # schedule is its supercronic file; the OS update guard belongs to the node
+    # (a container image is never updated in place), checked on the host.
+    for pl in fleet_reach.places(host):
+        probe = _PROBE if pl.kind != "pod" else (
+            _PROBE.split("[ -f /etc/needrestart")[0] + 'echo "GUARD node"\n'
+            + fleet_reach.schedule_listing(pl) + ' | grep -q -e job_verify -e job-verify && echo "SCHED ok" || echo "SCHED NONE"\n')
+        try:
+            out = fleet_reach.run_at(pl, probe, timeout=45)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"{host} ({pl.kind}): could not look (timeout) -- could not tell is not a pass")
+        lines = out.stdout.splitlines()
+        assert any(l.startswith("GUARD") for l in lines), f"{host} ({pl.kind}): could not look: {out.stderr[-200:]}"
+        missing = [l for l in lines if l.endswith("NONE")]
+        assert missing == [], f"{host} ({pl.kind}) lacks protections the others have: {missing}"

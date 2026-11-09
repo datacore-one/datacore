@@ -75,7 +75,14 @@ def cmd_emit(space: Path, force: bool) -> int:
         print(f"  warning: '{actor}' is not the sequencer '{seq}'; readers ignore "
               f"this seal unless DATACORE_SEQUENCER={actor} where they run.")
 
-    events = read_events(space)
+    # A HUB SPACE IS SEALED BY ITS HUB (round 5, amendment 5): over admitted
+    # events, with its fold inputs (`ledger.hub.Hub.seal`). A seal written here
+    # would fold whatever a writer merely wrote.
+    from ledger.hub import authoritative_events, load_config
+    if load_config(space) is not None:
+        print(f"refusing: {space.name} has a hub; the hub seals it (over admitted events), not this command")
+        return 2
+    events, _kw = authoritative_events(space)
     if not events:
         print(f"  {space.name}: nothing to seal")
         return 0
@@ -107,7 +114,10 @@ def cmd_emit(space: Path, force: bool) -> int:
 
 
 def cmd_status(space: Path) -> int:
-    ok, detail = verify_seal(read_events(space))
+    # Through admission (round 5, amendment 5): a hub space's seal is judged
+    # over admitted events only, as every other decision reader judges it.
+    from ledger.hub import seal_status
+    ok, detail = seal_status(space)
     mark = {True: "ok  ", False: "FAIL", None: "n-a "}[ok]
     print(f"  {mark} {space.name:<14} {detail}")
     return 0 if ok is True else (2 if ok is None else 1)

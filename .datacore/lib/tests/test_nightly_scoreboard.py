@@ -319,10 +319,21 @@ def test_a_red_that_passes_when_run_again_names_what_the_first_run_said(tmp_path
     "AssertionError: machines not on current main: box: could not check (UNREACHABLE timeout)",
     "AssertionError: could not tell (unreachable): ['box', 'hermes']",
     "Failed: box: could not read the crontab (timeout) -- could not tell is not a pass",
+    # Winston's pod (2026-11-05): its egress proxy refuses ssh's ProxyCommand to other hosts.
+    'Failed: winston: could not read the crontab: nc: Proxy error: "HTTP/1.1 403 Forbidden"',
+    'AssertionError: could not read Hermes\'s cap: nc: Proxy error: "HTTP/1.1 403 Forbidden"',
 ])
 def test_an_ssh_timeout_or_could_not_tell_is_could_not_run(line):
     b = board(WED, {"SYN-4": "red"}, {"SYN-4": [fail("s.py", "t", line)]})
     assert b["promises"]["SYN-4"]["state"] == "could-not-run"
+
+
+def test_a_403_that_is_not_the_ssh_proxy_stays_red():
+    """Only the proxy refusing the connection means 'host unreachable'; a service
+    answering 403 is an answer, and a red."""
+    line = "AssertionError: GitHub said HTTP/1.1 403 Forbidden for the release"
+    b = board(WED, {"SYN-4": "red"}, {"SYN-4": [fail("s.py", "t", line)]})
+    assert b["promises"]["SYN-4"]["state"] == "red"
 
 
 def test_a_promise_whose_every_eval_file_lacks_a_need_could_not_run_without_a_rerun():
@@ -721,3 +732,65 @@ def test_the_agent_board_keeps_its_own_history_and_alerts_on_what_turned_red(tmp
     assert wants and wants[0][1] is True
     assert wants[0][0]("CAP-4") is False, "a red agent eval must not be run a second time for its line (cost)"
     assert out.strip().splitlines()[-1].startswith("agent-evals: ")
+
+
+# ---- only the promises relevant to this machine (owner, 2026-10-30) ------------
+
+ROSTER2 = ROSTER.replace("  nightshift:\n", """  dayshift:
+    kind: workstation
+    ledger_actors: [dayshift, miles, nightshift]
+    access: {actor: dayshift, hostname: dayshift}
+  nightshift:
+""", 1)  # the real roster lists miles among the workstation's writers too
+
+
+def test_a_machine_need_is_met_only_on_that_machine(tmp_path):
+    """A check about the Mac (its launchd jobs, its transcript mirror) applies on the Mac
+    only; on the overnight host it reads could-not-run, never red."""
+    import needs_gate as ng
+    root = _roster(tmp_path, ROSTER2)
+    assert ng.met("machine:mac", root, {"DATACORE_ACTOR": "mac"})
+    assert not ng.met("machine:mac", root, {"DATACORE_ACTOR": "miles"})
+    assert not ng.met("machine:mac", root, {"DATACORE_ACTOR": "dayshift"})
+    assert not ng.met("machine:mac", tmp_path / "bare", {"DATACORE_ACTOR": "mac"})
+
+
+def test_a_workstation_need_is_met_where_a_person_works_not_on_an_agent_host(tmp_path):
+    """A check of the owner's interactive session set-up (demo redaction, edits of an eval
+    from a live session) applies on a workstation, not under an agent's account."""
+    import needs_gate as ng
+    root = _roster(tmp_path, ROSTER2)
+    assert ng.met("workstation", root, {"DATACORE_ACTOR": "mac"})
+    assert ng.met("workstation", root, {"DATACORE_ACTOR": "dayshift"})
+    assert not ng.met("workstation", root, {"DATACORE_ACTOR": "miles"})
+    assert not ng.met("workstation", root, {"DATACORE_ACTOR": "nightshift"})
+
+
+def test_a_red_that_stays_red_keeps_its_last_known_reason_with_its_date(tmp_path, monkeypatch):
+    """A red already reported is not rerun, but the board still says why it is red."""
+    hist = [board("2026-09-29", {"CAP-4": "red"}, {"CAP-4": [fail("t.py", "test_x", "AssertionError: two entries")]})]
+    _sent, _rc, state = night(tmp_path, monkeypatch, hist, raw({"CAP-4": "red"}))
+    e = json.loads((state / f"board-{WED}.json").read_text())["promises"]["CAP-4"]
+    assert e["state"] == "red" and "two entries" in e["why"] and "2026-09-29" in e["why"]
+
+
+def test_a_red_whose_reason_was_never_recorded_is_rerun_for_it(tmp_path, monkeypatch):
+    hist = [board("2026-09-29", {"CAP-4": "red", "DAY-2": "red"}, {"CAP-4": [fail("t.py", "t", "x")]})]
+    hist[0]["promises"]["DAY-2"].pop("why", None)
+    asked = {}
+
+    def fake(want=None):
+        asked["want"] = want
+        return raw({"CAP-4": "red", "DAY-2": "red"})
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "board-2026-09-29.json").write_text(json.dumps(hist[0]))
+    monkeypatch.setattr(pn, "STATE_DIR", state)
+    monkeypatch.setattr(pn, "run_board", fake)
+    monkeypatch.setattr(pn, "unmet_needs", lambda: {})
+    monkeypatch.setattr(pn, "promise_texts", lambda: TEXTS)
+    monkeypatch.setattr(pn, "send_to_firm", lambda text: (True, "sent"))
+    monkeypatch.setattr(pn, "today", lambda: WED)
+    pn.main([])
+    assert asked["want"]("DAY-2") is True     # red with no reason on record: rerun
+    assert asked["want"]("CAP-4") is False    # red with its reason on record: carried forward

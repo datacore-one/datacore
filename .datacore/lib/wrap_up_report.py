@@ -21,6 +21,11 @@ Claude Code) renders as "unavailable (<reason>)", never as a blank or a zero.
 The narrative JSON (all keys optional unless marked REQUIRED):
 
   goal (REQUIRED)            str
+  phases                     [{dates, summary}] — dates "YYYY-MM-DD" or
+                             "YYYY-MM-DD..YYYY-MM-DD". REQUIRED when the
+                             archive shows the owner writing on more than one
+                             day, or any compaction: together the phases must
+                             cover every day the owner wrote on.
   done (REQUIRED)            [str]
   decisions                  [str]
   rejected                   str
@@ -44,7 +49,7 @@ The narrative JSON (all keys optional unless marked REQUIRED):
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 HEAVY = "═" * 51
@@ -90,6 +95,43 @@ def validate(n: dict) -> list[str]:
     if rows and len(rows) != CHECKLIST_STEPS:
         missing.append(f"checklist: {len(rows)} rows, need exactly {CHECKLIST_STEPS} (one per step)")
     return missing
+
+
+def _phase_days(dates: str) -> set[str]:
+    """Every day a phase's `dates` names. ValueError when it names none."""
+    a, _, b = str(dates).partition("..")
+    start, end = date.fromisoformat(a.strip()), date.fromisoformat((b or a).strip())
+    if end < start:
+        raise ValueError(dates)
+    return {(start + timedelta(days=i)).isoformat() for i in range((end - start).days + 1)}
+
+
+def phase_problems(n: dict, archive: dict) -> list[str]:
+    """The narrative must account for the whole session, not the last compaction.
+
+    2026-11-01: a nine-day session was wrapped up from the latest compaction
+    summary alone; three days of work got no journal entry. The archive knows
+    which days the owner wrote on, so coverage is checked, not trusted. An
+    archive written before `owner_days` existed cannot be judged here.
+    """
+    days, compactions = archive.get("owner_days"), archive.get("compactions") or 0
+    if days is None:
+        return []
+    phases = n.get("phases") or []
+    if not phases:
+        if len(days) > 1 or compactions:
+            return [f"phases: the owner wrote on {len(days)} days ({', '.join(days)}) with "
+                    f"{compactions} compactions; account for each stretch — read the "
+                    "transcript's compaction summaries and the owner's messages"]
+        return []
+    covered: set[str] = set()
+    for ph in phases:
+        try:
+            covered |= _phase_days(ph.get("dates"))
+        except (ValueError, TypeError, AttributeError):
+            return [f"phases: unreadable dates {ph!r} — use YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD"]
+    gap = [d for d in days if d not in covered]
+    return [f"phases: owner days not covered: {', '.join(gap)}"] if gap else []
 
 
 def _section(title: str) -> list[str]:
@@ -147,12 +189,12 @@ def checklist_verified(rows: list[dict]) -> int:
 
 def render(n: dict, mech: dict) -> str:
     """The consolidated report, laid out exactly as commands/wrap-up.md §10."""
-    problems = validate(n)
+    archive = mech.get("archive_meta") or {}
+    problems = validate(n) + phase_problems(n, archive)
     if problems:
         raise ReportInputError("; ".join(problems))
 
     meta_step, audit, finalize = mech.get("meta"), mech.get("audit"), mech.get("finalize")
-    archive = mech.get("archive_meta") or {}
     rows = n["checklist"]
     start, end = archive.get("started_at"), archive.get("ended_at")
     if start and end:
@@ -170,7 +212,12 @@ def render(n: dict, mech: dict) -> str:
 
     # 1
     out += _section(SECTIONS[0])
-    out += [f"Goal: {n['goal']}", "", "Done:"] + _bullets(n["done"])
+    out += [f"Goal: {n['goal']}"]
+    if n.get("phases"):
+        out += ["", f"Phases ({len(archive.get('owner_days') or [])} owner days, "
+                    f"{archive.get('compactions') or 0} compactions):"]
+        out += _bullets([f"{p['dates']}: {p.get('summary', '')}" for p in n["phases"]])
+    out += ["", "Done:"] + _bullets(n["done"])
     if n.get("decisions"):
         out += ["", "Decisions:"] + _bullets(n["decisions"])
     if n.get("rejected"):

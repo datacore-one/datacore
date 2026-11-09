@@ -144,10 +144,10 @@ _LISTENERS: dict = {}
 #: Environment the sandbox adds to every job, each because a job WAITS in real
 #: time for something the sandbox never delivers. Listed in the report.
 SANDBOX_ENV = {
-    # cos_oura_gate.py polls every 10 min until 07:00 UTC for the Mac's health
+    # cos_oura_gate.py polls every 10 min until 09:00 local for the morning's health
     # reading, then fails open. The fail-open path is what runs; the three
     # real hours of polling are skipped.
-    "OURA_GATE_DEADLINE_UTC": "00:00",
+    "COS_HEALTH_GATE_SANDBOX_DEADLINE_UTC": "00:00",
 }
 
 #: Jobs whose real duration is longer than the harness's default limit

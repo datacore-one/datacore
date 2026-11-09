@@ -12,9 +12,10 @@ jobs and no sequencer.
 Three rules hold everywhere on this page:
 
 - **History is never rewritten.** No step edits or deletes an event. A wrong
-  event is cancelled by a void record that is itself an event (section 8.3).
+  event is corrected by a new forward event that names it (section 8.3).
 - **There are no exceptions files.** Nothing outside the ledger excuses an
-  event; verify accepts the ledger and its void records, nothing else.
+  event; verify accepts the ledger (and the void records already in it from
+  before 2026-11-01), nothing else.
 - **Signing is not switched on yet.** It comes later as one step, after the
   verifier judges single events. Until then the write gate (section 4) keeps
   hand-written lines out. Leave `DATACORE_LEDGER_SIGN` unset.
@@ -226,25 +227,21 @@ The local-only events stay readable at `refs/fork-evidence/<date>`. Re-create
 what they did with `ledger_cli.py append`; never copy their lines back. If the
 next append on this machine is refused with StaleLogError, follow 8.1.
 
-### 8.3 Voiding a bad record
+### 8.3 Correcting a bad record
 
 You see an event that is wrong: a task created by mistake, a completion that did
 not happen, a line the write gate would have refused that reached the remote
 anyway.
 
-It is never edited or deleted. A person other than its writer cancels it with a
-void record, which is itself an event and says why. Any declared person may
-void someone else's event; nobody may void their own.
+It is never edited or deleted, and since 2026-11-01 it is not cancelled either
+(DIP-0034 amendment of 2026-10-31: no voids, corrections are forward only).
+`ledger_cli.py void` is refused and names the way to correct it: a new forward
+event that names the wrong one and says why -- for a task a new `item.update`
+or `item.reopen`, otherwise a `ledger.compensate` (log, seq, hash, reason)
+once the event is sealed.
 
-```bash
-grep -n '"seq":<n>,' "$SPACE/.datacore/events/<writer>.jsonl" | head -1
-python3 "$LIB/ledger_cli.py" void --space "$SPACE" --log <writer>.jsonl --seq <n> --reason '<why it is wrong>'
-python3 "$LIB/ledger_cli.py" verify --space "$SPACE"
-```
-
-verify then reports the event as voided (`(1 voided record(s))`). If `void`
-refuses, the refusal says why (your own event, not a declared person, the event
-changed): that is the answer, not an obstacle.
+Void records written before 2026-11-01 stay in the history and keep their
+effect: verify still reports them (`(1 voided record(s))`).
 
 ### 8.4 Lost or rotated key
 

@@ -32,6 +32,13 @@ Need vocabulary:
                     cannot ssh to the others (2026-09-30); a roster that names
                     no console declares no machine that reads the fleet
     agent           real agent sessions are allowed (DATACORE_AGENT_EVALS=1)
+    machine:<name>  this machine is the roster's server <name> (by its declared
+                    actor): a check about one machine (the mac's launchd jobs, its
+                    transcript mirror) applies there only (owner, 2026-10-30: run
+                    only the promises relevant to each machine)
+    workstation     this machine is a roster server of kind `workstation`, where a
+                    person works: checks of the owner's interactive session set-up
+                    do not apply under an agent's account on a shared host
 """
 from __future__ import annotations
 
@@ -41,7 +48,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DECLARED = ROOT / ".datacore" / "config" / "test-needs.yaml"
-KINDS = ("module", "file", "role", "cli", "python", "fleet", "agent")
+KINDS = ("module", "file", "role", "cli", "python", "fleet", "agent", "machine", "workstation")
 
 
 def _sibling(name: str):
@@ -106,7 +113,51 @@ def met(need: str, root: Path = ROOT, env=None) -> bool:
         return is_console(root, env)
     if k == "agent":
         return env.get("DATACORE_AGENT_EVALS") == "1"
+    if k == "machine":
+        return this_machine(root, env)[0] == arg
+    if k == "workstation":
+        return (this_machine(root, env)[1] or {}).get("kind") == "workstation"
     raise ValueError(f"unknown need {need!r}; one of {', '.join(KINDS)}")
+
+
+def _roster(root: Path):
+    roster = root / ".datacore" / "registry" / "infrastructure.yaml"
+    try:
+        import yaml
+        doc = yaml.safe_load(roster.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 -- no readable roster: no machines declared
+        return roster, {}
+    return roster, doc if isinstance(doc, dict) else {}
+
+
+def this_machine(root: Path = ROOT, env=None) -> tuple[str | None, dict | None]:
+    """(roster server name, its entry) for the machine running this, by its declared
+    actor (DATACORE_ACTOR, else actor_identity: ~/.datacore/identity.env, then the
+    roster's hostname row); (None, None) when it cannot be told. Declared, never probed."""
+    env = os.environ if env is None else env
+    roster, doc = _roster(root)
+    servers = doc.get("servers") or {}
+    if not isinstance(servers, dict) or not servers:
+        return None, None
+    actor = str(env.get("DATACORE_ACTOR") or "").strip().lower()
+    if not actor:
+        try:
+            actor_identity = _sibling("actor_identity")
+            actor = str(actor_identity.resolve(infra=roster)[0] or "").lower()
+        except Exception:  # noqa: BLE001 -- an unknown machine is no machine
+            return None, None
+    if not actor:
+        return None, None
+    rows = [(str(n), c) for n, c in servers.items() if isinstance(c, dict)]
+    # A machine's own name or declared actor wins over a writer it merely hosts: the
+    # workstation lists miles among its ledger writers, but miles is the overnight host.
+    for name, cfg in rows:
+        if actor in {name.lower(), str((cfg.get("access") or {}).get("actor") or "").lower()} - {""}:
+            return name, cfg
+    for name, cfg in rows:
+        if actor in {str(a).lower() for a in cfg.get("ledger_actors") or []} - {""}:
+            return name, cfg
+    return None, None
 
 
 def is_console(root: Path = ROOT, env=None) -> bool:
@@ -114,32 +165,12 @@ def is_console(root: Path = ROOT, env=None) -> bool:
 
     Declared, never probed: an ssh probe would turn a host that is really down
     into "could not run" on the one machine whose job is to notice it, and one
-    host (box) answers a non-interactive ssh with an interactive check. This
-    machine is known by its declared actor (DATACORE_ACTOR, else
-    actor_identity: ~/.datacore/identity.env, then the roster's hostname row).
+    host (box) answers a non-interactive ssh with an interactive check.
     """
-    env = os.environ if env is None else env
-    roster = root / ".datacore" / "registry" / "infrastructure.yaml"
-    try:
-        import yaml
-        doc = yaml.safe_load(roster.read_text(encoding="utf-8")) or {}
-    except Exception:  # noqa: BLE001 -- no readable roster: no fleet to read
-        return False
-    roles = doc.get("roles") if isinstance(doc, dict) else None
+    _roster_path, doc = _roster(root)
+    roles = doc.get("roles")
     console = str((roles or {}).get("console") or "") if isinstance(roles, dict) else ""
-    cfg = (doc.get("servers") or {}).get(console) if console else None
-    if not isinstance(cfg, dict):
-        return False
-    actor = str(env.get("DATACORE_ACTOR") or "").strip().lower()
-    if not actor:
-        try:
-            actor_identity = _sibling("actor_identity")
-            actor = str(actor_identity.resolve(infra=roster)[0] or "").lower()
-        except Exception:  # noqa: BLE001 -- an unknown machine is not the console
-            return False
-    names = {console.lower(), str((cfg.get("access") or {}).get("actor") or "").lower(),
-             *(str(a).lower() for a in cfg.get("ledger_actors") or [])}
-    return bool(actor) and actor in names - {""}
+    return bool(console) and this_machine(root, env)[0] == console
 
 
 def unmet_by_test(root: Path = ROOT, env=None, entries=None) -> dict[str, list[str]]:

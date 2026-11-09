@@ -10,7 +10,7 @@ Usage:
     python3 ledger_cli.py verify --space <dir> [--strict]
     python3 ledger_cli.py items --space <dir> [--status <s>] [--owner <o>]
     python3 ledger_cli.py balances --space <dir>
-    python3 ledger_cli.py void --space <dir> --log <writer>.jsonl --seq <n> --reason '<why>' [--actor <a>]
+    python3 ledger_cli.py void ...   (retired 2026-11-01: refused, names the forward correction)
     python3 ledger_cli.py init --space <dir> --actor <name> [--email <git email>]
     python3 ledger_cli.py principals add --actor <name> [--kind human|agent] [--email <git email>]
     python3 ledger_cli.py doctor [--space <dir>]
@@ -69,7 +69,7 @@ def _default_actor() -> str:
 
 
 #: Subcommands that append, and so need a writer identity.
-WRITERS = ("append", "approve", "void")
+WRITERS = ("append", "approve", "close", "void")
 
 
 def _json_dict(raw: str) -> dict:
@@ -125,8 +125,45 @@ def cmd_approve(args):
     print(json.dumps({"approval_ref": event.hash, "payload_hash": event.payload["payload_hash"]}))
 
 
+def cmd_close(args: argparse.Namespace) -> None:
+    """Close one task in the ledger: the conditional `item.dismiss` org ingest writes.
+
+    For when the space's projection cannot be edited (its ingest is stopped, or
+    the file is stale or missing): on 2026-10-29 25 closes in 5-plur had to be
+    hand-written. Pinned to the item's current payload like an ingested close,
+    and written through the write guard.
+    """
+    from ledger.edits import EditConflict, conditional_payload, require_edit_protocol
+    from ledger.hub import authoritative_state
+    space = _require_space(args.space)
+    try:
+        version = require_edit_protocol(space)
+    except EditConflict as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    item = authoritative_state(space).items.get(args.id)
+    if item is None:
+        print(f"error: no item {args.id} in {space}", file=sys.stderr)
+        sys.exit(1)
+    if item.status in ("dismissed", "archived", "verified"):
+        print(f"error: {args.id} is already closed ({item.status})", file=sys.stderr)
+        sys.exit(1)
+    payload = conditional_payload(item, {"kind": args.kind, "reason": args.reason}, terminal=True,
+                                  version=version)
+    try:
+        event = guarded_append(EventLog(space, args.actor or _default_actor()), "item.dismiss", payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"hash": event.hash, "hlc": event.hlc, "closed": args.id, "kind": args.kind}))
+
+
 def cmd_void(args: argparse.Namespace) -> None:
-    """Cancel one bad event with an in-ledger `ledger.void` (LED-4/LED-5).
+    """RETIRED (DIP-0034 amendment of 2026-10-31, plan phase B): refused with a
+    pointer to the forward correction (`ledger.compensate`); writes nothing.
+
+    Until 2026-11-01 it cancelled one bad event with an in-ledger `ledger.void`
+    (LED-4/LED-5), as follows; the code stays for the history it describes.
 
     Names the event exactly as stored (log, seq, stored hash) and pins the hash
     its body produces, so a later edit of the voided event revokes the void.
@@ -134,6 +171,12 @@ def cmd_void(args: argparse.Namespace) -> None:
     decided at read time (ledger.voids): only an authorised voider who is not
     the event's writer cancels anything.
     """
+    from ledger import voids
+    try:
+        voids.refuse_new_void(voids.VOID_TYPE)
+    except voids.VoidRetired as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
     from ledger.voids import body_hash, log_stem, refusal
     space = _require_space(args.space)
     actor = args.actor or _default_actor()
@@ -151,6 +194,12 @@ def cmd_void(args: argparse.Namespace) -> None:
         sys.exit(1)
     if target is None:
         print(f"error: no event seq {args.seq} in {path}", file=sys.stderr)
+        sys.exit(1)
+    from ledger.finality import reversible
+    from ledger.hub import load_config
+    if load_config(space) is not None and not reversible(target.type):   # a hub space (owner, round 7)
+        print(f"error: {target.type} is a control record and is never reversible (owner, round 7); "
+              "correct it with a new forward record", file=sys.stderr)
         sys.exit(1)
     why = refusal(actor, stem)
     if why:
@@ -221,14 +270,37 @@ def cmd_stopped(args: argparse.Namespace) -> None:
         if stop["hwm"] is None or tail < stop["hwm"]:
             stopped.append(f"{_shown(log)}: appends stopped since {stop.get('at', '?')} -- the log "
                            f"ends at seq {tail}, this machine wrote seq {stop['hwm']}")
+    # A log the hub stops admitting is stopped too: nothing written after the
+    # refused event counts. On 2026-10-28 Winston's log stopped at a retired
+    # `task.create` written by a stale library, and this command said nothing.
+    stopped.extend(_admission_refusals(space))
     for line in stopped:
         print(line)
     sys.exit(3 if stopped else 0)
 
 
+def _admission_refusals(space: Path) -> list[str]:
+    """One line per log hub admission stops, with the reason; [] without a hub."""
+    from ledger.log import read_events
+    from ledger import hub
+    try:
+        events = list(read_events(space))
+        cfg = hub.require_config_or_no_hub(space, events, None)
+        if cfg is None:
+            return []
+        res = hub.admit(events, hub.authority(space, cfg, None), now_ms=hub._wall_ms())
+    except Exception as exc:  # noqa: BLE001 -- unreadable admission is not "all clear"
+        return [f"{_shown(space)}: hub admission could not be read ({type(exc).__name__}: {exc})"]
+    return ([f"{log}.jsonl: hub admission stops this log at {why} -- nothing written after it counts"
+             for log, why in sorted(res.refused.items())]
+            + [f"{log}.jsonl: hub admission HOLDS {why} -- in the chain, no effect; the writer's key "
+               "did not sign it" for log, whys in sorted(res.held.items()) for why in whys])
+
+
 def cmd_items(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     db_path = space / ".datacore" / "state" / "ledger" / "index.db"
     build_index(state, db_path)
     for item in items_by(db_path, status=args.status, owner=args.owner):
@@ -243,7 +315,8 @@ def cmd_items(args: argparse.Namespace) -> None:
 
 def cmd_balances(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     print(json.dumps(state.spend))
 
 
@@ -306,7 +379,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("stopped", help="List logs the ledger stopped (exit 3 when any)")
     p.add_argument("--space", required=True, help="Space directory root")
 
-    p = sub.add_parser("void", help="Cancel one bad event with an in-ledger void record")
+    p = sub.add_parser("close", help="Close one task in the ledger when its org projection cannot be edited")
+    p.add_argument("--space", required=True, help="Space directory root")
+    p.add_argument("--id", required=True, help="The item's id")
+    p.add_argument("--kind", required=True, choices=("done", "dropped"), help="done = finished, dropped = cancelled")
+    p.add_argument("--reason", required=True, help="Why it closed (recorded in the ledger)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
+
+    p = sub.add_parser("void", help="Retired 2026-11-01: refused; correct with a forward ledger.compensate")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--log", required=True, help="The voided event's log file (e.g. agent-a.jsonl)")
     p.add_argument("--seq", required=True, type=int, help="The voided event's seq")
@@ -344,6 +424,7 @@ COMMANDS = {
     "approve": cmd_approve,
     "verify": cmd_verify,
     "stopped": cmd_stopped,
+    "close": cmd_close,
     "void": cmd_void,
     "items": cmd_items,
     "balances": cmd_balances,

@@ -119,6 +119,31 @@ def reclaimable(repo: Path, worktree: Path, branch: str, trees) -> tuple[str, st
     return "", head, commit
 
 
+def _remove(repo: Path, worktree: Path, head: str, commit: str) -> str:
+    """'' when removed, else git's refusal."""
+    # Point HEAD at the published commit that IS the index, by compare-and-
+    # swap (a moved HEAD refuses), so the checkout reads clean; then remove
+    # without --force, so git re-checks modified/untracked files and refuses
+    # rather than deletes. HEAD was published, so moving it anchors nothing new
+    # and loses nothing.
+    rc, out = 0, ""
+    if commit != head:
+        rc, out = git(worktree, "update-ref", "--no-deref", "HEAD", commit, head)
+    if rc == 0:
+        rc, out = git(repo, "worktree", "remove", str(worktree))
+    return f"git would not remove it ({out[:120]})" if rc else ""
+
+
+def reclaim_worktree(repo: Path, worktree: Path) -> str:
+    """Reclaim ONE retired worktree under the full proof; '' when removed, else
+    why it stays. The writer calls this on its own copy right after its push
+    lands (2026-10-18: 41 unreclaimed copies, 17GB, filled the overnight disk)."""
+    branch = default_branch(repo)
+    git(repo, "fetch", "-q", "origin", branch)
+    why, head, commit = reclaimable(repo, worktree, branch, lambda: published_trees(repo, branch))
+    return why or _remove(repo, worktree, head, commit)
+
+
 def reclaim(repo: Path, apply: bool) -> tuple[int, int, int]:
     """(reclaimed, retained, bytes reclaimed) for one repository."""
     worktrees = workspace_worktrees(repo)
@@ -145,21 +170,12 @@ def reclaim(repo: Path, apply: bool) -> tuple[int, int, int]:
         freed += size
         if not apply:
             continue
-        # Point HEAD at the published commit that IS the index, by compare-and-
-        # swap (a moved HEAD refuses), so the checkout reads clean; then remove
-        # without --force, so git re-checks modified/untracked files and refuses
-        # rather than deletes. HEAD was published, so moving it anchors nothing new
-        # and loses nothing.
-        rc = 0
-        if commit != head:
-            rc, out = git(worktree, "update-ref", "--no-deref", "HEAD", commit, head)
-        if rc == 0:
-            rc, out = git(repo, "worktree", "remove", str(worktree))
-        if rc != 0:
+        refused = _remove(repo, worktree, head, commit)
+        if refused:
             reclaimed -= 1
             freed -= size
             retained += 1
-            print(f"  REFUSED  {worktree.name}: git would not remove it ({out[:120]})")
+            print(f"  REFUSED  {worktree.name}: {refused}")
     if apply and reclaimed:
         git(repo, "worktree", "prune")
     print(f"{repo.name}: {reclaimed} worktree(s) {'reclaimed' if apply else 'reclaimable'} "

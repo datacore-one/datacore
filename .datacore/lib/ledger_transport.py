@@ -348,7 +348,8 @@ def file_conflict_tasks(space: Path, kept: list[dict]) -> list[str]:
     try:
         actor = this_actor()
         log = EventLog(space, actor)
-        known = fold(read_events(space)).items if (space / ".datacore" / "events").is_dir() else {}
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        known = authoritative_state(space).items if (space / ".datacore" / "events").is_dir() else {}
     except Exception as exc:  # noqa: BLE001 -- the report still names the file
         return [f"no task filed: {type(exc).__name__}: {exc}"[:200] for _ in kept]
     owner = roster.owner()
@@ -471,7 +472,8 @@ def _waiting(space: Path) -> list[tuple[str, str, bool]]:
     try:
         from ledger.fold import fold
         from ledger.log import read_events
-        items = fold(read_events(space)).items if (Path(space) / ".datacore" / "events").is_dir() else {}
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        items = authoritative_state(space).items if (Path(space) / ".datacore" / "events").is_dir() else {}
     except Exception:  # noqa: BLE001 -- an unreadable ledger cannot close anything
         items = {}
     closed = ("completed", "verified", "dismissed")
@@ -750,6 +752,46 @@ def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     return out
 
 
+def _follow_origin_untrack(space: Path, ref: str) -> list[str]:
+    """Untrack here (working copy kept) what `ref` stopped tracking and ignores.
+
+    A generated file -- 5-plur's org/next_actions.org projection -- was tracked
+    again by an agent's commit and untracked on origin the same day. The host
+    still tracking it regenerates it every hour, so the merge met a dirty file
+    origin deletes and git refused it ("would be overwritten by merge") every
+    cycle from 2026-10-29. Only paths origin deleted since the merge base AND
+    lists in its own .gitignore: a deliberate untrack, never a lost file.
+    """
+    import tempfile
+    rc, base, _ = _git(space, "merge-base", "HEAD", ref)
+    if rc != 0 or not base.strip():
+        return []
+    rc, out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--name-only",
+                      "--diff-filter=D", base.strip(), ref)
+    gone = [p for p in out.splitlines() if p.strip()]
+    if not gone:
+        return []
+    rc, ignore, _ = _git(space, "show", f"{ref}:.gitignore")
+    if rc != 0 or not ignore.strip():
+        return []
+    _, tracked, _ = _git(space, "-c", "core.quotepath=off", "ls-files", "--", *gone)
+    tracked_set = set(tracked.splitlines())
+    gone = [p for p in gone if p in tracked_set]
+    if not gone:
+        return []
+    with tempfile.NamedTemporaryFile("w", suffix=".gitignore", delete=False) as fh:
+        fh.write(ignore)
+    try:
+        _, ign, _ = _git(space, "-c", f"core.excludesFile={fh.name}", "-c", "core.quotepath=off",
+                         "check-ignore", "--no-index", "--", *gone)
+    finally:
+        os.unlink(fh.name)
+    paths = [p for p in ign.splitlines() if p.strip()]
+    for p in paths:
+        _git(space, "rm", "-q", "--cached", "--", p)
+    return paths
+
+
 def converge(space: Path, *, root: Path | None = None) -> Result:
     """Apply the registered category at every entry point, including direct calls."""
     cat = classify(space, root)
@@ -1007,6 +1049,8 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         return Result(False, f"{busy} in progress — finish or abort it by hand, then converge",
                       {"branch": db, "in_progress": busy})
 
+    untracked_like_origin = _follow_origin_untrack(space, f"origin/{db}")
+
     # Autosave BEFORE merging. A dirty working file makes git refuse the
     # merge, and refusing forever means never converging — 2-datacore was
     # 45 behind when this was written. Commit, never stash: ENG-2026-0729-009
@@ -1018,6 +1062,25 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     hook_detail = ""
     if autosaved:
         _git(space, "add", "-A")
+        # NEVER AUTOSAVE A DELETION (MEM-61). `add -A` stages a locally-absent
+        # tracked file as a deletion. A missing file on one machine is almost
+        # always a local defect — an incomplete checkout, a crashed agent — not
+        # work to broadcast fleet-wide. caa7d58 wiped 110 files from
+        # datafund-space by this path on 2026-07-21. Checked immediately after
+        # `add -A` and before `git rm --cached` for intentional untracks, so
+        # intentional removals (untracked_like_origin) are never confused with
+        # accidental deletions.
+        rc, del_names, _ = _git(space, "-c", "core.quotepath=off", "diff",
+                                "--cached", "--name-only", "--diff-filter=D")
+        for _path in (del_names or "").splitlines():
+            _path = _path.strip()
+            if _path:
+                _git(space, "restore", "--staged", "--", _path)
+                held_back[_path] = "deletion — not auto-committed (needs a human)"
+        # `add -A` re-stages what origin untracked: this host's .gitignore does
+        # not list it until the merge brings origin's.
+        for path in untracked_like_origin:
+            _git(space, "rm", "-q", "--cached", "--", path)
         # NEVER autosave a submodule pointer. `add -A` stages a changed
         # gitlink, so an unattended converge would silently move `.datacore/dips`
         # to whatever commit happens to be checked out locally — publishing a
@@ -1065,11 +1128,14 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # log carrying events its principal never made, signed into main by
         # a host that is not its principal's. The verifier caught it after the
         # fact; the transport must not carry it in the first place. Unstage
-        # it, commit the rest, and stop: the file stays in the working tree,
-        # visible, for whoever owns the process that wrote it.
+        # it and hold it back (SYN-8): the file stays in the working tree,
+        # visible, for whoever owns the process that wrote it; the rest of the
+        # space converges normally so incoming commits are received and other
+        # good edits are published.
         foreign = foreign_writer_logs(space)
-        for path, _writer, _principal in foreign:
+        for path, _writer, principal in foreign:
             _git(space, "restore", "--staged", "--", path)
+            held_back[path] = f"foreign writer log: belongs to {principal} (DIP-0044)"
 
         # A WRONG WEEKDAY IS REPAIRED, NOT A REASON TO STOP THE FLEET. The
         # weekday in `[2026-09-23 Tue]` is derived from the date, so a wrong one
@@ -1130,19 +1196,23 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                 return Result(False, "autosave refused by pre-commit hook",
                               {"detail": detail[:400], "held_back": sorted(held_back)})
             hook_detail = detail
-        if foreign:
-            own_principal, own_actor = _own_principal()
-            named = "; ".join(f"{path} belongs to {principal} (writer {writer})"
-                              for path, writer, principal in foreign)
-            return Result(False,
-                          f"foreign writer log left uncommitted: {named} — this host writes "
-                          f"as {own_actor or '?'} for {own_principal or 'an undeclared principal'}; "
-                          f"find the process writing under that name and stop it (DIP-0044)",
-                          {"branch": db, "foreign": [p for p, _, _ in foreign]})
 
     rewrites = _incoming_rewrites(space, f"origin/{db}")
     if rewrites:
         return _rewrite_refusal(db, f"origin/{db}", rewrites, autosaved)
+    # INCOMING-LOSS CHECK (MEM-61). git_fleet_sync guards its _pull with this
+    # already; converge had no equivalent, so a machine that deleted 25 tracked
+    # files and pushed sent a clean fast-forward that silently removed the files
+    # here. Same threshold as git_fleet_sync: 10 deleted files or a file shrunk
+    # to ≤20 % of its baseline (MASS_DELETION=10, SHRINK_KEEP=0.2).
+    from git_fleet_sync import incoming_losses as _incoming_losses
+    losses = _incoming_losses(space, f"origin/{db}")
+    if losses:
+        return Result(False,
+                      f"refused: origin/{db} would remove tracked content — "
+                      f"{'; '.join(losses[:3])}. Nothing was merged; "
+                      f"a human merges if intended (MEM-61)",
+                      {"branch": db, "incoming_loss": losses})
     ok, err, resolved, kept = _merge(space, f"origin/{db}", keep_both=True)
     unfiled: list[str] = []
     if kept:

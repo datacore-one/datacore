@@ -102,7 +102,10 @@ def _processes_inbox(job: dict) -> bool:
     if "process-inbox" in cmd:
         return True
     script = _script_of(cmd)
-    return bool(script and script.is_file() and "process-inbox" in script.read_text(errors="replace"))
+    try:
+        return bool(script and script.is_file() and "process-inbox" in script.read_text(errors="replace"))
+    except PermissionError:   # another user's script (e.g. a root job): not readable from here
+        return False
 
 
 def _nightly(schedule: str) -> bool:

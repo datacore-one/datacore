@@ -11,6 +11,9 @@
 # plugins.enabled — untrusted-code gate. This script copies the files and
 # reports the config line; it does NOT edit config.yaml, because a gateway
 # reading a half-written config is a worse failure than an unenabled plugin.
+# A k3s pod (Winston) is not an ssh host: copy the same three files into
+# ~/.hermes/plugins/datacore/ in its gateway container, never leave a backup
+# folder inside plugins/, restart the gateway, then run verify_loaded.py there.
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ $# -gt 0 ]; then
@@ -25,7 +28,7 @@ fi
 for H in "${HOSTS[@]}"; do
   echo "── $H"
   ssh -o ConnectTimeout=20 "$H" 'mkdir -p ~/.hermes/plugins/datacore'
-  rsync -q --checksum "$SRC/plugin.yaml" "$SRC/__init__.py" "$H:.hermes/plugins/datacore/"
+  rsync -q --checksum "$SRC/plugin.yaml" "$SRC/__init__.py" "$SRC/verify_loaded.py" "$H:.hermes/plugins/datacore/"
   ssh -o ConnectTimeout=20 "$H" '
     set -e
     PY=$(ls /usr/local/lib/hermes-agent/venv/bin/python ~/.hermes/hermes-agent/venv/bin/python 2>/dev/null | head -1)
@@ -38,6 +41,9 @@ print(\"  identity:\", i[\"principal\"] or \"-\", \"as\", i[\"actor\"] or \"-\",
       \"| in force\" if i[\"ok\"] else \"| INERT: \" + i[\"why\"])
 print(\"  memory block:\", d.sync_memory_block())
 "
+    # What Hermes loads, not what was copied: a second copy (a backup folder in
+    # plugins/) once loaded instead and the guards were absent (2026-11-07).
+    "$PY" ~/.hermes/plugins/datacore/verify_loaded.py | sed "s/^/  load check: /"
     if grep -qE "^\s+- datacore$" ~/.hermes/config.yaml 2>/dev/null; then
       echo "  config: already under plugins.enabled"
     else

@@ -23,10 +23,13 @@ machines never see the change.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 
 import ledger_transport as lt
 from ledger.log import EventLog, read_events
@@ -108,7 +111,8 @@ def test_a_change_reaches_every_other_machine_in_one_cycle(fleet, origin_machine
 # ── production: every machine actually runs a cycle, at least hourly ───────
 
 SYNC_WORDS = re.compile(r"phase1_cycle|cos_sync|git_fleet_sync|fleet-sync|ledger_transport|datacore_sync|/sync\b")
-HOSTS = {"box": "winston", "nightshift": "nightshift", "hermes": "hermes", "plur-claw": "plur-claw"}
+# Agent machines; where each runs (host or k3s pod) comes from the roster (fleet_reach).
+HOSTS = ("box", "nightshift", "hermes", "plur-claw")
 
 
 def _hourly_cron(lines: str) -> bool:
@@ -137,16 +141,23 @@ def _hourly_timer(lines: str) -> bool:
 
 
 def _ssh(host: str, cmd: str) -> str:
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, cmd],
-                       capture_output=True, text=True, timeout=40)
-    if r.returncode not in (0, 1):
-        pytest.fail(f"could not read {host}'s schedule (ssh rc={r.returncode}): {r.stderr.strip()[:120]}")
-    return r.stdout
+    """Every schedule at every place the machine runs (its host, its k3s pod)."""
+    out = []
+    for pl in fleet_reach.places(host):
+        listing = cmd if pl.kind != "pod" else fleet_reach.schedule_listing(pl) + "; echo ---"
+        r = fleet_reach.run_at(pl, listing, timeout=40)
+        if r.returncode not in (0, 1):
+            pytest.fail(f"could not read {host}'s schedule ({pl.kind}, rc={r.returncode}): {r.stderr.strip()[:120]}")
+        out.append(r.stdout)
+    cron = "\n".join(o.partition("---")[0] for o in out)
+    return cron + "\n---\n" + "\n".join(o.partition("---")[2] for o in out)
 
 
 def _mac_join_agent() -> bool:
     """The mac is a visitor since 2026-09-22: io.datacore.join ticks and converges on join."""
     import plistlib
+    if shutil.which("launchctl") is None:
+        return False   # not a mac: its own crontab or timers must carry the sync
     loaded = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=20).stdout
     plist = Path.home() / "Library" / "LaunchAgents" / "io.datacore.join.plist"
     if "io.datacore.join" not in loaded or not plist.exists():
@@ -161,11 +172,11 @@ def test_every_machine_runs_a_space_sync_at_least_hourly():
     missing = []
     cron = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=20).stdout
     if not (_hourly_cron(cron) or _mac_join_agent()):
-        missing.append("mac")
+        missing.append(fleet_reach.this_machine() or "this machine")
     cmd = ("crontab -l 2>/dev/null; echo ---; systemctl --user list-timers --all 2>/dev/null; "
            "systemctl list-timers --all 2>/dev/null")
     with ThreadPoolExecutor(len(HOSTS)) as pool:
-        outs = dict(zip(HOSTS, pool.map(lambda h: _ssh(h, cmd), HOSTS.values())))
+        outs = dict(zip(HOSTS, pool.map(lambda h: _ssh(h, cmd), HOSTS)))
     for name, out in outs.items():
         cron_part, _, timers = out.partition("---")
         if not (_hourly_cron(cron_part) or _hourly_timer(timers)):

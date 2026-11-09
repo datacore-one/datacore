@@ -152,7 +152,8 @@ def ledger_dismiss_housekeeping(path: Path, dropped_id: str, kept_id: str,
         return "no ledger in this space"
     from ledger.fold import fold
     from ledger.log import read_events
-    item = fold(read_events(space)).items.get(dropped_id)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    item = authoritative_state(space).items.get(dropped_id)
     if item is None:
         return "not in the ledger"
     if item.status == "dismissed":

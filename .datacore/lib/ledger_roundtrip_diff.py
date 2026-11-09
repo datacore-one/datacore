@@ -21,7 +21,8 @@ from spaces import space_for
 
 for space_name in sys.argv[1:] or [space_for('system', ROOT, '0-personal')]:
     space = ROOT / space_name
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     live = lc._fingerprint(state)
     fresh = project(state, space=space.name).text
     with tempfile.TemporaryDirectory() as td:
@@ -30,7 +31,8 @@ for space_name in sys.argv[1:] or [space_for('system', ROOT, '0-personal')]:
         (scratch / 'org').mkdir()
         (scratch / 'org' / 'next_actions.org').write_text(fresh, encoding='utf-8')
         import_space(scratch, org_file=scratch / 'org' / 'next_actions.org')
-        restored = lc._fingerprint(fold(read_events(scratch)))
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        restored = lc._fingerprint(authoritative_state(scratch))
 
     for iid in sorted(set(live) & set(restored)):
         if live[iid] != restored[iid]:

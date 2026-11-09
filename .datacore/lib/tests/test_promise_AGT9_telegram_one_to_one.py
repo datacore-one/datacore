@@ -25,12 +25,14 @@ import subprocess
 
 import pytest
 
+import fleet_reach
+
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
 AGENTS = {
-    # agent: (ssh host, unit that answers its bot, broker id of its bot token -- miles/tris ids are
+    # agent: (roster machine -- its host or k3s pod, fleet_reach --, unit that answers its bot, broker id of its bot token -- miles/tris ids are
     # the names their entries should get; neither bot token is in the index today)
-    "winston": ("winston", "hermes-gateway", "winston-telegram-bot"),
+    "winston": ("box", "hermes-gateway", "winston-telegram-bot"),
     "miles": ("nightshift", "datacore-telegram", "miles-telegram-bot"),
     "tris": ("hermes", "hermes-gateway", "tris-telegram-bot"),
     "data": ("plur-claw", "openclaw-gateway", "mrdata-telegram-bot"),
@@ -38,13 +40,19 @@ AGENTS = {
 
 
 def _ssh(host, cmd):
-    return subprocess.run([*SSH, host, cmd], capture_output=True, text=True, timeout=50)
+    return fleet_reach.run(host, cmd, timeout=50)
 
 
 @pytest.mark.production
 @pytest.mark.parametrize("agent", sorted(AGENTS))
 def test_the_process_that_answers_the_agents_bot_is_running(agent):
     host, unit, _ = AGENTS[agent]
+    pl = fleet_reach.place(host)
+    if pl.kind == "pod":   # in a pod the unit is the pod's gateway container
+        ready = fleet_reach.container_ready(pl, "gateway")
+        assert ready is not None, f"{host}: could not ask the cluster about {pl.target}"
+        assert ready, f"{agent}: the gateway container of {pl.target} is not ready"
+        return
     r = _ssh(host, f"systemctl is-active {unit} 2>/dev/null || systemctl --user is-active {unit} 2>/dev/null; true")
     assert r.returncode == 0, f"{host}: unreachable ({r.stderr.strip()[-160:]})"
     assert "active" in r.stdout.split(), f"{agent}: {unit} on {host} is {r.stdout.strip() or 'unknown'}"
@@ -54,7 +62,8 @@ def test_the_process_that_answers_the_agents_bot_is_running(agent):
 @pytest.mark.parametrize("agent", sorted(AGENTS))
 def test_the_agents_bot_is_a_known_live_credential_on_its_host(agent):
     host, _, cred = AGENTS[agent]
-    r = _ssh(host, f"cd ~/Data && timeout 40 python3 .datacore/lib/creds.py doctor --id {cred} 2>&1 | tail -4")
+    r = _ssh(host, f"cd ~/Data && C=~/.datacore/v2-runner/.datacore/lib/creds.py; [ -f $C ] || C=.datacore/lib/creds.py; "   # a satellite's code is its runner (roster)
+                  f"timeout 40 python3 $C doctor --id {cred} 2>&1 | tail -4")
     assert r.returncode == 0, f"{host}: unreachable ({r.stderr.strip()[-160:]})"
     lines = [l.split() for l in r.stdout.splitlines() if cred in l]
     state = lines[0][0] if lines else "missing"

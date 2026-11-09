@@ -49,7 +49,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-EVENT_LOG_DIR = Path.home() / ".datacore" / "cos" / "agent-stream"
+def _event_log_dir() -> Path:
+    """Resolve the event log directory at call time, not import time.
+
+    Allows tests to change HOME after import without writing to the original home.
+    """
+    return Path.home() / ".datacore" / "cos" / "agent-stream"
+
 
 _VALID_SEVERITIES = {"info", "success", "warning", "error"}
 
@@ -167,9 +173,10 @@ def emit(
 
     # 2) Without a configured relay, publish to the local canonical stream.
     try:
-        EVENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_dir = _event_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
         date_str = datetime.now(tz=timezone.utc).date().isoformat()
-        log_path = EVENT_LOG_DIR / f"events-{date_str}.jsonl"
+        log_path = log_dir / f"events-{date_str}.jsonl"
         from agent_stream_store import append_events
         append_events(log_path, [ev])
         return ev
@@ -220,7 +227,8 @@ def emit_message(
 
 
 def _outbox_dir():
-    return EVENT_LOG_DIR.with_name(EVENT_LOG_DIR.name + '-outbox')
+    log_dir = _event_log_dir()
+    return log_dir.with_name(log_dir.name + '-outbox')
 
 
 def flush_pending(limit=100):

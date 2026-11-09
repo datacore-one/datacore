@@ -91,7 +91,8 @@ def scan_space(space: Path, noise_floor: bool = False) -> dict | None:
         try:
             from ledger.fold import fold
             from ledger.log import read_events
-            st = fold(read_events(space))
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            st = authoritative_state(space)
             led = {i for i, it in st.items.items()
                    if it.status in ("created", "claimed", "granted")}
         except Exception:      # noqa: BLE001 — a fold failure is not churn
