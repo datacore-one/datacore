@@ -497,7 +497,9 @@ LEDGER_APPEND_SCHEMA = {
                     "asked_by, route (do), done_when and check; id is generated when left out. "
                     "Example: {\"space\": \"2-datacore\", \"type\": \"item.create\", \"payload\": "
                     "{\"title\": \"...\", \"assignee\": \"miles\", \"asked_by\": \"gregor\", "
-                    "\"route\": \"do\", \"done_when\": \"...\", \"check\": \"...\"}}")},
+                    "\"route\": \"do\", \"done_when\": \"...\", \"check\": \"...\"}}. "
+                    "Write check on one line with no backslash ([0-9] not \\d, [[:space:]] not "
+                    "\\s): a backslash or line break makes the call arrive empty.")},
             },
             "required": ["space", "type", "payload"],
         },
@@ -663,6 +665,14 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         from spaces import discover_spaces  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
+    if not str(space or "").strip() and not payload and not {k: v for k, v in kw.items() if v}:
+        # Hermes replaces tool-call JSON that does not parse with {} (2026-11-09:
+        # five such calls in a row each got "'' is not a declared event type").
+        return ("Refused: nothing was filed; your call arrived with no arguments because its JSON "
+                "did not parse. The usual cause is a backslash (\\d, \\s, \\.) or a line break "
+                "inside check. Write the check on one line without any backslash: [0-9] instead of "
+                "\\d, [[:space:]] instead of \\s, grep -F for literal text. Then send it again: "
+                + _EXAMPLE)
     payload, kw, why = _unwrap_events(payload, kw)
     if why:
         return f"Refused: nothing was filed; {why}"
