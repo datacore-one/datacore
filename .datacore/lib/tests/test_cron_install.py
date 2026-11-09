@@ -280,3 +280,16 @@ def test_jimo_instance_jobs_are_told_apart_by_instance_and_job():
                'jimo-loop-dream': f'30 2 * * * {w} loop dream >> /s/jimo-loop/dream.log 2>&1'}
     out = C.reconcile(tick, entries)
     assert out.startswith(tick) and out.count('run-instance.sh') == 3
+
+
+def test_a_timestamped_job_is_one_plain_line_named_by_its_log():
+    """job 2>&1 | tee_timestamp.sh log is a pipe, which reconcile refuses, so the
+    host setup failed its cron step on hermes and plur-claw (2026-11-05..09). The
+    wrapper form is one plain command, and two wrapped jobs stay two jobs."""
+    a = "0 8 * * * R=1 /h/.datacore/lib/tee_timestamp.sh /s/a.log python3 /h/.datacore/lib/job_verify.py"
+    b = "0 9 * * * /h/.datacore/lib/tee_timestamp.sh /s/b.log python3 /h/y.py"
+    with pytest.raises(ValueError):
+        C.reconcile("", {"job": "0 8 * * * python3 /h/x.py 2>&1 | /h/.datacore/lib/tee_timestamp.sh /s/a.log"})
+    assert C.invocation(a) == (".datacore/lib/tee_timestamp.sh", "/s/a.log")
+    planned = C.reconcile("", {"job-a": a, "job-b": b})
+    assert planned.count("tee_timestamp.sh") == 2

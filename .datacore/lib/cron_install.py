@@ -68,7 +68,8 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # each write their own artifact were one "ambiguous invocation" and the
     # installer correctly refused all five (2026-09-21) -- it identifies a job by
     # its executable, which is right until several jobs share a wrapper.
-    # tee_timestamp.sh runs and dates a producer (`log -- cmd`): the log is the job.
+    # tee_timestamp.sh wraps a job and is identified by the LOG it writes, so two
+    # wrapped jobs on one host are two jobs, not one ambiguous invocation.
     if program in ('atomic_out.sh', 'audit_trio_run.sh', 'tee_timestamp.sh'):
         return (identity, args[0] if args else '')
     # rsync is the executable of many unrelated copy jobs; the source tells them

@@ -150,6 +150,7 @@ tests:
       - test_archived_venture_contributes_no_overdue_rows
       - test_the_cadence_log_is_output_only
       - test_the_executor_alias_counts_as_membership
+      - test_a_continuous_cadence_is_a_bot_loop_listed_grey_never_a_missing_registration
     needs: [module:ventures]
     why: imports cadence_engine from the ventures module
   - test: .datacore/lib/tests/test_liveness_scheduled.py
@@ -618,3 +619,77 @@ tests:
   - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_TSK_9_decision_age_limit.py
     needs: [python:fastapi]
     why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+
+  # ---- ordinary tests whose subject lives outside this repository (2026-11-09) ----
+  # Each failed on every Gates run with a missing file or module, never with a
+  # finding about the change: the subject is a module repository, the gitignored
+  # secrets kit, or a build or npm install this checkout does not make.
+  - test: .datacore/lib/tests/test_creds_distribute_pod.py
+    needs: [file:.datacore/secrets/scripts/distribute.sh]
+    why: runs the real distribute.sh, which lives in the gitignored secrets kit (**/secrets/)
+  - test: .datacore/lib/tests/test_creds_distribute_unreachable.py
+    needs: [file:.datacore/secrets/scripts/distribute.sh]
+    why: runs the real distribute.sh, which lives in the gitignored secrets kit (**/secrets/)
+  - test: .datacore/lib/tests/test_cadence_liveness_quota_reset.py
+    needs: [module:ventures]
+    why: cadence_liveness imports cadence_engine and cadence_schedule from the ventures module
+  - test: .datacore/lib/tests/test_morning_repair_red_list.py
+    only:
+      - test_an_old_usage_limit_with_no_run_since_is_not_waiting_on_quota
+      - test_a_usage_limit_hit_every_day_still_says_waiting_on_quota
+    needs: [module:ventures]
+    why: imports cadence_schedule from the ventures module
+  - test: .datacore/lib/tests/test_today_reads_where_producers_write.py
+    only:
+      - test_step_11_reads_the_market_phase_report_where_the_job_publishes_it
+      - test_quick_reference_points_at_the_same_place
+    needs: [module:nightshift]
+    why: imports market_phase_orchestrator from the nightshift module
+  - test: .datacore/lib/tests/test_disk_full_is_named.py
+    only:
+      - test_the_overnight_run_refuses_on_a_full_disk_and_says_so
+      - test_the_overnight_run_proceeds_when_there_is_room
+      - test_a_projection_failure_on_a_full_disk_names_the_disk
+      - test_a_projection_failure_with_room_still_names_its_class
+    needs: [module:nightshift]
+    why: loads the nightshift module's run.py
+  - test: .datacore/lib/tests/test_autofix_wasted_repairs.py
+    only:
+      - test_another_host_never_writes_as_winston
+      - test_winstons_own_host_still_records_its_jobs
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_ledger_event.sh
+  - test: .datacore/lib/tests/test_sim_harsh_sync_fixes.py
+    only: [test_cos_sync_never_says_unknown_when_the_transport_could_not_run]
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_sync.sh
+  - test: .datacore/lib/tests/test_sync_conflict_org_and_alerts.py
+    only:
+      - test_cos_sync_alerts_once_for_one_conflict
+      - test_cos_sync_alerts_once_for_a_conflict_another_sync_met_first
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_sync.sh
+  - test: .datacore/lib/tests/test_sync_conflict_alert_shared_marker.py
+    only:
+      - test_fleet_sync_alerts_first_then_cos_sync_stays_quiet
+      - test_cos_sync_alerts_first_then_fleet_sync_meeting_it_again_does_not_fail
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_sync.sh
+  - test: .datacore/lib/tests/test_fleet_probe_in_pod.py
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_fleet_probe.sh in the OPS-14 sandbox
+  - test: .datacore/lib/tests/test_fleet_presence_red_once.py
+    needs: [module:chief-of-staff]
+    why: runs chief-of-staff's cos_fleet_probe.sh in the OPS-14 sandbox
+  - test: .datacore/lib/tests/test_host_deps.py
+    only: [test_briefing_profile_covers_the_mail_triage_the_box_runs]
+    needs: [module:mail]
+    why: the profile lists modules/mail/requirements.txt only where the mail module is installed
+  - test: .datacore/lib/tests/test_command_handoff.py
+    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    why: starts the built MCP server (a separate repository's build output)
+  - test: .datacore/lib/tests/test_local_mcp_server_handoff.py
+    needs: [file:.datacore/modules/node_modules/@datacore-one/mcp, module:nightshift]
+    why: >
+      the gtd tool imports @datacore-one/mcp, which `npm install` in .datacore/modules
+      provides (CI installs no node packages), and the worker half loads nightshift's claim
