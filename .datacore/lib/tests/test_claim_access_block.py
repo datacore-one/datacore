@@ -82,6 +82,9 @@ def test_unreadable_block_file_keeps_the_host_paused(state):
 # ── wired into the real dispatcher ────────────────────────────────────────────
 
 from tests.test_promise_NS_9_waiting_on_owner_is_not_a_failure import fleet, _events  # noqa: E402,F401
+# Delegates as winston and dispatches as miles: a declared roster, not the
+# host's private registry (conftest.install_roster).
+pytestmark = pytest.mark.usefixtures("install_roster")
 
 
 def test_dispatcher_pauses_on_a_credit_failure_and_keeps_the_work(fleet, tmp_path, monkeypatch):  # noqa: F811

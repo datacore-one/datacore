@@ -49,11 +49,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+#: An explicit event log directory, or None for the default under HOME.
+#: Kept as a module attribute because callers and tests point the emitter at
+#: their own stream by setting it; removing it (OPS-19) broke every one of them
+#: with an AttributeError. None keeps the default resolved at call time.
+EVENT_LOG_DIR: Path | None = None
+
+
 def _event_log_dir() -> Path:
     """Resolve the event log directory at call time, not import time.
 
     Allows tests to change HOME after import without writing to the original home.
     """
+    if EVENT_LOG_DIR is not None:
+        return Path(EVENT_LOG_DIR)
     return Path.home() / ".datacore" / "cos" / "agent-stream"
 
 

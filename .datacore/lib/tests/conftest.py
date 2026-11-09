@@ -28,6 +28,39 @@ def briefing_principals(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger.policy, "DEFAULT_POLICY_PATH", policy)
 
 
+@pytest.fixture
+def install_roster(tmp_path_factory, monkeypatch):
+    """A declared install roster for drill tests that delegate as named agents.
+
+    `DelegationDrill.delegation_space` enrols THIS install's principals and
+    their `may_delegate_to` from the gitignored `registry/principals.yaml` and
+    `config/approvals_policy.local.yaml` (`delegation_drill._install_roster`).
+    Tests that delegate as `winston` and dispatch as `miles` therefore passed
+    only on a host whose private registry happens to declare those names, and
+    failed everywhere else -- every CI checkout -- with "unregistered writer
+    'winston'". They test the claim loop, not this installation, so they get a
+    scratch registry and policy of their own and say the same thing anywhere.
+    """
+    import delegation_drill
+    d = tmp_path_factory.mktemp("install-roster")
+    registry = d / "principals.yaml"
+    registry.write_text(
+        "principals:\n"
+        "  gregor: {kind: human, writes_as: [gregor-laptop]}\n"
+        "  winston: {kind: agent, writes_as: [winston, bridge]}\n"
+        "  miles: {kind: agent, writes_as: [miles, nightshift]}\n")
+    policy = d / "approvals_policy.yaml"
+    policy.write_text(
+        "version: 1\napprover: human\ncosign_effects: [email.send, payment, prod.deploy]\n"
+        "principals:\n"
+        "  gregor: {}\n"
+        "  winston: {may_delegate_to: [miles]}\n"
+        "  miles: {may_delegate_to: [winston]}\n")
+    monkeypatch.setattr(delegation_drill, "_INSTALL_PRINCIPALS", registry)
+    monkeypatch.setattr(delegation_drill, "_INSTALL_POLICY", policy)
+    return registry, policy
+
+
 # ── promise gate (evals first) ───────────────────────────────────────────────
 # A red-by-design promise eval is collected only by the scoreboard
 # (PROMISE_EVALS_ALL=1); ordinary runs collect it once its promise is green in

@@ -268,6 +268,10 @@ def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0
     # Bash step that needs approval, so a claimed item that runs a script
     # could never pass (2026-11-09 claim-pass findings, item 1). The guard
     # hook still refuses the principal's never-effects.
+    # Set for this call only and restored after, so one item's principal never
+    # carries over to the next item, or into anything else in the process.
+    _env_keys = ("DATACORE_POLICY_PRINCIPAL", "DATACORE_CLAUDE_PERMISSION_MODE")
+    _saved = {k: os.environ.get(k) for k in _env_keys}
     if actor:
         os.environ["DATACORE_POLICY_PRINCIPAL"] = actor
         os.environ["DATACORE_CLAUDE_PERMISSION_MODE"] = (
@@ -275,7 +279,14 @@ def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0
     started = _time.monotonic()
     # space and item travel with the call so the spend event lands in a log
     # that gets folded, under the declared actor, linked to what incurred it.
-    res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd, space=cwd, item=item_id, actor=actor or None)
+    try:
+        res = ex.run(prompt, timeout_s=TIMEOUT, cwd=cwd, space=cwd, item=item_id, actor=actor or None)
+    finally:
+        for k, v in _saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     # Recorded for EVERY outcome, not just success: a failure that cost real
     # money is exactly the one worth being able to add up later.
     meta = {"executor": ex.name,

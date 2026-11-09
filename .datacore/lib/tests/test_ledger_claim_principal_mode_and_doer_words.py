@@ -47,6 +47,19 @@ def test_the_claim_run_uses_the_principals_declared_mode(monkeypatch, tmp_path, 
     assert fake.env == {"DATACORE_CLAUDE_PERMISSION_MODE": expected, "DATACORE_POLICY_PRINCIPAL": "miles"}
 
 
+def test_the_mode_does_not_outlive_the_claim_run(monkeypatch, tmp_path):
+    """The mode is set for the executor call only: left in os.environ it leaked
+    into every later test in the same process (test_executors failed after the
+    claim tests ran) and would leak into a later item for another principal."""
+    monkeypatch.setattr(ledger_claim, "get_executor", lambda: FakeExecutor())
+    monkeypatch.setattr(ledger_claim, "_declared_mode", lambda actor: "bypass")
+    monkeypatch.delenv("DATACORE_CLAUDE_PERMISSION_MODE", raising=False)
+    monkeypatch.setenv("DATACORE_POLICY_PRINCIPAL", "before")
+    ledger_claim.run_task("t", "do", tmp_path, "i1", actor="miles")
+    assert "DATACORE_CLAUDE_PERMISSION_MODE" not in os.environ
+    assert os.environ["DATACORE_POLICY_PRINCIPAL"] == "before"
+
+
 def test_a_failed_check_release_carries_the_doers_last_words():
     words = "x" * 2000 + " No record of the outage, so writing it would mean inventing it."
     p = ledger_claim._check_failed_release("i1", "miles", "abc123", "it exited 1", "test -s n.md", words)

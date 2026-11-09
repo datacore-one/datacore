@@ -20,6 +20,9 @@ import sys
 from pathlib import Path
 
 import pytest
+# Delegates as winston and dispatches as miles: a declared roster, not the
+# host's private registry (conftest.install_roster).
+pytestmark = pytest.mark.usefixtures("install_roster")
 
 LIB = Path(__file__).resolve().parents[1]
 if str(LIB) not in sys.path:
