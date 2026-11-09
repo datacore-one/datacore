@@ -252,24 +252,50 @@ def scan_processes() -> dict:
     if rc != 0:
         return {"error": "ps failed", "kill": [], "flag": []}
 
+    rows = []
     for line in out.splitlines()[1:]:
         parts = line.split(None, 3)
         if len(parts) < 4:
             continue
         pid, ppid, etime, cmd = parts
         try:
-            pid_i, ppid_i, age = int(pid), int(ppid), _etime_seconds(etime)
+            rows.append((int(pid), int(ppid), _etime_seconds(etime), cmd))
         except ValueError:
             continue
+    parent = {p: pp for p, pp, _, _ in rows}
+    command = {p: c for p, _, _, c in rows}
+
+    def ancestors(pid: int) -> list[int]:
+        chain, seen = [], set()
+        while pid in parent and pid not in seen and pid > 1:
+            seen.add(pid)
+            pid = parent[pid]
+            chain.append(pid)
+        return chain
+
+    # This session's own CLI: the nearest `claude` ancestor of this process.
+    # Two sessions on one machine share everything above their CLI, so a
+    # common ancestor alone proves nothing (2026-10-18: another session's
+    # vitest runs were killed as "this session's").
+    own_cli = next((a for a in ancestors(os.getpid())
+                    if re.search(r"(^|/)claude(\s|$)", command.get(a, ""))), None)
+
+    for pid_i, ppid_i, age, cmd in rows:
         if pid_i == os.getpid() or MCP_RE.search(cmd):
             continue
 
         rec = {"pid": pid_i, "ppid": ppid_i, "age_s": age, "command": cmd[:160]}
         if DEV_SERVER_RE.search(cmd):
-            # Orphans are always safe; live-parent ones belong to this session,
-            # which is ending anyway.
-            rec["reason"] = "orphaned dev server" if ppid_i == 1 else "dev server"
-            kill.append(rec)
+            if ppid_i == 1:
+                rec["reason"] = "orphaned dev server"
+                kill.append(rec)
+            elif own_cli is not None and own_cli in ancestors(pid_i):
+                # Under this session's own CLI, which is ending anyway.
+                rec["reason"] = "dev server"
+                kill.append(rec)
+            else:
+                rec["reason"] = "dev server of another live session — left running"
+                flag.append(rec)
         elif ppid_i == 1 and HOOK_WORKER_RE.search(cmd):
             rec["reason"] = "orphaned hook/CLI worker"
             kill.append(rec)
