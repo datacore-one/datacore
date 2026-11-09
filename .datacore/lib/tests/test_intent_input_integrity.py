@@ -132,13 +132,38 @@ def test_invalid_spotlight_is_not_silently_neutral(tmp_path, bad):
 
 
 def test_review_and_retry_states_still_count_as_unfinished_work(tmp_path):
+    """DIP-0009 v2.0: REVIEW is an open state; the retired overlay states
+    (QUEUED, WORKING, FAILED) count only where the file declares them.
+
+    A headerless retired keyword is heading text under v2.0, so it is not a
+    task. A file whose header still declares the legacy states keeps them
+    visible as unfinished work. The result must not depend on which
+    org-workspace release is installed.
+    """
+    states = ['TODO', 'NEXT', 'WAITING', 'REVIEW', 'QUEUED', 'WORKING', 'FAILED', 'DONE', 'CANCELLED', 'DEFERRED']
+    body = ''.join(f'* {state} Plain task\n:PROPERTIES:\n:INTENT: goal\n:END:\n' for state in states)
     selected = space(tmp_path, 'alpha', 'alpha')
-    write(selected / 'org/next_actions.org', ''.join(
-        f'* {state} Plain task\n:PROPERTIES:\n:INTENT: goal\n:END:\n'
-        for state in ['TODO', 'NEXT', 'WAITING', 'REVIEW', 'QUEUED', 'WORKING', 'FAILED', 'DONE', 'CANCELLED', 'DEFERRED']))
+    write(selected / 'org/next_actions.org', body)
+    result = place(tmp_path, IntentGraph.load(tmp_path))
+    assert result['total'] == 4
+    assert result['index'] == {'alpha:goal': 4}
+
+    write(selected / 'org/next_actions.org',
+          '#+TODO: QUEUED WORKING | FAILED\n' + body)
     result = place(tmp_path, IntentGraph.load(tmp_path))
     assert result['total'] == 7
     assert result['index'] == {'alpha:goal': 7}
+
+
+def test_intent_vocabulary_matches_a_v2_package_default():
+    """Drift guard: once the installed org-workspace default is v2.0, it must
+    equal the vocabulary intent review seeds itself with."""
+    from org_workspace import StateConfig
+    from intent_sources import DIP0009_V2_KEYS
+    installed = StateConfig.default().env_keys()
+    if 'QUEUED' in installed[0]:
+        pytest.skip('installed org-workspace predates the DIP-0009 v2.0 default')
+    assert tuple(map(tuple, installed)) == DIP0009_V2_KEYS
 
 
 def test_duplicate_space_identity_cannot_silently_merge_graphs(tmp_path):

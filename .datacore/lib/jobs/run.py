@@ -34,6 +34,7 @@ EXIT CODES are distinct so a caller can tell these apart, which the old
     2  the command itself failed
     3  a precondition failed — required env missing; the job never ran
     4  the job is not in the manifest
+    5  refused: this job is already running (one run at a time, MEM-56)
 
     run.py <job-name>              # run under the contract
     run.py <job-name> --dry-run    # show the env and contract, run nothing
@@ -142,7 +143,9 @@ def _artifact_path(raw: str) -> pathlib.Path:
     return pathlib.Path(matches[0]) if matches else path
 
 
-def _check_artifact(spec: dict, before: float | None) -> tuple[bool, str]:
+def _check_artifact(spec: dict, before: float | None,
+                    machine: str | None = None, *, every: str | None = None,
+                    after: str | None = None) -> tuple[bool, str]:
     """Did this artifact end the run in an acceptable state?
 
     Acceptable means: it exists, AND either it advanced during this run or it
@@ -165,17 +168,36 @@ def _check_artifact(spec: dict, before: float | None) -> tuple[bool, str]:
         return False, (f"artifact neither advanced nor fresh: {p.name} is "
                        f"{age_h:.1f}h old (max {max_age}h) and was not written")
 
-    check = spec.get("check")
-    if check == "nonempty" and p.stat().st_size == 0:
-        return False, f"artifact is empty: {p.name}"
-    if check == "regex":
-        try:
-            body = p.read_text(errors="replace")
-        except OSError as e:
-            return False, f"unreadable: {p.name} ({e})"
-        if not re.search(spec["arg"], body, re.M):
-            return False, f"{p.name} does not match {spec['arg']!r}"
+    # THE VERDICT IS job_verify'S, NOT A SECOND COPY OF IT. This used to
+    # re-implement `nonempty` and `regex` and let every other check through, so
+    # a duty could print "satisfied its contract" while job_verify failed it:
+    # mac-suite-audit did exactly that on 2026-09-22 and 09-23 (`last_line_regex`
+    # was simply not read here), and `since:` did not exist here at all. One
+    # implementation, jobs.checks.run_check, now decides for both.
+    from jobs.checks import run_check
+    from jobs.manifest import Artifact
+    errors = run_check(Artifact(path=spec["path"], check=spec.get("check", "exists"),
+                                max_age_hours=spec.get("max_age_hours"), arg=spec.get("arg"),
+                                since=spec.get("since"), every=every, after=after),
+                       machine=machine)
+    if errors:
+        return False, errors[0]
     return True, f"{p.name} ok" + ("" if advanced else " (unchanged but fresh)")
+
+
+def _single_flight(name: str):
+    """An exclusive, non-blocking lock for one job on this machine, or None
+    when another run holds it. Closing the returned file releases it."""
+    import fcntl
+    d = HOME / ".datacore" / "state" / "jobs"
+    d.mkdir(parents=True, exist_ok=True)
+    f = open(d / f"{re.sub(r'[^A-Za-z0-9._-]', '_', name)}.lock", "a")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
 
 
 def run(job: dict, dry: bool = False) -> int:
@@ -223,12 +245,23 @@ def run(job: dict, dry: bool = False) -> int:
         if type(timeout) not in (int, float) or not 0 < timeout <= 86400:
             print("PRECONDITION FAILED — timeout_seconds must be in (0, 86400]")
             return 3
+        # ONE RUN AT A TIME (MEM-56). A second start while the first is still
+        # running is refused, not queued: the 2026-09-01 double morning
+        # briefing, and the 07:00 headless /today still running when /today is
+        # typed at 09:00. The lock is the kernel's, so a crashed run frees it.
+        lock = _single_flight(job["name"])
+        if lock is None:
+            print(f"REFUSED — {job['name']} is already running on this machine; "
+                  f"this start did nothing (exit 5)")
+            return 5
         try:
             proc = run_process(["/bin/bash", "-o", "pipefail", "-c", job["cmd"]],
                                env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             print(f"COMMAND FAILED — timed out after {timeout}s; foreground process group stopped")
             return 2
+        finally:
+            lock.close()
         took = time.time() - started
 
     if proc is not None and proc.stdout:
@@ -251,7 +284,9 @@ def run(job: dict, dry: bool = False) -> int:
 
     failures = []
     for a in artifacts:
-        ok, detail = _check_artifact(a, before[a["path"]])
+        ok, detail = _check_artifact(a, before[a["path"]], job.get("machine"),
+                                     every=job.get("every") or ("day" if job.get("after") else None),
+                                     after=job.get("after"))
         print(f"  {'ok  ' if ok else 'FAIL'} {detail}")
         if not ok:
             failures.append(detail)
@@ -278,9 +313,9 @@ def main() -> int:
     MANIFEST_OVERRIDE = pathlib.Path(a.manifest).expanduser() if getattr(a, "manifest", None) else None
 
     manifest_path = MANIFEST_OVERRIDE or MANIFEST
-    from jobs.manifest import validate_manifest
+    from jobs.manifest import effective_doc, validate_manifest
     try:
-        doc = yaml.safe_load(manifest_path.read_text())
+        doc = effective_doc(manifest_path)   # manifest.local.yaml laid over it (INS-3)
         validate_manifest(doc, roster_path=ROOT / ".datacore/registry/infrastructure.yaml")
     except (OSError, ValueError, yaml.YAMLError) as error:
         print(f"PRECONDITION FAILED — invalid job manifest: {error}")

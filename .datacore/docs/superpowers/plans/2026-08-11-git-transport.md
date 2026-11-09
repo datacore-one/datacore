@@ -232,7 +232,7 @@ Two bugs found by rehearsing rather than asserting:
   "report, never reject"; the code appended to `violations`. That is a lockout of
   `0-personal` — unbypassable from the client — shipped as a security control.
 
-**Blocked:** `ssh blackpi` fails host-key verification from the Mac, and
+**Blocked:** ssh to the self-hosted git server fails host-key verification from the Mac, and
 accepting a host key is the operator's trust decision. Procedure, including
 Gitea's `custom_hooks/` requirement (Gitea overwrites `hooks/pre-receive` on
 upgrade), is in `.datacore/hooks/DEPLOY-gitea.md`. Report-only first; a week of

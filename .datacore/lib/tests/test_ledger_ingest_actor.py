@@ -93,9 +93,14 @@ def test_two_unsynced_hosts_admitting_the_same_task_cannot_collide(tmp_path):
 
 
 def test_sweep_does_not_fall_back_to_the_shared_genesis_actor():
-    """Pin the call site: a default-actor import_space() is the bug."""
+    """Pin the call site: a default-actor import_space() is the bug.
+
+    Since owner follow-up Q2 (2026-09-23) main() resolves this host's actor once,
+    strictly, at startup (`actor = _this_actor()`) and passes it on; before, the
+    call site read `import_space(space, actor=_this_actor())`."""
     src = (LIB / "ledger_ingest_org.py").read_text()
-    assert "import_space(space, actor=_this_actor())" in src
+    assert "        actor = _this_actor()\n" in src
+    assert "import_space(space, actor=actor)" in src
     assert "import_space(space)\n" not in src, (
         "a bare import_space(space) defaults to actor='genesis', which every "
         "host would then write to"

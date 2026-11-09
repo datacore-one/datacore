@@ -13,14 +13,130 @@ prevents a second open once it has been shown.
 Safe by construction: sync goes through the single transport (commit-first,
 never stash, never rebase), and this script itself never writes to the repo.
 """
+from __future__ import annotations
+
+import os
+import shutil
 import subprocess
 import sys
 from datetime import date
 from pathlib import Path
 
 DATA = Path.home() / "Data"
+LIB = DATA / ".datacore" / "lib"
 JOURNALS = DATA / "0-personal" / "notes" / "journals"
 STATE = Path.home() / ".datacore" / "state" / "morning-journal"
+
+
+def _candidates() -> list[str]:
+    """Interpreters to try for the ledger sync, best first.
+
+    launchd starts this script with /usr/bin/python3 (3.9 on macOS), and
+    launchd's PATH has none of the user's interpreters on it, so the usual
+    install locations are listed explicitly.
+    """
+    home = Path.home()
+    names = [os.environ.get("DATACORE_PYTHON", ""), sys.executable]
+    names += sorted((str(p) for p in (home / ".pyenv" / "versions").glob("3.1*/bin/python3")),
+                    reverse=True)
+    names += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "python3"]
+    out: list[str] = []
+    for n in names:
+        p = shutil.which(n) if n else None
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def _can_import_ledger(py: str) -> bool:
+    try:
+        return subprocess.run(
+            [py, "-c", f"import sys; sys.path.insert(0, {str(LIB)!r}); import ledger.log"],
+            capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def ledger_python() -> str | None:
+    """The first interpreter that can import the ledger the sync runs on."""
+    return next((py for py in _candidates() if _can_import_ledger(py)), None)
+
+
+#: The group sender on the relay host: the same command job_verify_notify.sh
+#: relays to. --alert posts to The Firm group (ALERT_CHAT_ID) and never to a
+#: 1:1 chat, and records its own delivery failures on that host.
+GROUP_SENDER = "python3 ~/Data/.datacore/modules/chief-of-staff/server/lib/winston_send.py --alert"
+
+
+def _relay_host() -> str:
+    """The roster's always-on host (roles.always_on), as an ssh alias; '' if unset.
+    manifest.py needs PyYAML, which launchd's /usr/bin/python3 does not have."""
+    for py in _candidates():
+        try:
+            r = subprocess.run([py, str(LIB / "jobs" / "manifest.py"), "role-ssh", "always_on"],
+                               capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        host = (r.stdout or "").strip().splitlines()[:1] if r.returncode == 0 else []
+        if host and host[0].strip():
+            return host[0].strip()
+    return ""
+
+
+def _record_undelivered(reason: str, msg: str) -> None:
+    try:
+        sys.path.insert(0, str(LIB))
+        import tg_format
+        if tg_format.record_undelivered("morning_journal", reason, msg):
+            return
+    except Exception:  # noqa: BLE001 -- the job is already failing; say so, do not crash
+        pass
+    print(f"alert NOT delivered and could not be recorded as undelivered: {reason}", file=sys.stderr)
+
+
+def alert_group(msg: str) -> bool:
+    """Post to The Firm group, where every automated error goes (never a 1:1 chat).
+
+    This Mac holds no bot token (Winston's bot lives on the always-on host), so
+    the text is relayed over ssh and sent there by winston_send.py --alert --
+    the route job_verify_notify.sh uses. A failure to deliver is recorded as
+    undelivered for the morning sweep. Never raises.
+    """
+    host = _relay_host()
+    if not host:
+        _record_undelivered("no relay host: set roles.always_on in .datacore/registry/infrastructure.yaml", msg)
+        return False
+    try:
+        r = subprocess.run(["ssh", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", host, GROUP_SENDER],
+                           input=msg, capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            return True
+        why = f"relay via {host} failed (rc={r.returncode}): {(r.stderr or '').strip()[:160]}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        why = f"relay via {host} failed: {type(exc).__name__}"
+    _record_undelivered(why, msg)
+    print(f"alert NOT delivered to The Firm group: {why}", file=sys.stderr)
+    return False
+
+
+def notify(msg: str) -> None:
+    """Best-effort desktop notification, an extra beside the group alert.
+
+    osascript can hang under launchd (seen 2026-09-27: 10 s timeout), and a
+    notification that cannot be shown must never block or crash the job.
+    """
+    try:
+        subprocess.run(["osascript", "-e",
+                        f'display notification "{msg}" with title "Datacore morning"'],
+                       capture_output=True, timeout=10)
+    except Exception as exc:  # noqa: BLE001 -- an extra; nothing it does may fail the job
+        print(f"desktop notification not shown: {type(exc).__name__}", file=sys.stderr)
+
+
+def alert(msg: str) -> None:
+    """A loud non-delivery: The Firm group first, then the screen as an extra."""
+    alert_group(msg)
+    notify(msg)
 
 
 def main() -> int:
@@ -31,16 +147,31 @@ def main() -> int:
         print(f"{today}: already opened — nothing to do")
         return 0
 
-    sync = subprocess.run(
-        [sys.executable, str(DATA / ".datacore" / "lib" / "ledger_transport.py"),
-         "sync", "--repo", "0-personal", "--quiet"],
-        capture_output=True, text=True, timeout=300,
-    )
-    print(sync.stdout.strip())
-    if sync.stderr.strip():
+    # The sync runs under an interpreter that can import the ledger, not
+    # sys.executable: launchd's /usr/bin/python3 is 3.9 and the ledger needs
+    # 3.10+. Until 2026-09-27 the sync crashed there every morning, its exit
+    # code was ignored, and the job then blamed nightshift for a journal this
+    # Mac had simply never pulled.
+    py = ledger_python()
+    if py is None:
+        sync = subprocess.CompletedProcess([], 1, "", "no interpreter here can import the ledger")
+    else:
+        sync = subprocess.run(
+            [py, str(LIB / "ledger_transport.py"), "sync", "--repo", "0-personal", "--quiet"],
+            capture_output=True, text=True, timeout=300,
+        )
+    if (sync.stdout or "").strip():
+        print(sync.stdout.strip())
+    if (sync.stderr or "").strip():
         print(sync.stderr.strip(), file=sys.stderr)
 
     journal = JOURNALS / f"{today}.md"
+    if sync.returncode != 0 and not journal.exists():
+        msg = ("Morning journal sync FAILED on this Mac (rc=%d) — the briefing may be "
+               "published but was not pulled" % sync.returncode)
+        print(f"{today}: {msg}")
+        alert(msg)
+        return 1
     # "## Daily Briefing" check retired 2026-07-29: miles_delivery paste was
     # retired; briefing now ships as audio + Telegram + app card — nothing
     # writes that heading into the journal anymore. Keep only the file-exists
@@ -51,13 +182,16 @@ def main() -> int:
         # Single daily shot (08:30) — a miss must be LOUD, not a log line.
         # Silent non-delivery is exactly what the 2026-07-29 post-mortem
         # was about.
-        msg = f"Morning briefing NOT delivered ({missing}) — check nightshift on the server"
+        # NAME THE HOST THAT OWNS IT (fleet sim 2026-10-03, break 2). The briefing
+        # has been the always-on host's job since 2026-09-08; "check nightshift"
+        # sent the owner to the wrong machine on a morning a reboot killed it.
+        # The cause is known only there: its catch-up alert says it.
+        host = _relay_host() or "the always-on host (roles.always_on)"
+        msg = (f"Morning briefing NOT delivered: today's journal page was not published. "
+               f"The briefing is made on {host} (job box-briefing); "
+               f"{host}'s own morning alert names the cause.")
         print(f"{today}: {msg}")
-        subprocess.run(
-            ["osascript", "-e",
-             f'display notification "{msg}" with title "Datacore morning"'],
-            capture_output=True, timeout=10,
-        )
+        alert(msg)
         return 1
 
     subprocess.run(["open", str(journal)], timeout=30)

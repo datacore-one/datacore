@@ -29,8 +29,8 @@ TEN = ("identity", "purpose", "memory", "cadence", "decision_rights", "budget", 
 
 def _manifest_jobs(root: Path) -> list[str]:
     try:
-        import yaml
-        d = yaml.safe_load((root / ".datacore" / "lib" / "jobs" / "manifest.yaml").read_text()) or {}
+        from jobs.manifest import effective_doc
+        d = effective_doc(root / ".datacore" / "lib" / "jobs" / "manifest.yaml") or {}
         return [j.get("name", "") for j in d.get("jobs") or []]
     except Exception:  # noqa: BLE001
         return []
@@ -60,6 +60,10 @@ def check(root: Path = ROOT) -> list[dict]:
             missing.append("health: no contract")
         if kind == "agent" and not p.get("permission_mode"):
             missing.append("decision_rights: no permission mode")
+        if "owns" in p:
+            # DIP-0050: who does what lives in venture.yaml only. A second copy
+            # here disagreed with it for weeks and was read by nothing.
+            missing.append("owns: roles and cadences belong in venture.yaml, not here")
         rows.append({"principal": name, "kind": kind, "charter": charter_ok, "contracts": len(contracts),
                      "budget": p.get("budget_monthly_usd"), "memory_scope": p.get("memory_scope"), "missing": missing})
     return rows

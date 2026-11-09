@@ -3,7 +3,12 @@ cadence: pr-review
 role: cto
 frequency: daily
 duration: 15min
-tools: [Bash, Read]
+tools: [Bash, Read, Write]
+# DIP-0050: judged by this run's record, written during the run.
+evidence:
+  path: "1-tracks/ops/cadence-reports/pr-review-{date}.md"
+  require: ["^# PR Review", "^## Open pull requests"]
+  min_bytes: 200
 ---
 
 ## Objective
@@ -62,9 +67,9 @@ Review all open pull requests across venture repos — assess code quality, chec
    ```bash
    gh pr checks {number} --repo {org}/{repo}
    ```
-   If all CI checks pass, approve and tag plur9 for merge — **do not merge yourself**:
+   If all CI checks pass, approve and tag the merge-gate owner ({merge_gate_user}) for merge — **do not merge yourself**:
    ```bash
-   gh pr review {number} --repo {org}/{repo} --approve --body "CI passing, automated update approved. @plur9 ready for merge."
+   gh pr review {number} --repo {org}/{repo} --approve --body "CI passing, automated update approved. @{merge_gate_user} ready for merge."
    ```
    If CI fails, add a comment noting the failure and skip.
 
@@ -87,7 +92,7 @@ Review all open pull requests across venture repos — assess code quality, chec
 
 6. **Route stale PRs**: For PRs open >7 days with no recent activity, branch on state — **never post a generic nag**:
 
-   - **Author is an agent account** (`plur9`, `miles-on-nightshift`, or any bot you operate): Do NOT comment on your own PR.
+   - **Author is an agent account** (the owner's account the agents act under, an agent's own account, or any bot you operate): Do NOT comment on your own PR.
      Note: step 0 should already have addressed anything actionable here. If a PR reaches this branch still carrying `CHANGES_REQUESTED`, that is a step-0 miss worth logging.
      - `CHANGES_REQUESTED`: Read the review body from the `reviews` field. If the findings are auto-addressable, file an org task naming them explicitly. If not, escalate to the human operator with a one-line summary of the specific blocker.
      - `mergeable == DIRTY`: File an org task to rebase the PR onto its base branch.
@@ -120,3 +125,7 @@ Review all open pull requests across venture repos — assess code quality, chec
 - No generic self-addressed nag comments posted (agent-authored PRs are never nagged at themselves)
 - No security issues in reviewed diffs go uncommented
 - Zero merges executed by the agent — merge is human-only
+
+## Run record
+
+Write `1-tracks/ops/cadence-reports/pr-review-YYYY-MM-DD.md`, headed `# PR Review — YYYY-MM-DD`, then `## Open pull requests`: one line per PR you looked at (URL, what you did: reviewed, commented, merged, skipped and why), or "none open". The runner commits it and records the run; do not log the run anywhere else.

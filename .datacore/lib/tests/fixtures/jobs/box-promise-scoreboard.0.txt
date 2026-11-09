@@ -1,0 +1,7 @@
+# fixture for box-promise-scoreboard artifact[0]
+# producer artifact: ~/.datacore/state/promise-nightly.log on box
+# harvested: 2026-09-30, last line of a scratch run of the same command (PROMISE_NIGHTLY_DIR=/tmp/pn-scratch --no-send)
+# regex under test: ^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$
+# represents: SUCCESS
+# ---
+promise-scoreboard: 100 green, 42 red, 75 could not run here; 0 turned red, 0 recovered; alert none

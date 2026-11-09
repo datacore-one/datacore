@@ -311,7 +311,7 @@ echo ""
 # --------------------------------------------------------------------------
 
 echo "Testing nightshift SSH access..."
-ssh "$NIGHTSHIFT" "echo 'SSH access confirmed'" || { echo "ERROR: Cannot reach nightshift"; exit 1; }
+ssh "$NIGHTSHIFT" "echo 'SSH access confirmed'" || { echo "ERROR: Cannot reach $NIGHTSHIFT (NIGHTSHIFT_HOST)"; exit 1; }
 
 echo ""
 echo "Cloning dotfiles..."

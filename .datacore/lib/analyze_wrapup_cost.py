@@ -137,7 +137,9 @@ def analyze(path: Path) -> dict | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--project", default="-Users-gregor-Data")
+    # Claude Code names a project's transcript folder after its path, "/" -> "-";
+    # the default is this install's data root, not ours (INS-3).
+    ap.add_argument("--project", default=str(Path.home() / "Data").replace("/", "-"))
     ap.add_argument("--since", help="YYYY-MM-DD")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()

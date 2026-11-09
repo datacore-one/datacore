@@ -1,0 +1,9 @@
+# fixture for box-audit-calibration artifact[0]
+# producer artifact: ~/.datacore/state/audit-calibration.log on box
+# harvested: 2026-09-28 (the same code's output on plur-claw's calibration run; the box job had not run yet)
+# regex under test: pins validated at write time
+# represents: SUCCESS (one calibration run written, validated where it was written, committed)
+# ---
+cross_model_audit: data (gpt) calibrates on ledgerlite at ff9fe9c7d0 -> ~/.datacore/audit-src/datacore/2-datacore/1-tracks/dev/audits/calibration/runs/2026-09-28-data.yaml
+cross_model_audit: 10 finding(s), 0 rejected, $0.0000; pins validated at write time
+cross_model_audit: pushed

@@ -27,14 +27,29 @@ belong to one principal and write disjoint files; there is no byzantine
 participant to tolerate. The sequencer is a designated role (Winston), and a
 wrong seal is DETECTABLE by every reader rather than authoritative — which is
 the property that makes designating a single sequencer safe here.
+
+ONLY THE SEQUENCER'S SEALS COUNT (owner decision L1, 2026-09-23). Readers —
+`latest_seal`, `verify_seal`, `settled_events`, `settled` — consider only
+`ledger.seal` events whose actor is the designated sequencer, `sequencer()`:
+`$DATACORE_SEQUENCER`, default `winston`, the one setting `ledger_seal.py emit`
+already used to decide who may seal. A seal by any other writer (a `--force`
+seal from another box, a stray or hostile writer) is IGNORED: it neither
+advances nor regresses settlement, and it is reported in `verify_seal`'s
+detail rather than failing the ledger. Before this, the latest seal from ANY
+writer was authoritative if it verified, so one writer could move settlement
+by sealing. (Lean: DatacoreSpec/LedgerSeal.lean, `latest_is_sequencer`,
+`foreign_seal_inert`.)
 """
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
-from .events import Event, body_dict, canonical_bytes, compute_hash
+from .events import Event, body_dict, canonical_bytes, compute_hash, event_body
 from .fold import fold
 
 
@@ -48,11 +63,85 @@ class Seal:
     sequencer: str
     version: int = 1
     event_set_hash: str = ""
+    #: The root rule (round 6, H3): True -- `pool_work` is hashed whenever set.
+    #: A seal that names none was made before pools, with the older rule.
+    pool_root: bool = False
 
     def includes(self, event: Event) -> bool:
         key = (getattr(event, "log", None) or event.actor) if self.version == 2 else event.actor
         wm = self.watermarks.get(key)
         return wm is not None and event.seq <= wm
+
+
+#: No sequencer of ours by default (INS-3): an install names its own in the
+#: roster (`roles.sequencer` in registry/infrastructure.yaml) or the env.
+DEFAULT_SEQUENCER = ""
+
+
+def _roster_sequencer() -> str:
+    try:
+        from jobs.manifest import role
+    except ImportError:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        try:
+            from jobs.manifest import role
+        except ImportError:  # no PyYAML on this interpreter: env only
+            return ""
+    return role("sequencer") or ""
+
+
+#: A reader checking a HUB space's seals names that hub's grantor explicitly
+#: (ledger.hub: the hub seals its space). Scoped to one `with` block, so it
+#: never changes whose seals the rest of the process believes.
+_SCOPED_SEQUENCER: ContextVar[str] = ContextVar("ledger_scoped_sequencer", default="")
+
+
+@contextmanager
+def as_sequencer(name: str):
+    """Within this block, `sequencer()` is `name` (a hub's grantor)."""
+    token = _SCOPED_SEQUENCER.set(name)
+    try:
+        yield
+    finally:
+        _SCOPED_SEQUENCER.reset(token)
+
+
+def sequencer() -> str:
+    """The designated sequencer, read at call time: an `as_sequencer` scope,
+    else `$DATACORE_SEQUENCER`, else the roster's `roles.sequencer`, else none
+    ("" -- no seal is believed).
+
+    One definition for the writer (`ledger_seal.py emit`) and every reader, so
+    the role that may seal and the role whose seals are believed cannot drift.
+    """
+    return (_SCOPED_SEQUENCER.get() or os.environ.get("DATACORE_SEQUENCER") or _roster_sequencer()
+            or DEFAULT_SEQUENCER)
+
+
+def _seal_events(events: list[Event]) -> list[Event]:
+    """The sequencer's seals. Every other writer's `ledger.seal` is inert."""
+    seq = sequencer()
+    return [e for e in events if e.type == "ledger.seal" and e.actor == seq]
+
+
+def ignored_seals(events: list[Event]) -> dict[str, int]:
+    """Seals by writers other than the sequencer, counted per writer (reported, never fatal)."""
+    seq = sequencer()
+    out: dict[str, int] = {}
+    for e in events:
+        if e.type == "ledger.seal" and e.actor != seq:
+            out[e.actor] = out.get(e.actor, 0) + 1
+    return out
+
+
+def _ignored_note(events: list[Event]) -> str:
+    ign = ignored_seals(events)
+    if not ign:
+        return ""
+    who = ", ".join(sorted(ign))
+    return (f"; ignored {sum(ign.values())} seal(s) by {who} "
+            f"(not the sequencer {sequencer()})")
 
 
 def watermarks(events: list[Event], *, per_log=True) -> dict[str, int]:
@@ -66,14 +155,17 @@ def watermarks(events: list[Event], *, per_log=True) -> dict[str, int]:
 
 
 def latest_seal(events: list[Event]) -> Seal | None:
-    """The most recent seal, by HLC.
+    """The sequencer's most recent seal, by HLC. `None` if the sequencer has not sealed.
+
+    Seals by any other writer are ignored (decision L1): see the module
+    docstring and `ignored_seals`.
 
     Ties are impossible in practice (one sequencer) but resolved by HLC anyway
     rather than by list order, because list order depends on merge arrival and
     would make `settled()` machine-dependent — the exact property a seal exists
     to remove.
     """
-    seals = [e for e in events if e.type == "ledger.seal"]
+    seals = _seal_events(events)
     if not seals:
         return None
     newest = max(seals, key=lambda e: e.hlc)
@@ -89,6 +181,7 @@ def latest_seal(events: list[Event]) -> Seal | None:
         sequencer=newest.actor,
         version=p.get("version", 1),
         event_set_hash=p.get("event_set_hash", ""),
+        pool_root=p.get("pool_root") is True,
     )
 
 
@@ -153,8 +246,12 @@ def _self_consistent(events: list[Event]) -> list[tuple[str, int]]:
     return sorted(set(bad))
 
 
-def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
+def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[bool | None, str]:
     """Recompute the sealed state and compare to the sequencer's claim.
+
+    `fold_kwargs`: the explicit authority a hub space folds with
+    (`lease_grantors`, `policy`; ledger.hub). A hub seals its AUTHORITATIVE
+    state, so a verifier recomputes it with the same inputs.
 
     Returns (None, reason) when there is nothing to check — an unsealed ledger
     is not a failing one. This is the check that makes a designated sequencer
@@ -172,9 +269,26 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     except (ValueError, TypeError, AttributeError):
         return False, "invalid or unsupported seal"
     if seal is None:
-        return None, "no seal yet"
+        return None, "no seal yet" + _ignored_note(events)
     if seal.version != 2:
-        return None, "legacy seal has an ambiguous actor frontier; re-seal with version 2"
+        return None, ("legacy seal has an ambiguous actor frontier; re-seal with version 2"
+                      + _ignored_note(events))
+
+    # FINALITY DOES NOT RUN BACKWARDS. The latest seal was chosen by HLC from
+    # any writer (only the sequencer's since decision L1), so a later seal
+    # naming LOWER watermarks -- a sequencer that sealed from a lagging or
+    # rewound checkout, or (before L1) a `--force` seal from another box --
+    # used to verify cleanly while events an earlier seal had
+    # settled silently left settled state. "A point everyone can name as
+    # settled" is worthless if the next seal can un-settle it, so a regression
+    # against any earlier version-2 seal is a wrong seal, and wrong seals are
+    # what every reader must detect. Found by the Lean model
+    # (DatacoreSpec/LedgerSeal.lean, seal_*), replayed 2026-09-23.
+    regressed = seal_regressions(events, seal)
+    if regressed:
+        return False, ("SEAL REGRESSION: the latest seal un-settles events an "
+                       "earlier seal settled, e.g. " + regressed[0]
+                       + " — finality must only move forward")
 
     # A seal naming an actor this machine has never seen cannot be verified
     # here — it is not wrong, we are behind. Say so rather than failing.
@@ -183,16 +297,28 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     if behind:
         return None, f"behind the seal for: {', '.join(sorted(behind))}"
 
-    if _chain_issue([event for event in events if seal.includes(event)]):
+    if _chain_issue([event for event in events if seal.includes(event)], fold_kwargs):
         return False, "SEAL MISMATCH: incomplete or invalid covered log chain"
     covered = _covered_events(events, seal)
     if _event_set_hash(covered) != seal.event_set_hash:
         return False, "SEAL MISMATCH: covered event set differs"
-    for event in covered:
-        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
-        if compute_hash(body) != event.hash:
-            return False, "SEAL MISMATCH: invalid event hash"
-    recomputed = fold(covered).state_root()
+    # Every covered event's hash was judged by _chain_issue above, through the
+    # one verifier: a second hash loop here refused seals covering an event an
+    # in-ledger void had cancelled (Phase 2 V2).
+    # THE ROOT RULE IS THE SEAL'S OWN (round 6, H3), and it only moves forward:
+    # once a seal hashed pool state, a later one that does not is refused.
+    # Every earlier seal by one of the space's SEALERS counts here (Codex round
+    # 6, N3: a promoted grantor may not drop back either) -- in a hub space
+    # each grantor's seals in its own log, else the sequencer's. A seal-shaped
+    # event by anyone else (a writer's rejected proposal) never counts (re-check).
+    grantors = {a for g in ((fold_kwargs or {}).get("lease_grantors") or {}).values() for a in g}
+    sealers = [e for e in events if e.type == "ledger.seal" and (getattr(e, "log", None) or e.actor) == e.actor
+               and e.actor in grantors] if grantors else _seal_events(events)
+    if not seal.pool_root and any(e.hlc < seal.hlc and isinstance(e.payload, dict)
+                                  and e.payload.get("pool_root") is True for e in sealers):
+        return False, ("SEAL DOWNGRADE: an earlier seal used the pool root rule (pool_root); this one "
+                       "does not -- a root rule only moves forward")
+    recomputed = fold(covered, **(fold_kwargs or {})).state_root(pool_root=seal.pool_root)
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
         # COVERAGE IS NOT CORRECTNESS. A seal is internally consistent as long
@@ -214,24 +340,60 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
             note += f"; NOT COVERED: {', '.join(uncovered)}"
         if behind_actors:
             note += f"; lags newer events from {', '.join(behind_actors)}"
+        note += _ignored_note(events)
         return True, f"seal by {seal.sequencer} verifies over ~{n} event(s){note}"
     return False, (f"SEAL MISMATCH: sequencer {seal.sequencer} claims "
                    f"{seal.state_root[:12]}, recomputed {recomputed[:12]}")
 
 
-def build_seal_payload(events: list[Event]) -> dict:
+def regressions(earlier: dict[str, int], later: dict[str, int]) -> list[str]:
+    """Logs whose watermark `later` lowers or drops relative to `earlier`.
+
+    Empty exactly when `later` dominates `earlier` key by key, which is what
+    makes the later seal's settled set a superset of the earlier one's.
+    """
+    return [f"{k}: {v} -> {later[k] if k in later else 'absent'}"
+            for k, v in sorted(earlier.items(), key=lambda kv: str(kv[0]))
+            if type(v) is int and later.get(k, -1) < v]
+
+
+def seal_regressions(events: list[Event], seal: Seal) -> list[str]:
+    """How `seal` regresses against every EARLIER version-2 sequencer seal in `events`.
+
+    Only version-2 predecessors are compared: a version-1 frontier is keyed by
+    actor, not log, and is already reported as ambiguous. A predecessor whose
+    frontier does not parse never settled anything and is skipped. Seals by
+    other writers never settled anything either (decision L1) and are skipped.
+    """
+    out: list[str] = []
+    for e in _seal_events(events):
+        if not (e.hlc < seal.hlc):
+            continue
+        p = e.payload or {}
+        wm = p.get("watermarks")
+        if p.get("version") != 2 or not isinstance(wm, dict):
+            continue
+        if any(not isinstance(k, str) or type(v) is not int for k, v in wm.items()):
+            continue
+        out += regressions(wm, seal.watermarks)
+    return out
+
+
+def build_seal_payload(events: list[Event], fold_kwargs: dict | None = None) -> dict:
     """What the sequencer appends. Excludes seals themselves, so a seal never
     seals a seal — that would make the root depend on sealing history rather
     than on the work, and two sequencer runs over identical work would differ.
     """
-    if _self_consistent(events) or _chain_issue(events):
+    if _self_consistent(events) or _chain_issue(events, fold_kwargs):
         raise ValueError("cannot seal an incomplete or invalid log chain")
     work = [e for e in events if e.type != "ledger.seal"]
     return {
         "version": 2,
         "event_set_hash": _event_set_hash(work),
         "watermarks": watermarks(work),
-        "state_root": fold(work).state_root(),
+        "state_root": fold(work, **(fold_kwargs or {})).state_root(),
+        # The root rule this seal was made with (round 6, H3).
+        "pool_root": True,
     }
 
 
@@ -242,21 +404,29 @@ def _covered_events(events, seal):
 def _event_set_hash(events):
     import hashlib
     rows = [{"log": getattr(e, "log", None) or e.actor, "seq": e.seq, "hash": e.hash,
-             "body": body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)} for e in events]
+             "body": event_body(e)} for e in events]
     rows.sort(key=lambda row: (row["log"], row["seq"], row["hash"]))
     return hashlib.sha256(canonical_bytes({"version": 2, "events": rows})).hexdigest()
 
 
-def _chain_issue(events):
-    """Validate complete chain prefixes, including earlier seal events."""
-    chains = {}
-    for event in events:
-        chains.setdefault(getattr(event, "log", None) or event.actor, []).append(event)
-    for chain in chains.values():
-        expected_seq, expected_prev = 0, "GENESIS"
-        for event in sorted(chain, key=lambda event: event.seq):
-            body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
-            if event.seq != expected_seq or event.prev != expected_prev or compute_hash(body) != event.hash:
-                return True
-            expected_seq, expected_prev = event.seq + 1, event.hash
-    return False
+def _chain_issue(events, fold_kwargs=None):
+    """Validate complete chain prefixes, including earlier seal events.
+
+    Asks the one verifier (ledger.verify.chain_problems, Phase 2 V2; audit A#7):
+    in-ledger voids and signatures count here exactly as they do for the CLI,
+    the health check and the relay. Until 2026-10-04 this was its own loop
+    that ignored both, so a seal could certify a forged-signature event and
+    refused a space whose bad event had been voided.
+    """
+    from .verify import chain_problems
+    if (fold_kwargs or {}).get("lease_grantors") is not None:
+        # A HUB space (round 6, C5): the caller folds admitted events --
+        # signed, domain-bound, chained -- so no void excuses anything, and
+        # the local principal registry can never make a recorded reversal
+        # read as a broken chain (and a confirmed seal as a mismatch).
+        from .finality import resolve
+        from .voids import Voids
+        fin = resolve(events, lease_grantors=fold_kwargs.get("lease_grantors"),
+                      reversers=fold_kwargs.get("reversers"), legacy_reversals=fold_kwargs.get("legacy_reversals"))
+        return bool(chain_problems(events, voids=Voids(effective=dict(fin.voids.effective))))
+    return bool(chain_problems(events))

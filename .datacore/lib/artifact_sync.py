@@ -193,6 +193,12 @@ def run_sync(
 
         if proc.returncode == 0:
             results.append(f"ok: {remote_path} -> {local_path}")
+        elif proc.returncode == 23 and "No such file or directory" in (proc.stderr or ""):
+            # Today's artifact is not published yet (a join before the box's
+            # morning run). Nothing to pull is not a failed pull: on 2026-09-25
+            # it failed four joins in a row and paged "FAILED" when it recovered.
+            # Whether the briefing gets made is the box's own contract.
+            results.append(f"ok: nothing published yet: {remote_path}")
         else:
             detail = (proc.stderr or proc.stdout or f"rsync exit {proc.returncode}").strip()
             results.append(f"error: {remote_path} -> {local_path}: {detail}")

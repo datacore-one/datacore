@@ -30,6 +30,13 @@ logger = logging.getLogger("workflow_executor")
 # Schema helpers
 # ---------------------------------------------------------------------------
 
+#: A LIVE phase that was due but that this executor cannot dispatch (tool,
+#: agent and output handlers only log). Distinct from "skipped", which a
+#: condition decides. DIP-0022: "This file is not proof that any tool
+#: executed" -- so a run with such a phase must not report "completed".
+NOT_EXECUTED = "not_executed"
+
+
 class WorkflowError(Exception):
     """Raised when a workflow cannot be loaded or executed."""
 
@@ -226,7 +233,9 @@ def _execute_phase(
     """
     Execute (or simulate) a single phase.
 
-    Returns a status string: "completed", "skipped", "paused", "stopped", "error".
+    Returns a status string: "completed", "skipped", "not_executed", "paused",
+    "stopped", "error". "skipped" means a condition excluded the phase;
+    "not_executed" means it was due but LIVE mode has no dispatcher for it.
     """
     # --- stop_if check ---
     if phase.stop_if and _evaluate_condition(phase.stop_if, context):
@@ -275,7 +284,7 @@ def _handle_tool(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool) 
         return "completed"
     logger.warning("  [%s] %s — would call MCP tool (not executed)", phase.name, detail)
     _update_phase_state(wf, phase.name, "skipped", detail)
-    return "skipped"
+    return NOT_EXECUTED
 
 
 def _handle_agent(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool) -> str:
@@ -288,7 +297,7 @@ def _handle_agent(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool)
         return "completed"
     logger.warning("  [%s] %s — would spawn agent (not executed)", phase.name, detail)
     _update_phase_state(wf, phase.name, "skipped", detail)
-    return "skipped"
+    return NOT_EXECUTED
 
 
 def _handle_interactive(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool) -> str:
@@ -310,7 +319,7 @@ def _handle_output(phase: Phase, context: dict[str, Any], wf: str, dry_run: bool
         return "completed"
     logger.warning("  [%s] %s — would render output (not executed)", phase.name, detail)
     _update_phase_state(wf, phase.name, "skipped", detail)
-    return "skipped"
+    return NOT_EXECUTED
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +377,11 @@ def execute_workflow(
             overall = "error"
             logger.error("  >> Workflow aborted at phase '%s' (non-optional error)", phase.name)
             break
+        elif status == NOT_EXECUTED and overall == "completed":
+            # Keep going, as before, but never call the run completed: a LIVE
+            # run whose tool/agent phases only logged used to say "completed"
+            # with nothing executed (DatacoreSpec/NightshiftGates.lean, Workflow).
+            overall = NOT_EXECUTED
 
     logger.info("")
     logger.info("=== Result: %s ===", overall)

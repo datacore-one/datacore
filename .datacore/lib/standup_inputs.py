@@ -19,8 +19,8 @@ it into the journal-entry-writer prompt.
 
 Usage:
     python3 .datacore/lib/standup_inputs.py \\
-        --space 1-datafund \\
-        --contributor plur9 \\
+        --space 1-team \\
+        --contributor <github-user> \\
         --accomplishments-file /tmp/accomplishments.txt \\
         [--continuation "Polish the spec"] \\
         [--blocker-threshold 3]
@@ -212,6 +212,32 @@ def blockers(
     return out
 
 
+_SPACE_TAG_RE = re.compile(r"\[(\d+-[\w-]+)\]\s*")
+
+
+def space_tag(line: str) -> str | None:
+    """The ``[N-space]`` a line is tagged with, or None."""
+    m = _SPACE_TAG_RE.search(line or "")
+    return m.group(1) if m else None
+
+
+def own_space_accomplishments(accomplishments: list[str], space: str) -> list[str]:
+    """Keep only work that belongs to ``space`` (MEM-16).
+
+    A team standup covers its own space: an accomplishment tagged with another
+    space (``[5-plur] ...``) is dropped, and the own-space tag is stripped.
+    Untagged lines are the caller's own-space input and stay.
+    """
+    name = Path(space).name
+    out = []
+    for acc in accomplishments:
+        tag = space_tag(acc)
+        if tag is not None and tag != name:
+            continue
+        out.append(_SPACE_TAG_RE.sub("", acc, count=1).strip() if tag else acc)
+    return out
+
+
 def build(
     *,
     space: str,
@@ -222,6 +248,7 @@ def build(
 ) -> dict:
     org_file = Path(space) / "org" / "next_actions.org"
     tasks = _load_tasks(org_file)
+    accomplishments = own_space_accomplishments(accomplishments, space)
     return {
         "space": space,
         "contributor": contributor,
@@ -265,7 +292,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--space", required=True, help="Space directory (e.g. 1-datafund)")
+    parser.add_argument("--space", required=True, help="Space directory (e.g. 1-myteam)")
     parser.add_argument("--contributor", required=True, help="Contributor name (lowercase, no @)")
     g = parser.add_mutually_exclusive_group()
     g.add_argument("--accomplishments-file", help="Path to file (one accomplishment per line)")

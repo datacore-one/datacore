@@ -1,0 +1,28 @@
+# Coarse buckets that task_triage.py and roadmap_validate.py sort open tasks into.
+# A task lands in the FIRST theme whose regex matches its heading (case-insensitive),
+# so order matters; "unfiled" is a finding, not a failure.
+#
+# This is a neutral default. An install's own taxonomy goes in the gitignored
+# task-themes.local.yaml beside this file, which replaces these tables:
+#   themes:          used by task_triage (and roadmap_validate when roadmap_themes is absent)
+#   roadmap_themes:  roadmap_validate's orphan clustering only
+themes:
+  "docs / content": "\\bdocs?\\b|readme|guide|blog|publish"
+  "release / ci": "\\bci\\b|workflow|release|version|changelog"
+  "security / trust": "security|vulnerab|secret|credential|permission"
+  "bugs": "\\bbug|crash|regression|broken"
+  "infra / ops": "backup|monitor|server|dns|deploy|systemd"
+
+# task_surface.py: WHERE a task lands (the working copy you would open), a second
+# axis beside the roadmap. First match wins; no match is "unassigned". Neutral
+# default; the install's own surfaces go under surfaces: in task-themes.local.yaml.
+surfaces:
+  "docs": "\\bdocs?\\b|readme|guide|blog"
+  "ops": "deploy|server|backup|monitor|systemd|cron"
+  "core": "\\bbug|crash|test|refactor|\\bapi\\b"
+
+# task_referent_check.py: which GitHub repo a bare #NNN in a task heading names.
+# First regex that matches the heading wins; an entry '.' last names the default.
+# Neutral default: none, so bare references are not resolved. The install's own
+# map goes under referent_repos: in task-themes.local.yaml.
+referent_repos: {}

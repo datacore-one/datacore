@@ -13,6 +13,8 @@
 #                              validation + root allowlist)
 #   [0-9]-* space repos     -> .datacore/hooks/space-pre-commit (DIP-0015
 #                              allowlist + safety checks)
+#   [0-9]-*-archive repos   -> space-pre-commit, SAFETY_ONLY + ARCHIVE_STORE
+#                              (no allowlist, no conflict-marker rule)
 #   any other repo          -> space-pre-commit in SAFETY_ONLY mode
 #                              (conflict markers, *.local.md, credentials)
 #
@@ -23,6 +25,30 @@ hook_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 data_root=$(dirname "$(dirname "$hook_dir")")
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+# LED-3: only EventLog-written ledger lines. The gate is taken from this hook's own
+# checkout ($data_root), never from the repo being committed: on an agent's host
+# the hooks are the runner's and the repo (the agent's space, a blog) carries no
+# core scripts. Missing gate or missing python3 refuses the commit, naming what
+# is missing; the gate is never skipped silently.
+ledger_gate="$data_root/.datacore/lib/hooks/ledger_write_gate.py"
+if [ ! -f "$ledger_gate" ]; then
+  echo "pre-commit: BLOCKED — required gate $ledger_gate not found (this hook's checkout is incomplete; update it: git -C $data_root pull --ff-only)" >&2
+  exit 1
+fi
+command -v python3 >/dev/null 2>&1 || { echo "pre-commit: BLOCKED — no python3 on PATH, so the ledger write gate cannot run" >&2; exit 1; }
+python3 "$ledger_gate" --repo "$repo_root" --staged || exit 1
+# A venture's hypotheses board lands only if the heartbeat can read it (2026-10-23:
+# one invalid-YAML board and one unknown lane each stopped a venture for weeks).
+# Exits at once when no board is staged; refuses when it cannot check one.
+hyp_gate="$data_root/.datacore/lib/hooks/hypotheses_write_gate.py"
+if [ -f "$hyp_gate" ]; then
+  python3 "$hyp_gate" --repo "$repo_root" --root "$data_root" --staged || exit 1
+fi
+# An overnight task never commits onto a default branch of code (2026-09-27, 93f3879 on
+# the root's main). Only under NIGHTSHIFT_RUN=1; fails CLOSED if the guard cannot run.
+if [ "${NIGHTSHIFT_RUN:-}" = "1" ]; then
+  python3 "$data_root/.datacore/lib/hooks/unattended_commit_guard.py" --repo "$repo_root" --root "$data_root" || exit 1
+fi
 
 case "$repo_root" in
   "$data_root")
@@ -31,6 +57,16 @@ case "$repo_root" in
     fi
     exit 0
     ;;
+  "$data_root"/[0-9]-*-archive)
+    # A space's archive repo (outbox processor, DIP-0017) is not a space: it
+    # keeps files verbatim under their 4-archive/ paths, old conflict markers
+    # included. The space allowlist and the marker rule do not apply; the
+    # credential and *.local.md rules do, since archive repos push offsite.
+    SAFETY_ONLY=1
+    ARCHIVE_STORE=1
+    export SAFETY_ONLY ARCHIVE_STORE
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
   "$data_root"/[0-9]-*)
     # direct child space repos only (not nested project repos)
     rel=${repo_root#"$data_root"/}
@@ -38,6 +74,37 @@ case "$repo_root" in
       */*) SAFETY_ONLY=1; export SAFETY_ONLY ;;
       *)   : ;;
     esac
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
+  "$data_root"/.datacore/modules/*)
+    # DIP-0047 at commit time: a module that declares its egress may not grow an
+    # undeclared network call. Until 2026-09-25 only the box's 06:00 v2-verify
+    # caught one -- twice in three days, both from same-day trading commits.
+    mod=${repo_root#"$data_root"/.datacore/modules/}
+    mod=${mod%%/*}
+    # Every module, not only those that already declare: a module that never
+    # declared could otherwise grow its first network call unseen (MOD-5).
+    if [ -f "$data_root/.datacore/modules/$mod/module.yaml" ]; then
+      if ! python3 "$data_root/.datacore/lib/egress_scan.py" --enforce --module "$mod" >/tmp/egress-precommit.$$ 2>&1; then
+        grep -A6 "UNDECLARED" /tmp/egress-precommit.$$ >&2
+        printf '\nDeclare it under egress: (it acts) or exempt: (read-only) in %s/module.yaml.\n' "$mod" >&2
+        rm -f /tmp/egress-precommit.$$
+        exit 1
+      fi
+      rm -f /tmp/egress-precommit.$$
+    fi
+    SAFETY_ONLY=1
+    export SAFETY_ONLY
+    exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
+    ;;
+  "$data_root"/.datacore/secrets)
+    # The credential store: `creds add` commits credentials here by design, so
+    # the credential-pattern rule is skipped for this repository alone (it had
+    # refused every `creds add` commit; owner-approved 2026-09-30). Conflict
+    # markers and the ledger gate still apply.
+    SAFETY_ONLY=1
+    CREDENTIAL_STORE=1
+    export SAFETY_ONLY CREDENTIAL_STORE
     exec "$data_root/.datacore/hooks/space-pre-commit" "$@"
     ;;
   *)

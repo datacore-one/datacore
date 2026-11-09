@@ -10,7 +10,7 @@ from pathlib import Path
 
 from actor_identity import base_writer, principal_of
 from ledger.hlc import parse
-from ledger.log import CorruptLogError, read_events
+from ledger.log import TELEMETRY_SUFFIX, CorruptLogError, read_events
 from ledger.verify import verify_events
 
 
@@ -30,9 +30,19 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
     """
     latest: dict[str, dict[str, Attestation]] = {}
     root = Path(root)
-    spaces = [root, *sorted(p for p in root.glob('[0-9]-*') if p.is_dir())]
+    spaces = [root, *sorted(p for p in root.glob('[0-9]*-*') if p.is_dir())]  # 10-… too (SPC-9)
     for space in spaces:
-        events = read_events(space)
+        # A HUB space's evidence is what admission lets in (Codex round 5, C6):
+        # an unsigned or foreign line in a writer's file is not an attestation.
+        # A space without a hub reads exactly as before.
+        from ledger.hub import HubError, authoritative_events
+        try:
+            events, kw = authoritative_events(space, read_events(space))
+        except (HubError, ValueError) as exc:
+            raise CorruptLogError(f'{space.name}: the hub authority does not verify ({exc})') from exc
+        # ... and a reversed or refused record is no evidence (Codex round 6, N4).
+        from ledger.finality import effective_events
+        evidence = effective_events(events, kw)
         chains: dict[str, list] = {}
         for event in events:
             chains.setdefault(event.log, []).append(event)
@@ -62,7 +72,7 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
             chain.sort(key=lambda event: event.seq)
             if verify_events(list(enumerate(chain, 1))):
                 raise CorruptLogError('invalid verification event chain')
-        for event in events:
+        for event in evidence:
             if event.type != 'metric.attest':
                 continue
             payload = event.payload
@@ -77,7 +87,8 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
                          and isinstance(failures, list) and all(isinstance(f, str) for f in failures)
                          and ok == (not failures) and 0 <= ms < 10**13 and 0 <= counter <= 9999
                          and event.hlc == f"{ms:013d}.{counter:04d}.{writer}"
-                         and writer == event.actor and base_writer(event.log) == base_writer(event.actor))
+                         and writer == event.actor
+                         and base_writer(event.log.removesuffix(TELEMETRY_SUFFIX)) == base_writer(event.actor))
                 if not valid:
                     raise ValueError('invalid job verification evidence')
             except (ValueError, TypeError, AttributeError, OverflowError) as exc:

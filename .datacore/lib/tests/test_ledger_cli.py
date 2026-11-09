@@ -33,11 +33,12 @@ def test_cli_approval_binds_the_exact_payload(tmp_path):
 
 
 def _env(tmp_path, actor="test-actor"):
-    """A minimal, hermetic env: DATACORE_ACTOR set, DATACORE_LEDGER_SIGN
-    unset regardless of the ambient environment, so appended events are
-    unsigned by default (Task 1.4b) and no key material is touched."""
+    """A minimal, hermetic env: DATACORE_ACTOR set, and signing explicitly off
+    (DATACORE_LEDGER_SIGN=0) regardless of the ambient environment, so appended
+    events are unsigned and no key material is touched. Signing is on by default
+    since 2026-10-31; tests/test_ledger_signing_always_on.py covers the default."""
     env = dict(os.environ)
-    env.pop("DATACORE_LEDGER_SIGN", None)
+    env["DATACORE_LEDGER_SIGN"] = "0"
     env["DATACORE_ACTOR"] = actor
     env["HOME"] = str(tmp_path)  # keep ~/.datacore/keys out of the picture entirely
     env["DATACORE_ROOT"] = str(tmp_path)
@@ -261,7 +262,10 @@ def test_missing_space_dir_exits_1_no_traceback(tmp_path):
         assert "not found" in r.stderr, args
 
 
-def test_default_actor_from_hostname_when_env_unset(tmp_path):
+def test_undeclared_host_refuses_to_append_as_hostname(tmp_path):
+    """Owner decision L10 (2026-09-23): the hostname fallback is a guess, and an
+    undeclared host may no longer append under it. Before L10 this test pinned
+    the opposite (`test_default_actor_from_hostname_when_env_unset`)."""
     import socket
 
     space = tmp_path / "space"
@@ -274,7 +278,8 @@ def test_default_actor_from_hostname_when_env_unset(tmp_path):
          "--type", "item.create", "--payload", json.dumps({"id": "t1", "title": "X"})],
         capture_output=True, text=True, env=env,
     )
-    assert r.returncode == 0, r.stderr
+    assert r.returncode != 0
+    assert "DATACORE_ACTOR" in r.stderr
     hostname = socket.gethostname().split('.')[0].lower()
     log_file = space / ".datacore" / "events" / f"{hostname}.jsonl"
-    assert log_file.exists()
+    assert not log_file.exists()

@@ -17,7 +17,18 @@ add. Two gates (product description, stages 4 and 5):
                              refused.
 
 Limits come from `approvals_policy.yaml` (`principals:`), with documented
-defaults: agents get max_hops 3 and 50 creates a day; humans are unbounded.
+defaults: agents get max_hops 3; creates are unbounded for everyone unless the
+policy names a `max_creates_per_day` for that principal (owner decision
+2026-09-30: "There should be no limit" -- the 50-a-day agent default of
+2026-09-06 had refused Winston's repair and job-failure tasks for four days).
+
+`max_creates_per_day` IS PER PRINCIPAL PER SPACE (owner decision L6,
+2026-09-23). `creates_today` counts the `item.create` events of every writer
+the principal owns (all aliases, all run-branch logs), today in UTC, in the ONE
+space being written to. Each space has its own log and its own count, so a
+principal may create up to `max_creates_per_day` items in each space: the
+installation-wide ceiling is the cap times the number of spaces. That is the
+intended scope, not an oversight.
 A refusal is a one-line reason the caller prints; nothing is dropped
 silently.
 """
@@ -30,7 +41,7 @@ from pathlib import Path
 from actor_identity import addressed_to, principal_of, principals as _principals
 
 DEFAULT_MAX_HOPS = 3
-DEFAULT_MAX_CREATES_PER_DAY = 50
+DEFAULT_MAX_CREATES_PER_DAY = None   # no default cap (owner decision 2026-09-30)
 ABSENT_AFTER_HOURS = 26  # a principal whose contracts have not been verified for this long is absent
 
 
@@ -97,6 +108,17 @@ def check_claim(actor: str, payload: dict | None, policy=None, space_dir: Path |
     ok, why = check_budget(actor, space_dir)
     if not ok:
         return False, why
+    # Lanes and claim budgets per period (agent_lanes.yaml, task W5): an agent
+    # claims only work in its own lane, and none once its period's budget is
+    # spent. Claims are counted across every space under this space's root;
+    # with no space named nothing is counted, as check_budget counts no spend.
+    from agent_lanes import check_lane
+    if space_dir:
+        ok, why = check_lane(actor, payload, root=Path(space_dir).parent)
+    else:
+        ok, why = check_lane(actor, payload, usage=lambda *_a, **_k: 0)
+    if not ok:
+        return False, why
     return True, f"{name} may claim"
 
 
@@ -106,15 +128,47 @@ def _event_date(event):
 
 
 def creates_today(space_dir: Path | None, actor: str, today: dt.date | None = None) -> int:
-    """Count a principal's creates across aliases and all branch-scoped logs."""
+    """Count a principal's creates across aliases and all branch-scoped logs, in THIS space.
+
+    Per principal per space by design (decision L6): other spaces' logs are not
+    read, so `max_creates_per_day` applies to each space separately.
+    """
     if not space_dir:
         return 0
-    from ledger.log import read_events
+    # Admitted events only: in a hub space a forged or tampered row is not a
+    # create (Codex round-3 verdict, raw_gate_readers). No hub: every event.
+    from ledger.hub import effective_authoritative_events
     principal, _ = principal_of(actor)
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    return sum(1 for event in read_events(space_dir)
+    # ... and with effect: a create the hub kept as a rejected proposal is none (round 8).
+    events, _kw = effective_authoritative_events(Path(space_dir))
+    return sum(1 for event in events
                if principal_of(event.actor)[0] == principal and event.type == "item.create"
                and _event_date(event) == today)
+
+
+def recorded_hops(payload: dict | None) -> int:
+    """The delegation depth an item's payload records; 0 when absent or malformed."""
+    hops = (payload or {}).get("hops", 0)
+    return hops if type(hops) is int and hops >= 0 else 0
+
+
+def parent_hops(space_dir: Path | None, after) -> int | None:
+    """Recorded depth of the item a follow-up names in `after`; None if no such item.
+
+    DEPTH IS DERIVED FROM THE CHAIN, NOT TAKEN ON THE CALLER'S WORD. `hops` used
+    to be whatever the creator wrote, and the one writer of chained items
+    (`ledger_claim.chain_follow_up`) never wrote it, so every link of an
+    A -> B -> A follow-up chain read as depth 0 and max_hops never bound.
+    (Lean: DatacoreSpec.LedgerPolicy.Hops.old_chain_unbounded.)
+    """
+    if not space_dir or not isinstance(after, str) or not after:
+        return None
+    # The item as the space's authoritative state has it (Codex round-3
+    # verdict, raw_gate_readers): a forged create names no item.
+    from ledger.hub import authoritative_state
+    item = authoritative_state(Path(space_dir)).items.get(after)
+    return None if item is None else recorded_hops(item.payload)
 
 
 def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path | None = None,
@@ -133,6 +187,17 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
     hops = payload.get("hops", 0)
     if isinstance(hops, bool) or not isinstance(hops, int) or hops < 0:
         return False, f"hops must be a nonnegative integer (got {hops!r})"
+    if not human and payload.get("after") is not None:
+        # A follow-up is one hop deeper than the item it follows, so it may not
+        # declare less. Humans are exempt, as they are from max_hops: a human
+        # re-issuing work is the human in the loop, and restarts the count.
+        floor = parent_hops(space_dir, payload.get("after"))
+        if floor is None:
+            if space_dir:
+                return False, f"after names {payload.get('after')!r}, which is no item in this space"
+        elif hops < floor + 1:
+            return False, (f"a follow-up of an item {floor} hops deep must declare hops at least "
+                           f"{floor + 1} (got {hops})")
     if not human and hops > max_hops:
         return False, f"delegation chain is {hops} hops deep; {name} may go {max_hops}"
     assignee = payload.get("assignee")
@@ -160,8 +225,8 @@ def check_create(actor: str, payload: dict | None, policy=None, space_dir: Path 
             payload["assignee_absent"] = note  # recorded, never worked around
     if not human:
         cap = lims.get("max_creates_per_day", DEFAULT_MAX_CREATES_PER_DAY)
-        n = creates_today(space_dir, actor, today)
-        if n >= cap:
+        n = creates_today(space_dir, actor, today) if cap is not None else 0
+        if cap is not None and n >= cap:
             return False, f"{name} has created {n} item(s) today; the allowance is {cap}"
     return True, f"{name} may create"
 
@@ -170,15 +235,19 @@ def month_to_date_cents(space_dir: Path | None, writers: list[str], today: dt.da
     """Use the canonical spend fold across every chain owned by these writers."""
     if not space_dir:
         return 0
-    from ledger.log import read_events
     from ledger.fold import fold
+    from ledger.hub import effective_authoritative_events
     from actor_identity import base_writer
     principals = {principal_of(writer)[0] or base_writer(writer) for writer in writers}
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    events = [event for event in read_events(space_dir)
+    # Admitted spend only (Codex round-3 verdict, spend_reader): a tampered
+    # row in a hub space is not money spent. No hub: every event, as before.
+    # ... with effect (round 8): rejected or reversed spend is not money spent.
+    admitted, kw = effective_authoritative_events(Path(space_dir))
+    events = [event for event in admitted
               if (principal_of(event.actor)[0] or base_writer(event.actor)) in principals and event.type == "spend.record"
               and (_event_date(event).year, _event_date(event).month) == (today.year, today.month)]
-    return sum(fold(events).spend.values())
+    return sum(fold(events, **kw).spend.values())
 
 
 def check_budget(actor: str, space_dir: Path | None = None, today: dt.date | None = None) -> tuple[bool, str]:
@@ -236,7 +305,8 @@ def check_override(actor: str, item_id: str | None, space_dir: Path, policy=None
     try:
         from ledger.fold import fold
         from ledger.log import read_events
-        state = fold(read_events(Path(space_dir)))
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        state = authoritative_state(Path(space_dir))
     except Exception as exc:  # noqa: BLE001
         return False, f"cannot establish item ownership ({type(exc).__name__})"
     item = state.items.get(item_id)

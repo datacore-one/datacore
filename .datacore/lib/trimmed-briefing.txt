@@ -1,0 +1,46 @@
+Good morning.
+
+    You slept five-point-seven hours. The red band is active — nocturnal
+    hypoxia, breathing-disturbance index of seventeen per hour, with three
+    consecutive days of rising resting heart rate. The Practice recommends a
+    home sleep test conversation with a clinician. Readiness did not land, so
+    plan the day and let your body object. Cardio is the session, not yet
+    done.
+
+    The AI infrastructure bubble is straining. CoreWeave's bond yield topped
+    fifteen per cent, insurers are pricing SoftBank debt higher, and
+    Bernstein estimates only thirty-five per cent of the planned data centre
+    pipeline is credible. Goldman Sachs, Wells Fargo, and Morgan Stanley see
+    tokenisation as a growth play; Circle defends its USDC economics as
+    rivals court its partners. For PLUR Enterprise the signal is mixed:
+    cheaper compute later if the overbuild unwinds, but cautious buyers now.
+    The SRC pilot lands in a moment when trust-but-verify is the prevailing
+    mood.
+
+    Your calendar is empty — Sunday — but Akrem is out Monday and Tuesday,
+    so anything needing him must happen today or wait until Wednesday. Three
+    emails block people: two OpenAI API key summaries and Andrew Quinn on
+    tokenised dataset hiring. Tomorrow the Daily is at ten.
+
+    The overnight passes ran. Email triage swept one hundred and sixty-seven
+    messages and archived one hundred and three. GitHub triage ran for both
+    enterprise and public repos, surfacing a docs fix failing checks on every
+    PR for ten days, unassigned. Nightshift produced ten items — nothing
+    failed, but the queue is at one hundred and seventy-four with zero
+    committed. The factory is producing faster than inspection can clear.
+
+    Jimo switched from Chainlink to Bitcoin with forty new tests. Meridian
+    is the only conflicted repo of twenty-eight — minor, but worth clearing
+    before the next trading window.
+
+    Here is what I notice. The priorities file is ninety-three days stale —
+    it points at Q3 goals from July, but October's actual work is enterprise-
+    first-install, SRC offers, and Jimo team building. The compass and
+    heading diverged. Meanwhile the autofix machinery burns tokens on
+    four jobs failing identically for over two weeks, with no circuit breaker
+    to say "tell a human." Same pattern at different scales: the system keeps
+    running without checking whether it is going the right way. Five minutes
+    and one decision — build the circuit breaker or accept the burn — would
+    close both loops.
+
+    Your full report is on your desk.

@@ -46,7 +46,9 @@ def setup(tmp: Path) -> tuple[Path, Path]:
     sh(tmp, "git", "init", "-q", "--bare", str(srv))
     shutil.copy(HOOK, srv / "hooks" / "pre-receive")
     (srv / "hooks" / "pre-receive").chmod(0o755)
-    sh(tmp, "git", "init", "-q", str(wt))
+    # The pushes name `main`; say so rather than inherit init.defaultBranch,
+    # which the hermetic git config nulls (git's own default is still master).
+    sh(tmp, "git", "init", "-q", "-b", "main", str(wt))
     sh(wt, "git", "config", "user.email", "t@t")
     sh(wt, "git", "config", "user.name", "t")
     # Point the CLIENT hooks at this fixture's own (empty) hooks dir. Without
@@ -123,6 +125,25 @@ def main() -> int:
 
     print(f"\npre-receive rehearsal: {'FAILED ' + ', '.join(fails) if fails else 'all cases pass'}")
     return 1 if fails else 0
+
+
+def test_admitted_accounts_come_from_the_install_not_the_hook(tmp_path):
+    """INS-3: the hook names no account of ours. An account listed in
+    `<hook>.accounts` is admitted and exempt from per-actor ownership; the
+    same pusher with no accounts file is judged as an unknown actor."""
+    srv, wt = setup(tmp_path)
+    push(wt, "mac")                               # the branch exists; later pushes diff against it
+    (wt / ".datacore" / "events" / "winston.jsonl").write_text('{"seq":9}\n')
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "commit", "-qm", "cross")
+    rc, out = push(wt, "the-account")
+    assert "not in .datacore/members.yaml" in out and "single-writer" in out, out[-300:]
+
+    (srv / "hooks" / "pre-receive.accounts").write_text("# admitted\nthe-account\n")
+    (wt / ".datacore" / "events" / "winston.jsonl").write_text('{"seq":10}\n')
+    sh(wt, "git", "commit", "-qam", "cross again")
+    rc, out = push(wt, "the-account")
+    assert rc == 0 and "datacore/" not in out, out[-300:]
 
 
 if __name__ == "__main__":

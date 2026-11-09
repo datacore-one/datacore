@@ -90,3 +90,11 @@ def test_the_denylist_is_read_from_the_installation_not_hardcoded():
     terms = td.forbidden_terms()
     assert terms, "the denylist is empty; the guard would pass anything"
     assert any(len(t) > 3 for t in terms)
+
+
+def test_the_personas_on_the_page_are_the_installs_own(monkeypatch):
+    """INS-3: agents and their published handles come from principals.yaml."""
+    import roster
+    monkeypatch.setattr(roster, "section", lambda key, path=None:
+                        {"agents": [["Ada", "@ada_bot", "ops"]]} if key == "testnet_dashboard" else {})
+    assert td._page_config()["agents"] == [["Ada", "@ada_bot", "ops"]]

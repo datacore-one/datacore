@@ -64,8 +64,11 @@ def parse_env_value(value: str, *, inline_comments: bool = False) -> str:
 def parse_env_file(path: Path, *, inline_comments: bool = False) -> Dict[str, str]:
     """Parse literal assignments completely before callers apply any value.
 
-    Blank lines/comments are allowed. Ambiguous, duplicate, malformed or
-    unreadable configuration is an error; diagnostics never echo its values.
+    Blank lines/comments are allowed. A key assigned more than once takes
+    its LAST value, as shell `source` and systemd `EnvironmentFile` do
+    (decision C2, 2026-09-23: every env parser in the installation agrees on
+    this; `creds doctor` lists such keys). Malformed or unreadable
+    configuration is an error; diagnostics never echo its values.
     inline_comments preserves the CoS contract for unquoted whitespace-#
     comments. The default preserves literal unquoted values for core callers.
     """
@@ -94,8 +97,8 @@ def parse_env_file(path: Path, *, inline_comments: bool = False) -> Dict[str, st
             line = line[7:]
         key, separator, val = line.partition('=')
         key = key.strip()
-        if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in result:
-            raise ValueError(f'invalid or duplicate environment assignment at line {number}')
+        if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+            raise ValueError(f'invalid environment assignment at line {number}')
         try:
             val = parse_env_value(val, inline_comments=inline_comments)
         except ValueError:
@@ -114,11 +117,17 @@ def load_env_files(paths: Optional[List[Path]] = None, override: bool = False) -
         override: If True, overwrite existing env vars. Default: only set if not present.
     """
     if paths is None:
+        # HOST BEATS FLEET, whatever `override` says. local.env is this
+        # host's own tier and wins in credential_access.resolve(); the file
+        # order must give the same answer under either precedence rule below
+        # (first file wins when not overriding, last file wins when
+        # overriding). A fixed [.env, local.env] made the fleet value win
+        # for every default caller (override=False) -- the opposite of what
+        # `creds get` serves for the same variable.
         root = _data_root()
-        paths = [
-            root / ".datacore" / "env" / ".env",
-            root / ".datacore" / "env" / "local.env",
-        ]
+        fleet = root / ".datacore" / "env" / ".env"
+        host = root / ".datacore" / "env" / "local.env"
+        paths = [fleet, host] if override else [host, fleet]
 
     loaded = {}
     pending = {}
@@ -127,6 +136,10 @@ def load_env_files(paths: Optional[List[Path]] = None, override: bool = False) -
         for k, v in parsed.items():
             if override or (k not in os.environ and k not in pending):
                 pending[k] = v
-            loaded[k] = v
+            # The returned map follows the same file precedence as the
+            # environment: it used to be last-wins regardless, so it reported
+            # a value different from the one just exported.
+            if override or k not in loaded:
+                loaded[k] = v
     os.environ.update(pending)
     return loaded

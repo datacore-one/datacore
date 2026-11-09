@@ -25,15 +25,16 @@ recall:
 ## EXECUTION MODEL — INLINE WITH TRACKED CHECKLIST
 
 **Execute /wrap-up inline** in the main conversation. The tracked checklist (Step 0b) prevents
-step-skipping by making every step visible as a TaskCreate item that must be marked complete.
+step-skipping by making every step visible as an unticked line in today's journal, written and
+ticked by the Datacore step tracker (`command_steps.py`), the same in every harness.
 
 **Why not subagent:** Subagent dispatch (tried 2026-04-11) produces zero console output for
 15-20 minutes — unacceptable UX. The user sees nothing while the agent runs 170+ tool calls
 in the background. The tracked checklist is the actual compression guard, not process isolation.
 
 **Anti-compression rule:** If you feel tempted to skip steps 6-9 ("no tasks to extract",
-"nothing to verify"), STOP. The checklist forces you to mark each step in_progress and
-completed. You cannot skip what is tracked. This is the fix for ENG-2026-0411-001.
+"nothing to verify"), STOP. The checklist forces you to tick each step as it
+completes. You cannot skip what is tracked. This is the fix for ENG-2026-0411-001.
 
 ---
 
@@ -150,6 +151,8 @@ Long sessions get compacted — earlier conversation turns are summarized, losin
 
 **Store this inventory internally** — every subsequent step draws from it. Without this step, wrap-up misses work done before compaction or in external directories.
 
+**This is enforced.** The archive records every day the owner wrote on (`owner_days`) and how many compactions happened (`compactions`); `meta` prints both. The §10 `report` refuses a narrative whose `phases` do not cover every one of those days, so a wrap-up built from the latest compaction summary alone cannot reach the journal.
+
 ### 0a-bis. Detect Focus Mode
 
 Check if running from a project folder inside a Datacore space:
@@ -171,12 +174,22 @@ python3 ~/Data/.datacore/lib/focus_mode.py detect
 
 ### 0b. Create Tracked Checklist (MANDATORY)
 
-**After context recovery**, create a tracked task list — **one TaskCreate per spec step. NO CLUSTERING.**
+**After context recovery**, start the run's checklist with the Datacore step tracker. It writes one `- [ ]` line per spec step into today's personal journal, so it works in every harness (Claude Code with or without its task tools, any MCP client, Hermes/OpenClaw agents, unattended runs):
 
-**HARD RULE — one-to-one mapping:** The spec has 12 tracked steps. Create EXACTLY 12 tasks, in order. Each spec step gets its own task. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. (§6 is deliberately one task — its two halves are a single decision about one item, not two steps. See §6.)
+```bash
+python3 .datacore/lib/command_steps.py resume wrap-up    # an unfinished wrap-up from earlier today? continue it
+python3 .datacore/lib/command_steps.py start wrap-up     # otherwise: one "- [ ]" per "### N." step below
+python3 .datacore/lib/command_steps.py tick <run_id> 3   # the moment step 3 completes
+python3 .datacore/lib/command_steps.py tick <run_id> 1 --note "not-answered"   # the §12 status, when not "run ✓"
+python3 .datacore/lib/command_steps.py status <run_id>   # done / pending, plus the 12 `checklist` rows
+```
+
+(Over MCP: `datacore_command_steps` with `op: resume | start | tick | status`.) Keep the `run_id` from `start`. **Optional mirror:** if your harness has a checklist tool (Claude Code's TaskCreate/TaskUpdate), you may mirror the 12 steps there for the on-screen view; the journal checklist stays the record, and a mirror never replaces a `tick`.
+
+**HARD RULE — one-to-one mapping, NO CLUSTERING:** The spec has 12 tracked steps and the tracker writes exactly 12 lines, in order. Each spec step gets its own tick. Clustering is where skipping hides: once "X + Y" is one task you can do X, mark it done, and silently drop Y. (§6 is deliberately one task — its two halves are a single decision about one item, not two steps. See §6.)
 
 ```
-Tasks to create (one per spec step, mark in_progress when starting, completed when done):
+The 12 lines the tracker writes (tick each when done; the titles are the "### N." headings):
 
  1. "Step 1  — Pulse + notes (ask, DO NOT WAIT)"
  2. "Step 2  — Preflight (wrap_up_mechanics.py preflight)"
@@ -209,7 +222,7 @@ Tasks to create (one per spec step, mark in_progress when starting, completed wh
 >
 > Not a relaxation. Each removed step is now either a JSON field §9 asserts against the filesystem, or a merge that removes a seam. A model marking its own task done was never the stronger check.
 
-**Step 12 is the gate.** Before marking it complete, run `TaskList` and verify every prior task is `completed`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal.
+**Step 12 is the gate.** Before ticking it, run `command_steps.py status <run_id>` and verify steps 1-11 are all in `done`. Then write the `## Wrap-up Checklist Audit` section to today's personal journal listing each step's actual status using the §12 allowed statuses: `run ✓`, `skipped-by-user`, `skipped-by-mode-fast`, `not-answered`, `not-applicable (REASON)`, `inferred-and-reported (DESCRIPTION)`, or `applied-from-feedback (N CORRECTIONS)`. The PreToolUse hook `wrap_up_checklist_check.py` blocks `plur_session_end` until that section exists in the journal. The section is rendered by `report --journal` from the `checklist` rows (§10); take those rows from `status`'s `checklist` field (the `--note` of each tick is its status). `audit --final` is the gate in every harness (§0f).
 
 **Why this exists:** Spec step counts in past sessions: 17 spec steps, 9 tasks created, 6 silently skipped (observed 2026-05-29 SMK wrap-up; previously documented as ENG-2026-0512-044 on 2026-05-12 but recurred 17 days later). Memory engrams alone are insufficient — execution-time discipline failure. The hook is the structural defense; one-task-per-step is the readability defense.
 
@@ -292,6 +305,20 @@ These three categories of action are NOT auto-inferred. If the agent's inference
 | **Credential decisions** | rotating a token, changing OAuth scopes, prompting for new auth on a service mid-wrap-up | AskUserQuestion: explicit confirmation |
 
 These are the *only* prompts allowed after §1 (pulse). If the agent finds itself about to add a fourth prompt category here, it's wrong — the right answer is "infer, apply, surface in §10, let user veto in §1 pulse" instead.
+
+### 0f. Other harnesses (Codex, Cursor, anything via `datacore_command_run`)
+
+The command must produce the same result everywhere, so everything that decides the outcome is a script:
+
+| Piece | Claude Code | Elsewhere |
+|---|---|---|
+| Report layout | `report` renders it | Same: `report` renders it. The layout never depends on the model. |
+| Session id | `CLAUDE_CODE_SESSION_ID` | Codex: `CODEX_THREAD_ID`, read automatically. Any other harness: set `DATACORE_SESSION_ID` if it exposes an id. Otherwise steps file under `nosession-<date>`. |
+| This session's files | read from the archived transcript | Record them yourself before §8, one call per batch: `wrap_up_mechanics.py files --add <path>...` (every file you wrote, journals included). `finalize` then commits and pushes exactly those paths. With no list it commits nothing, and the audit's file checks read "not applicable here". |
+| Transcript archive, token counts | `session_archive.py`, `meta` | Not applicable: there is no Claude transcript. `preflight` reports `session_archive.status: not-applicable`, `meta` reports `not_applicable: true`, the audit marks "session archived" n/a, and the report says so instead of estimating. None of these is a failure. |
+| Tracked checklist | `command_steps.py` (TaskCreate only as an optional mirror) | Same: `command_steps.py`, from a shell or `datacore_command_steps` over MCP. |
+| journal-coordinator | subagent | No subagent tool: write the per-space journals inline, one space at a time, before §8. |
+| Completion gate | PreToolUse hook + `audit --final` | `audit --final` alone. Report its `failed[]` verbatim, and its `not_applicable[]` as "not applicable here" (never as passed). |
 
 ### 1. Pulse + Notes — FIRST, and it never blocks
 
@@ -547,7 +574,7 @@ entry costs the inbox processor one archive move.
 
 Step A already copied this session's full transcript and every subagent transcript to `.datacore/state/sessions/archive/<date>/<session-id>/` with `learning_status: pending`. The nightly sweep (`io.datacore.session-learning`, 05:20) reads the whole day's sessions in one batch and writes the engrams.
 
-**Why it moved.** Measured over 54 runs: learning inside wrap-up cost a median 405k output tokens and ~14 subagent transcripts per session, and returned 3.6 engrams — about 112k output tokens each. It also never terminated: 5-plur's classifier cursor sat at 2026-07-30 while four consecutive passes re-read the same files and appended another run note explaining why they weren't advancing it, and all 37 candidates it queued are *still* unreviewed because the `/today` step they were deferred to did not exist. Batching the day removes the per-session fixed cost, sees cross-session repetition that a single-session pass structurally cannot, and replaces the date cursor — the thing that stalled — with a per-session claim that cannot skip work.
+**Why it moved.** Measured over 54 runs: learning inside wrap-up cost a median 405k output tokens and ~14 subagent transcripts per session, and returned 3.6 engrams — about 112k output tokens each. It also never terminated: one space's classifier cursor sat on the same date while four consecutive passes re-read the same files and appended another run note explaining why they weren't advancing it, and all 37 candidates it queued are *still* unreviewed because the `/today` step they were deferred to did not exist. Batching the day removes the per-session fixed cost, sees cross-session repetition that a single-session pass structurally cannot, and replaces the date cursor — the thing that stalled — with a per-session claim that cannot skip work.
 
 **What still belongs in the session:** calling `plur_learn` the moment the user corrects you. That path produced essentially all of the engrams that actually landed. It is not affected by any of this.
 
@@ -677,7 +704,7 @@ decision (Operations, Product, Engineering, Growth, Research, Communications) th
 this step used to express by *placing* the heading — the decision is the same, it is
 just recorded as data instead of as a file offset.
 
-> **v2: an org task is not a delegation.** `ledger_ingest_org.py` mirrors org tasks into the ledger on the 05:35 sweep, but a mirrored item carries an `org` block in its payload and `ledger_claim.py` skips exactly those: `pending = [i for i in claimable if not (i.payload or {}).get("org")]`. That filter is deliberate — it stopped agents working through a 342-item personal backlog unattended. The consequence: **a task written here can never be picked up by the fleet.** If the intent is "an agent should do this tonight", that is §6b delegation, not a task heading. Say which one you mean in the §10 report.
+> **An ordinary task is not authorization to execute.** The local structured adapter records captures in the ledger. The core `ledger_claim.py` dispatcher skips Org-backed items; Nightshift separately reads eligible `:AI:` work from the task views. If the intent is "an agent should do this tonight", use the explicit §6b delegation flow with execution criteria. Say which destination was chosen in the §10 report; do not duplicate an item across both executor routes.
 >
 > **This is also why inbox-only matters for the switch.** Under Phase 1, `next_actions.org` is a projection of the ledger and refuses direct writes; `inbox.org` stays the capture surface it is today. Routing every write through inbox.org means the flip changes where entries *land*, never whether this command works — and the `TARGET_*` properties are exactly what a ledger-first `/process-inbox` needs to emit an `item.create` without re-deriving intent.
 
@@ -721,6 +748,21 @@ DELEGATION OPPORTUNITIES (suggestions — opt in via §0e):
 - `delegate all` → add all suggestions
 - `delegate none` (default) → no AI tasks created
 - `delegate: <free text>` → add a user-composed AI task
+
+**Persist accepted work through the local MCP/adapter.** `gtd.add_task` accepts
+`body` and `properties` as well as title/tags/space. Include `SURFACE` and
+`DONE_WHEN` for executable work, plus `ROADMAP` when the space requires one.
+Keep source context and repository-relative artifact paths in the body; do not
+copy workstation absolute paths into instructions for another machine. These
+fields describe the work; they do not grant authority. Ordinary captures must
+not acquire `:AI:` tags without the user's explicit delegation.
+
+Return the task ID and `ledger_actor` from the adapter. Distinguish local capture
+from publication: after the normal session sync, report publication only when
+the transport acknowledges it; offline captures remain locally saved/pending.
+Nightshift reads eligible AI tasks from the ledger-derived Org view. The core
+ledger dispatcher is a separate route and intentionally skips Org-backed work.
+Do not create a second task to make both routes execute the same request.
 
 **Legacy prompt** (only when `wrap_up.inference_mode: off`):
 ```
@@ -831,7 +873,8 @@ python3 ~/Data/.datacore/lib/wrap_up_mechanics.py finalize
 
 **Session-scoped by default.** It commits and pushes ONLY the files this session
 touched, read from the archive's `files_modified` (main thread **and**
-subagents). Everything else dirty in the repo is left alone.
+subagents) and from any recorded with `files --add` — the only source outside
+Claude Code (§0f). Everything else dirty in the repo is left alone.
 
 > **Why.** The retired `./sync push` staged everything with `git add --ignore-removal .` and
 > commits it as `Sync: <date>`. Correct for a single-session day; wrong the
@@ -853,7 +896,7 @@ Report the counts for all four in §10. "Nothing to push" and "I left 4 files
 behind" must never read the same.
 
 **Guards it inherits from the retired `./sync`, each bought with an incident:**
-- **Refuses to push from a non-default branch** unless `DATACORE_SYNC_ALLOW_BRANCH=1`. A warning alone let 610 commits pile up on a feature branch in 5-plur for two months — 52 zettels, every weekly content calendar since mid-June — pushed, but where nobody reads.
+- **Refuses to push from a non-default branch** unless `DATACORE_SYNC_ALLOW_BRANCH=1`. A warning alone let 610 commits pile up on a feature branch in one team space for two months — 52 zettels, every weekly content calendar since mid-June — pushed, but where nobody reads.
 - **A rejected commit never falls through to a push.** It reports `COMMIT REJECTED` instead of a run that looks clean.
 - **Names the push failure** rather than collapsing four causes into one message.
 - **Reports `preexisting_unpushed_commits`** — a push carries every earlier unpushed commit on the branch. That is git, not a choice, and pretending the push was fully scoped would be false.
@@ -891,6 +934,25 @@ python3 ~/Data/.datacore/lib/journal_parser.py --sync --space personal
 > the error in §10 rather than swallowing it — the journal files remain the
 > source of truth, but a silently stale index is one you will still trust.
 
+**Then remove this session's own worktrees (§8b):**
+
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py worktrees            # --dry-run to preview
+```
+
+A worktree is this session's when its path carries the session id (scratch
+checkouts under the session's own directory) or it holds a file this session
+wrote. Each one that is clean and whose HEAD is on a remote is removed with
+`git worktree remove` — **never `--force`**. The rest come back in `kept[]` with
+the reason (uncommitted changes, HEAD on no remote, locked, directory gone);
+report each in §10 and push or remove it by hand. `others[]` are other
+sessions' worktrees and the runner checkout: listed, never touched. Run it
+after `finalize`, so the session's own commits are pushed first.
+
+> Why (board D12, 2026-10-01): worktrees outlived the sessions that made them,
+> on a disk with about 5 GB free. A worktree that is clean and on a remote loses
+> nothing by going; one that is not is somebody's unfinished work and stays.
+
 ### 9. Audit — asserted, not eyeballed
 
 ```bash
@@ -902,11 +964,14 @@ Returns `checks[]`, `passed`, `total`, `failed[]`. It asserts, against the files
 | Check | Passes when |
 |---|---|
 | personal journal written | `0-personal/journal/<today>.md` (or `notes/journals/`) exists |
-| space journals | reports which spaces got one — informational, never a failure |
-| session archived | this session has a `meta.json` under the archive — i.e. the learning sweep will actually see it |
-| all repos pushed | no repo has unpushed commits |
-| no uncommitted work | no repo is dirty |
-| context in sync | agents/commands/registry unchanged, or the rebuild was run |
+| space journals | every space this session wrote to has today's journal |
+| session archived | this session has a `meta.json` under the archive — i.e. the learning sweep will actually see it. Outside Claude Code: n/a |
+| session work committed and pushed | this session's files are committed and their repos pushed; other sessions' dirt is reported, not scored |
+| no journal section destroyed today | no commit today removed a journal section (a re-rendered `## Daily Briefing` is its owner replacing it, not a loss) |
+| context in sync | this session changed no agent/command/registry file; other sessions' registry changes are reported, not scored |
+| session worktrees removed | no worktree of this session is left (§8b); a kept one names its path |
+
+Each check has `status`: `pass`, `fail`, or `n/a` (cannot be judged in this harness — the detail says why). `total` counts the applicable checks; `not_applicable[]` lists the rest. n/a is never reported as passed.
 
 **This replaces the old tick-box list.** A checklist the model fills in about its own behaviour tests nothing: 17 spec steps, 9 tasks created, 6 silently skipped (2026-05-29) happened *with* the checklist present. These checks read the disk.
 
@@ -918,13 +983,46 @@ Returns `checks[]`, `passed`, `total`, `failed[]`. It asserts, against the files
 
 **HARD RULE: Step 17 must ALWAYS execute, regardless of session length, complexity, or context pressure.** If you are running low on context, compress other steps — never this one. If earlier steps were skipped or failed, still output this report with whatever information you have.
 
-**How to build the consolidated report:**
+**The report is RENDERED, not composed. Never type the template yourself.**
 
-1. **As you work through steps 1-16**, after each step completes, write a brief summary line to a running internal list (e.g., "Continuation: 1 task created for Verity cap table", "Tasks completed: 2 marked DONE", "Dev servers: killed 3"). This is lightweight — just notes, not full output.
+Every model reinterpreted this template when asked to re-type it. Across 168
+archived reports, Opus 5 used this banner-and-rules form 62 times and dropped the
+section rules 77 times. Opus 5.5 switched to markdown headings. Fable kept it every
+time. The shape now comes from code, `.datacore/lib/wrap_up_report.py`, and is
+identical in Claude Code, Codex, Cursor and any other harness that can run Python.
 
-2. **At step 17**, use those notes plus conversation context to compose the full consolidated report. Do NOT rely on being able to scroll back to earlier outputs — context compaction may have removed them.
+1. **As you work through steps 1-9**, keep brief notes (e.g. "Continuation: 1 task
+   created", "2 marked DONE"). Every NUMBER (turns, tokens, journals, push state,
+   audit) is already saved by the mechanics steps; do not retype it.
 
-3. **Output the report as a single unbroken text block** — no tool calls in between, no "let me check one more thing". The user reads this block and is done.
+2. **Write the judgement as JSON** to a scratch file. `wrap_up_report.py`'s
+   docstring lists the keys. Required: `goal`, `done`, `next`, `meta.arc`,
+   `meta.observation`, `social.{personal_x, project_x, linkedin}`, and `checklist`
+   (exactly 12 rows: the §12 audit). **`phases` is required** whenever the session
+   archive shows the owner writing on more than one day or any compaction: one
+   `{dates, summary}` per stretch, and together they must cover every day in
+   `meta`'s `owner_days`. Build them from the owner's messages and every compaction
+   summary in the transcript (§0a), not from the latest summary alone; `report`
+   refuses and names the uncovered days. Optional: `decisions`, `rejected`,
+   `continuation`, `tasks_completed`, `learnings`, `engrams`, `gtd_proposals`,
+   `delegations`, `coverage`, `files`, `artifacts`, `pulse`, `title`.
+
+3. **Render it, and persist it in the same call:**
+   ```bash
+   python3 ~/Data/.datacore/lib/wrap_up_mechanics.py report --input <file>.json --journal
+   ```
+   A missing required field is a refusal (exit 2, fields named). Fill it and re-run;
+   never hand-write a thinner report instead. Missing mechanics data renders as
+   `unavailable (<reason>)`, never as zero.
+
+4. **Output the command's stdout verbatim, inside a ```text code fence**, as a single
+   unbroken block: no edits, no re-headings, no markdown conversion, and no tool
+   calls in between. The fence keeps every harness from re-rendering the rules as
+   markdown.
+
+The template below is the renderer's specification. `tests/test_wrap_up_report.py`
+fails if its section headers and the renderer's drift apart, so change both
+together or neither.
 
 ```
 ═══════════════════════════════════════════════════
@@ -1051,10 +1149,10 @@ python3 .datacore/modules/comms/lib/content_engine.py session-posts "SESSION_SUM
 
 Or if the script is unavailable, generate manually:
 
-**Personal X (@jssr)** — building in public, casual, what you worked on.
+**Personal X (the owner's account)** — building in public, casual, what you worked on.
 Max 280 chars. Specific, authentic.
 
-**Project X (@FairDataSociety or @plur_ai)** — what shipped or what's interesting
+**Project X (the project's account)** — what shipped or what's interesting
 to that community. Max 280 chars.
 
 **LinkedIn** — 150-300 words. Professional but authentic. Strong hook.
@@ -1130,22 +1228,23 @@ Never report a single point estimate without instrument or arithmetic.
 
 **PERSIST TO JOURNAL (REQUIRED):**
 
-After displaying the consolidated report to the user, **write a condensed version directly to the personal journal**. This replaces the coordinator-written entry as the authoritative session record. The main conversation has the best context — coordinator agents running in background have less.
+`report --journal` (step 3 above) already appended the authoritative record to today's personal journal. It contains:
+- The report verbatim.
+- `### Session Meta-Analysis`, `### Token Cost` and `## Wrap-up Checklist Audit`, rendered from the same JSON.
+- A `<!-- wrap-up-report:<session> -->` marker.
 
-1. **Write session entry to journal** (`0-personal/notes/journals/YYYY-MM-DD.md`):
-   - Use the format from journal-entry-writer (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags)
-   - Include the artifact table
-   - Include a `### Token Cost` section with the same table from the consolidated report (subagent tokens, main conversation estimate, session total)
-   - This is the **authoritative record** — better than what any subagent produces
+It never appends twice for one session. Do not hand-write these sections as well.
 
-2. **Update Daily TL;DR** at the top of the journal file (after frontmatter):
+1. **Session entry.** If the journal-coordinator did not already write a narrative entry for this session (TL;DR, Goal, Accomplished, Key Decisions, Files, Continuation, Learnings, Tags), add one above the rendered report. The rendered report is the record; the narrative entry is for reading.
+
+2. **Update Daily TL;DR** near the top of the journal file (below the briefing, if there is one):
    ```markdown
    ## Daily Summary
    - [Session 1 name]: [one line from TL;DR]
    - [Session 2 name]: [one line from TL;DR]
    - [Session 3 name]: [one line from TL;DR]
    ```
-   If a `## Daily Summary` section already exists, update it (add/replace the current session's line). If it doesn't exist, create it right after the frontmatter.
+   If a `## Daily Summary` section already exists, update it (add/replace the current session's line). If it doesn't exist, create it right after the `## Daily Briefing` section, or right after the frontmatter when the page has no briefing yet. The briefing stays the first section of the page (MEM-45); a later briefing run puts itself back on top.
 
 3. **Append to artifact index** (`0-personal/notes/artifact-index-YYYY-MM.md`):
    - Create file if it doesn't exist (with header row)
@@ -1292,7 +1391,7 @@ In addition to listing artifacts in the journal, append each artifact to the mon
 | 03-18 | Voice Terminal | project-doc | Comprehensive product spec | 0-personal/notes/pages/datacore-voice-terminal.md |
 | 03-18 | Voice Terminal | 3d-model | Blender model with components | 0-personal/notes/pages/datacore-voice-terminal.blend |
 | 03-18 | Voice Terminal | render | 40+ product concept renders | 0-personal/notes/pages/datacore-voice-terminal-render-v*.png |
-| 03-17 | FDS X Campaign | strategy | Campaign strategy v6 | 3-fds/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
+| 03-17 | X Campaign | strategy | Campaign strategy v6 | [N]-team/1-tracks/comms/campaigns/.../campaign-strategy-v6.md |
 ```
 
 **Artifact index rules:**
@@ -1315,7 +1414,7 @@ them. Flag only genuine gaps.
 
 ### 11. Postable Moment Detection (Build in Public)
 
-**Purpose:** Flag session moments worth sharing on X (@jssr). Show don't tell - short demos, absorptions, before/afters, surprising results.
+**Purpose:** Flag session moments worth sharing on X (the owner's account). Show don't tell - short demos, absorptions, before/afters, surprising results.
 
 Scan the session for:
 - **Framework absorptions** - read something, integrated it, shipped it (with timing)
@@ -1398,7 +1497,15 @@ vouch for it.
 
 **Why this exists:** Past wrap-up sessions documented in engram ENG-2026-0512-044 (2026-05-12) and ENG-2026-0529 (SMK 2026 wrap-up): steps 11, 12.5, 14, 15, plus parts of 17 were silently skipped. The agent rationalized that the user was "done" and dropped time-sensitive items (e.g. social posts about a just-shipped product). The skipped social posts cost user a viral LinkedIn moment about the SMK 2026 agent-claim demo. Memory engrams were insufficient — same failure repeated 17 days later. Step 18 + hook = structural enforcement.
 
-**Hook behavior:**
+**The audit rows are rendered, not typed.** They are the `checklist` array in the §10 narrative JSON, and `report --journal` writes them. Then run the final audit, which works in every harness:
+
+```bash
+python3 ~/Data/.datacore/lib/wrap_up_mechanics.py audit --final
+```
+
+It asserts that the rendered report (by its marker) and the three required sections are in today's journal. In Claude Code the hook below enforces the same thing. Codex, Cursor and other harnesses have no PreToolUse hook, so there `audit --final` IS the gate. Report its `failed[]` verbatim. When it passes, `command_steps.py tick <run_id> 12`; `status <run_id>` must then say `"complete": true`.
+
+**Hook behavior (Claude Code only):**
 - File: `~/Data/.datacore/lib/hooks/wrap_up_checklist_check.py`
 - Trigger: PreToolUse on `mcp__plur__plur_session_end`
 - Required journal sections: `Wrap-up Checklist Audit`, `Token Cost`, `Session Meta-Analysis`

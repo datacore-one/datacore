@@ -15,9 +15,13 @@
 #   4 derp     if the VPN blocks DERP too, peers become unreachable with the
 #              route still perfectly in place — the confusing case.
 #
-#   ./diagnose_tailscale_vpn.sh [peer-ip] [port]
+#   ./diagnose_tailscale_vpn.sh <peer-ip> [port]     (or PEER=<ip> in the env)
 set -u
-PEER="${1:-100.115.67.71}"
+PEER="${1:-${PEER:-}}"
+if [ -z "$PEER" ]; then
+  echo "usage: $0 <peer-ip> [port]  — the Tailscale address of the peer to test (no default)" >&2
+  exit 2
+fi
 PORT="${2:-2222}"
 TS="$(command -v tailscale || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale)"
 line() { printf '\n── %s\n' "$1"; }

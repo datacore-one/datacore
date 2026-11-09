@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Read-only gh for the nightly GitHub triage (owner, 2026-09-29: the triage
+# never modifies GitHub). An allowlist: anything not explicitly a read is refused.
+set -u
+refuse() { echo "gh (triage read-only): refused: gh $*" >&2; exit 64; }
+
+real="${GH_REAL:-}"
+if [ -z "$real" ]; then
+  self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  IFS=: read -r -a dirs <<< "$PATH"
+  for d in "${dirs[@]}"; do
+    [ "$d" = "$self_dir" ] && continue
+    [ -x "$d/gh" ] && { real="$d/gh"; break; }
+  done
+fi
+[ -n "$real" ] || { echo "gh (triage read-only): real gh not found" >&2; exit 127; }
+
+cmd="${1:-}"; sub="${2:-}"
+case "$cmd" in
+  auth)   [ "$sub" = "status" ] || refuse "$@" ;;
+  pr)     case "$sub" in list|view|diff|checks|status) ;; *) refuse "$@" ;; esac ;;
+  issue)  case "$sub" in list|view|status) ;; *) refuse "$@" ;; esac ;;
+  run)    case "$sub" in list|view) ;; *) refuse "$@" ;; esac ;;
+  repo)   case "$sub" in view|list) ;; *) refuse "$@" ;; esac ;;
+  search) ;;
+  release) case "$sub" in list|view) ;; *) refuse "$@" ;; esac ;;
+  api)
+    [ "$sub" = "graphql" ] && refuse "$@"
+    prev=""
+    for a in "$@"; do
+      case "$a" in
+        -f|-F|--field|--raw-field|--input|-f*|-F*|--field=*|--raw-field=*|--input=*) refuse "$@" ;;
+      esac
+      if [ "$prev" = "-X" ] || [ "$prev" = "--method" ]; then
+        [ "$(printf '%s' "$a" | tr '[:lower:]' '[:upper:]')" = "GET" ] || refuse "$@"
+      fi
+      case "$a" in --method=*) [ "$(printf '%s' "${a#--method=}" | tr '[:lower:]' '[:upper:]')" = "GET" ] || refuse "$@" ;; esac
+      prev="$a"
+    done ;;
+  *) refuse "$@" ;;
+esac
+exec "$real" "$@"

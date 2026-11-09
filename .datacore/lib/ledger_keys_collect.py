@@ -39,6 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import yaml  # noqa: E402
 
 from ledger.events import body_dict, canonical_bytes  # noqa: E402
+from ledger.events import from_line  # noqa: E402
+from ledger.voids import for_events_dir  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PRINCIPALS = ROOT / ".datacore" / "registry" / "principals.yaml"
@@ -65,10 +67,10 @@ def candidates(hosts: list[str]) -> dict[str, dict[str, str]]:
     found: dict[str, dict[str, str]] = collections.defaultdict(dict)
     for host in hosts:
         try:
-            out = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, _DERIVE],
-                capture_output=True, text=True, timeout=60,
-            )
+            # `local`: this machine (the owner's runs no ssh server), same derivation.
+            cmd = (["sh", "-c", _DERIVE] if host == "local"
+                   else ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, _DERIVE])
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except (subprocess.SubprocessError, OSError) as exc:
             print(f"  {host}: unreachable ({type(exc).__name__})", file=sys.stderr)
             continue
@@ -85,7 +87,8 @@ def candidates(hosts: list[str]) -> dict[str, dict[str, str]]:
 def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
     """{actor: [(body, sig_hex)]} for every signed event in every space."""
     sigs: dict[str, list[tuple[dict, str]]] = collections.defaultdict(list)
-    for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")):
+    for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")) + sorted(root.glob("[0-9]-*/.datacore/telemetry/*.jsonl")):
+        voids = for_events_dir(path.parent)
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line.strip():
                 continue
@@ -96,7 +99,13 @@ def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
             if not event.get("sig"):
                 continue
             body = body_dict(event["seq"], event["hlc"], event["actor"],
-                             event["type"], event["payload"], event["prev"])
+                             event["type"], event["payload"], event["prev"],
+                             hub=event.get("hub") or "", domain=event.get("domain") or "")
+            # An event cancelled by an authorised in-ledger void (ledger.voids)
+            # is not evidence about any key: counting a voided forgery made
+            # every candidate key for its actor fail, forever.
+            if len(voids) and voids.applies(path.stem, from_line(line.strip())):
+                continue
             sigs[event["actor"]].append((body, event["sig"]))
     return sigs
 
@@ -119,21 +128,119 @@ def proves(verify_key_hex: str, evidence: list[tuple[dict, str]]) -> tuple[int, 
     return ok, bad
 
 
+def proves_history(history: list[tuple[int | None, str]],
+                   evidence: list[tuple[dict, str]]) -> tuple[int, int]:
+    """(verified, failed) when each signature is checked with the key valid at its time.
+
+    A writer whose key the owner rotated has two (or more) keys, each valid for
+    its own period, so no single key proves all of its signatures.
+    """
+    from ledger.keys import key_at
+    ok = bad = 0
+    for body, sig in evidence:
+        try:
+            at = int(str(body.get("hlc", "")).split(".", 1)[0])
+        except ValueError:
+            at = None
+        key = key_at(history, at)
+        o, b = proves(key, [(body, sig)]) if key else (0, 1)
+        ok, bad = ok + o, bad + b
+    return ok, bad
+
+
+def _rotation_keys():
+    """keys_dir, registry_path the approving writer signs with (None: this host's defaults)."""
+    return None, None
+
+
+def rotate(args) -> int:
+    """--rotate ACTOR: register a rebuilt host's new key, with the owner's explicit approval."""
+    from ledger import keys
+    if not args.owner_approves:
+        print(f"refused: a new signing key for {args.rotate!r} is registered only with the owner's "
+              f"explicit approval; re-run with --owner-approves. Nothing was written.", file=sys.stderr)
+        return 2
+    new_key = args.new_key
+    if new_key is None and args.hosts:
+        held = candidates([h.strip() for h in args.hosts.split(",") if h.strip()]).get(args.rotate, {})
+        distinct = set(held.values())
+        if len(distinct) != 1:
+            print(f"refused: {len(distinct)} different keys for {args.rotate!r} on {args.hosts}; "
+                  f"name the host that runs it, or pass --new-key. Nothing was written.", file=sys.stderr)
+            return 2
+        new_key = distinct.pop()
+    if args.space:
+        space = Path(args.space)
+    else:
+        from spaces import space_for
+        name = space_for("system", root=args.root)
+        if not name:
+            print("refused: no system space declared (install.yaml roles.system); pass --space",
+                  file=sys.stderr)
+            return 2
+        space = args.root / name
+    if args.actor:
+        approver = args.actor
+    else:
+        from actor_identity import this_actor
+        approver = this_actor(strict=True)
+    keys_dir, registry_path = _rotation_keys()
+    try:
+        out = keys.approve_rotation(args.rotate, new_key, owner_approves=True, space_dir=space,
+                                    approver=approver, keys_dir=keys_dir, registry_path=registry_path,
+                                    reason=args.reason)
+    except keys.RotationRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    how = "adopted the rotation recorded" if out["adopted"] else f"recorded key.rotate as {approver!r}"
+    print(f"{args.rotate}: {how} in {space.name} (event {out['event'][:12]}...)")
+    print(f"  old key {out['old_key'][:12]}...  valid for events before {out['valid_from']}")
+    print(f"  new key {out['new_key'][:12]}...  valid from {out['valid_from']}")
+    print(f"  wrote {keys.principals_path()} (verify_keys, verify_key_history)")
+    if not out["adopted"]:
+        print(f"  next: publish {space.name}'s ledger, then on every host that verifies {args.rotate}'s "
+              f"events (and on {args.rotate}'s own host): ledger_keys_collect.py --rotate {args.rotate} "
+              f"--owner-approves")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--hosts", default="winston,nightshift,hermes,plur-claw",
-                    help="comma-separated ssh targets to collect from")
+    ap.add_argument("--hosts", default=None,
+                    help="comma-separated ssh targets to collect from, `local` for this machine "
+                         "(default: every machine the roster reaches over ssh)")
     ap.add_argument("--root", type=Path, default=ROOT)
     ap.add_argument("--apply", action="store_true",
                     help="write proven keys into principals.yaml (default: report only)")
+    rot = ap.add_argument_group("rotation (owner only): a rebuilt host's new key")
+    rot.add_argument("--rotate", metavar="ACTOR",
+                     help="register ACTOR's new public key from now on; its old key stays valid for "
+                          "the events it signed before. Needs --owner-approves")
+    rot.add_argument("--owner-approves", action="store_true",
+                     help="the owner's explicit approval; without it nothing is written")
+    rot.add_argument("--new-key", help="the new public key (hex). Default: the key ACTOR holds on "
+                                       "--hosts, else the rotation already recorded in the ledger")
+    rot.add_argument("--space", help="space whose ledger records key.rotate (default: the system space)")
+    rot.add_argument("--actor", help="the approving writer (default: this machine's actor)")
+    rot.add_argument("--reason", default="host rebuilt; key regenerated")
     args = ap.parse_args()
+    if args.rotate:
+        return rotate(args)
+    if args.hosts is None:
+        from jobs.manifest import ssh_hosts
+        args.hosts = ",".join(ssh_hosts())
 
     doc = yaml.safe_load(PRINCIPALS.read_text(encoding="utf-8")) or {}
     registered = dict(doc.get("verify_keys") or {})
 
     print("collecting public keys...", file=sys.stderr)
-    held = candidates([h.strip() for h in args.hosts.split(",") if h.strip()])
+    hosts = [h.strip() for h in args.hosts.split(",") if h.strip()]
+    if not hosts:
+        print("no hosts: pass --hosts, or declare machines with an ssh_alias in "
+              ".datacore/registry/infrastructure.yaml", file=sys.stderr)
+        return 2
+    held = candidates(hosts)
     evidence = signatures(args.root)
 
     proven: dict[str, str] = {}
@@ -142,6 +249,13 @@ def main() -> int:
         signed = evidence.get(actor, [])
         if not signed:
             print(f"{actor:<14}{'-':>9}{'-':>7}  never signed; nothing to prove")
+            continue
+        from ledger.keys import key_history
+        history = key_history(actor)
+        if len(history) > 1:
+            ok, bad = proves_history(history, signed)
+            state = "rotated, each key for its period" if bad == 0 else "ROTATED KEYS DO NOT PROVE ALL"
+            print(f"{actor:<14}{ok:>9}{bad:>7}  {state} ({len(history)} keys; change with --rotate)")
             continue
         scored = {h: proves(k, signed) for h, k in held.get(actor, {}).items()}
         winners = {h: held[actor][h] for h, (ok, bad) in scored.items() if bad == 0 and ok > 0}

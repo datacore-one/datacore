@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 
 MARKER = '# datacore-job:'
 KEY = re.compile(r'[a-z0-9][a-z0-9-]*\Z')
@@ -69,12 +70,29 @@ def invocation(line: str, *, reject_compound: bool = False) -> tuple[str, ...] |
     # its executable, which is right until several jobs share a wrapper.
     if program in ('atomic_out.sh', 'audit_trio_run.sh'):
         return (identity, args[0] if args else '')
+    # rsync is the executable of many unrelated copy jobs; the source tells them
+    # apart. By executable alone, tagging one rsync line dropped every other.
+    if program == 'rsync':
+        return (identity, next((a for a in args if not a.startswith('-')), ''))
+    # cross_model_audit.py is every agent's nightly slice and calibration and the
+    # morning check and publish: the whole argument list is the job.
+    if program == 'cross_model_audit.py':
+        return (identity, ' '.join(args))
+    # The nightly scoreboard and the weekly agent board are one script; --agents
+    # is the difference (board D14, 2026-10-01).
+    if program == 'promise_nightly.py':
+        return (identity, ' '.join(args))
+    # Jimo's loop and fair-control instances share one wrapper; the instance
+    # and the job (`loop tick`, `ctrl dream`) are the job.
+    if program == 'run-instance.sh':
+        return (identity, ' '.join(args[:2]))
     if program == 'job_verify.py':
         return (identity, args[args.index('--machine') + 1] if '--machine' in args and args.index('--machine') + 1 < len(args) else '')
     return (identity,)
 
 
-def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = ()) -> str:
+def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (),
+              retire_keys: tuple[str, ...] = ()) -> str:
     """Return the desired crontab; identifiers must be unique and well formed."""
     desired = {}
     for key, line in entries.items():
@@ -85,14 +103,19 @@ def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (
             raise ValueError('ambiguous managed cron invocations')
         desired[signature] = key
     kept = []
-    for line in current.splitlines(keepends=True):
+    # A crontab LINE ends at '\n' and nowhere else. str.splitlines also splits
+    # at \x0b \x0c \x1c-\x1e \x85 \u2028 \u2029, so one unmanaged cron line
+    # holding such a byte was judged as two, and a fragment that looked like a
+    # managed job was dropped from the middle of it (GitFleet.lean
+    # `reconcile_preserves_unmanaged`).
+    for line in re.findall(r'[^\n]*\n|[^\n]+\Z', current):
         stripped = line.strip()
         if stripped.startswith('#'):
             kept.append(line)
             continue
         signature = invocation(line)
         marker = re.search(r'# datacore-job:([a-z0-9-]+)\s*$', line)
-        if marker and marker.group(1) in entries:
+        if marker and (marker.group(1) in entries or marker.group(1) in retire_keys):
             continue
         if signature in desired or (signature and signature[0] in retire):
             invocation(line, reject_compound=True)
@@ -106,6 +129,42 @@ def reconcile(current: str, entries: dict[str, str], retire: tuple[str, ...] = (
     return output
 
 
+def contract_problems(entries: dict[str, str], manifest: Path, machine: str) -> list[str]:
+    """Why each entry may not be installed on `machine`, [] when every one may.
+
+    A scheduled job needs a contract that declares evidence (processes page,
+    "A scheduled job", 2026-10-31: 33 scheduled scripts had none, so their
+    silent failures stayed silent). An entry's contract is the job in
+    `manifest` (with the install's manifest.local.yaml laid over it) on
+    `machine` named KEY or <machine>-KEY, or running the same invocation. It
+    must declare at least one artifact: no success without evidence."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from jobs.manifest import effective_doc
+    jobs = [j for j in (effective_doc(Path(manifest)).get('jobs') or [])
+            if isinstance(j, dict) and j.get('machine') == machine]
+    problems = []
+    for key, line in entries.items():
+        wanted = invocation(line)
+        found = [j for j in jobs if j.get('name') in (key, f'{machine}-{key}')]
+        if not found:
+            found = [j for j in jobs if wanted and invocation('* * * * * ' + str(j.get('cmd') or '')) == wanted]
+        if not found:
+            problems.append(f'{key}: no manifest entry on {machine} runs it -- add its job contract '
+                            '(with the artifact that proves a run) to jobs/manifest.yaml first')
+        elif not any(j.get('artifacts') for j in found):
+            problems.append(f"{key}: its manifest entry ({found[0].get('name')}) declares no evidence -- "
+                            'add an artifact that proves a run')
+    return problems
+
+
+def settled(current: str, desired: str) -> bool:
+    """The same lines, in any order. Two installers share one crontab (the
+    host setup and the jobs manifest) and each appends its own entries at the
+    end, so position says only which ran last. Every missing, stale, duplicate
+    or retired entry still changes the multiset (board D5, 2026-10-01)."""
+    return sorted(current.splitlines()) == sorted(desired.splitlines())
+
+
 def read_crontab() -> str:
     result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, timeout=15)
     if result.returncode == 0:
@@ -115,10 +174,11 @@ def read_crontab() -> str:
     raise RuntimeError('cannot read crontab; refusing to replace unknown contents')
 
 
-def install(entries: dict[str, str], state: Path, *, verify: bool = False, retire: tuple[str, ...] = ()) -> bool:
+def install(entries: dict[str, str], state: Path, *, verify: bool = False, retire: tuple[str, ...] = (),
+            retire_keys: tuple[str, ...] = ()) -> bool:
     if verify:
         current = read_crontab()
-        return reconcile(current, entries, retire) == current
+        return settled(current, reconcile(current, entries, retire, retire_keys))
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     if state.is_symlink() or state.stat().st_mode & 0o077:
         raise RuntimeError('cron recovery directory must be private')
@@ -126,8 +186,8 @@ def install(entries: dict[str, str], state: Path, *, verify: bool = False, retir
     with os.fdopen(fd, 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         before = read_crontab()
-        after = reconcile(before, entries, retire)
-        if after == before:
+        after = reconcile(before, entries, retire, retire_keys)
+        if settled(before, after):
             return True
         backup = state / (hashlib.sha256(before.encode()).hexdigest() + '.crontab')
         if not backup.exists():
@@ -153,13 +213,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--entry', nargs=2, action='append', default=[], metavar=('KEY', 'LINE'))
     parser.add_argument('--retire', action='append', default=[])
+    # One managed job by its marker. --retire matches the executable, and several
+    # jobs share one (every agent's audit slice is cross_model_audit.py).
+    parser.add_argument('--retire-key', action='append', default=[])
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--state', type=Path, required=True)
+    # Refuse any entry without a job contract that declares evidence on this
+    # machine (plan 2026-10-31, phase H). Both or neither.
+    parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--machine')
     args = parser.parse_args()
-    if not args.entry or len(dict(args.entry)) != len(args.entry):
+    if (not args.entry and not args.retire_key) or len(dict(args.entry)) != len(args.entry):
         parser.error('provide distinct managed entry keys')
+    if bool(args.manifest) != bool(args.machine):
+        parser.error('--manifest and --machine go together')
+    if args.manifest and not args.verify:
+        try:
+            problems = contract_problems(dict(args.entry), args.manifest, args.machine)
+        except Exception as exc:  # noqa: BLE001 -- an unreadable manifest refuses, never waves through
+            problems = [f'the manifest could not be read ({type(exc).__name__}: {exc})']
+        if problems:
+            print('cron installation REFUSED: nothing written')
+            for p in problems:
+                print(f'  {p}')
+            return 1
     try:
-        good = install(dict(args.entry), args.state, verify=args.verify, retire=tuple(args.retire))
+        good = install(dict(args.entry), args.state, verify=args.verify, retire=tuple(args.retire),
+                       retire_keys=tuple(args.retire_key))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f'cron installation FAILED ({type(exc).__name__}); existing entries and private recovery copies retained')
         return 1

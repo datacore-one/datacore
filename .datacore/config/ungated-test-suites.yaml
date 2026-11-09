@@ -35,6 +35,46 @@ suites:
     reason: Passing locally (421). Not yet costed against CI install time.
     reviewed: 2026-09-19
     state: green
+  - path: .datacore/modules/dev/tests
+    reason: >
+      Added with the Lean verification work (2026-09-23); passing locally (18, about
+      a minute: they build proofs). The dev module is its own repo; not yet costed
+      against CI install time.
+    reviewed: 2026-09-25
+    state: green
+  - path: .datacore/modules/dev/evals/audit/fixture
+    reason: >
+      Not a suite: a practice project with planted defects that the audit
+      calibration (AUD-4) hands to every model. Its tests are part of the
+      project the auditors read and may fail by design; nothing here protects
+      Datacore. suite_audit.py skips a `state: fixture` directory.
+    reviewed: 2026-10-01
+    state: fixture
+  - path: .datacore/modules/dev/evals/audit/fixture2
+    reason: The second planted-defect practice project; same as fixture above.
+    reviewed: 2026-10-01
+    state: fixture
+  - path: .datacore/modules/ventures/tests
+    reason: Passing locally (24). Same as ventures/lib/tests; not yet costed against CI install time.
+    reviewed: 2026-10-01
+    state: green
+  - path: .datacore/evals/ledger-upgrade/phase4
+    reason: >
+      Promise TSK-11's evals (ledger upgrade O1-O4), written red before any code
+      on 2026-10-04. promise_gate.py hides them from an ordinary run until TSK-11
+      is green in the committed baseline, so until then the directory collects
+      nothing by design; run them with PROMISE_EVALS_ALL=1. suite_audit.py still
+      runs a `state: promise-gated` directory but does not count an empty run
+      there. What is not protected: nothing gates the ledger upgrade until the
+      promise turns green.
+    reviewed: 2026-10-05
+    state: promise-gated
+  - path: .datacore/skills/github-triage/tests
+    reason: >
+      Passing locally (11). The nightly GitHub triage skill run by the overnight
+      agent; not yet costed against CI install time.
+    reviewed: 2026-10-01
+    state: green
   - path: .datacore/modules/lens/tests
     reason: Passing locally (188). Not yet costed against CI install time.
     reviewed: 2026-09-19
@@ -43,6 +83,9 @@ suites:
     reason: Passing locally (55). Not yet costed against CI install time.
     reviewed: 2026-09-19
     state: green
+  - path: .datacore/modules/news/lib/tests
+    reason: Passing locally (48). Added 2026-09-21 with fetch-time scoring; not yet costed against CI install time.
+    reviewed: 2026-09-22
   - path: .datacore/modules/gigs/tests
     reason: Passing locally (52). Needs a Spotify library fixture.
     reviewed: 2026-09-19
@@ -89,6 +132,14 @@ suites:
   - path: .datacore/modules/voice-terminal/tests
     reason: Passing locally (9). Owns a separate .venv.
     reviewed: 2026-09-19
+    state: green
+  - path: .datacore/modules/provenance/tests
+    reason: >
+      Agent receipts module, its own repository (datacore-provenance), so the core
+      CI checkout does not contain it. Passing locally on 2026-10-29 (116 passed,
+      2 skipped) with test_own_stamp.py left out: that file needs eth_account,
+      which the daemon venv does not install, so it errors at collection there.
+    reviewed: 2026-10-29
     state: green
   - path: .datacore/modules/chief-of-staff/server/lib
     reason: >

@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Run every promise eval and score each promise: green, red, or no eval.
+
+Evals-first (owner, 2026-09-26): each promise in
+2-datacore/1-tracks/dev/datacore-upgrade/promises/*.yaml has evals behind it,
+in files named `test_promise_<ID>_<what>.py`, where <ID> is the promise id with
+or without its dash (TSK-9 -> TSK9 or TSK_9). They live in the repo whose code
+they test: the root (.datacore/lib/tests), module repos (.datacore/modules/*/tests)
+and the app (2-datacore/2-projects/datacore-app/daemon/tests).
+
+A promise is green only when it has at least one eval and every eval behind it
+passes. `n-a` is never a pass: a promise with no eval is reported as such.
+
+Usage:
+    promise_evals.py [--json] [--only ID,ID] [--list]
+Exit 0 only when every promise with an eval is green AND none lacks one.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / ".datacore" / "lib"))
+from spaces import space_for  # noqa: E402
+
+#: The install's system space (install.yaml roles.system) holds the promise
+#: files and the app daemon; a fresh install without one has neither.
+SYSTEM = ROOT / space_for("system", ROOT, "0-personal")
+#: DATACORE_PROMISES_DIR names the list where the code has no system space: the
+#: satellites run from a bare runner checkout, their copy is under the data root.
+PROMISES = (Path(os.environ["DATACORE_PROMISES_DIR"]).expanduser() if os.environ.get("DATACORE_PROMISES_DIR")
+            else SYSTEM / "1-tracks" / "dev" / "datacore-upgrade" / "promises")
+PY = sys.executable
+SUITE_TIMEOUT_S = 900   # an eval that hangs must not hang the scoreboard
+SUITES = [  # (name, cwd, test dir relative to cwd, extra env)
+    ("root", ROOT / ".datacore" / "lib", "tests", {}),
+    ("app", SYSTEM / "2-projects" / "datacore-app" / "daemon", "tests", {}),
+]
+for mod in sorted((ROOT / ".datacore" / "modules").glob("*/tests")):
+    SUITES.append((f"module:{mod.parent.name}", mod.parent, "tests", {"DATACORE_ROOT": str(ROOT)}))
+# Evals kept apart from the code they judge (ledger upgrade step E3): one suite
+# per folder two levels under .datacore/evals/, e.g. evals/ledger-upgrade/phase4.
+for d in sorted((ROOT / ".datacore" / "evals").glob("*/*/")):
+    SUITES.append((f"evals:{d.parent.name}/{d.name}", d.parent, d.name, {}))
+
+_FILE = re.compile(r"^test_promise_([A-Za-z]+)_?(\d+)(?:_([0-9]+))?_")
+
+
+def norm(pid: str) -> str:
+    """TSK-9, TSK_9, TSK9 -> TSK9; MEM-01, MEM_1 -> MEM1 (leading zeros never matter)."""
+    m = re.match(r"^([A-Z]+)[^A-Z0-9]*0*(\d+)", pid.upper())
+    return m.group(1) + m.group(2) if m else re.sub(r"[^A-Z0-9]", "", pid.upper())
+
+
+def promises() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for f in sorted(PROMISES.glob("*.yaml")):
+        for cap in (yaml.safe_load(f.read_text(encoding="utf-8")) or {}).get("capabilities") or []:
+            for p in cap.get("promises") or []:
+                out[str(p["id"])] = str(p["promise"])
+    return out
+
+
+def eval_files() -> dict[str, list[tuple[str, Path]]]:
+    """{normalized promise id: [(suite, file)]}"""
+    found: dict[str, list[tuple[str, Path]]] = defaultdict(list)
+    for name, cwd, tdir, _ in SUITES:
+        for f in sorted((cwd / tdir).glob("test_promise_*.py")):
+            m = _FILE.match(f.name)
+            if m:
+                found[norm(m.group(1) + m.group(2))].append((name, f))
+    return found
+
+
+AGENTS = False   # --agents: also run agent-behaviour evals (real model runs, pass^3)
+#: {eval file path: [(test, first failure line)]} from the run itself. The
+#: nightly reruns a red for its reason; when the rerun passes, this is the only
+#: record of why the run failed (MEM-51, 2026-10-03: "flaky?" with no cause).
+FIRST_FAILURES: dict[str, list[tuple[str, str]]] = {}
+
+
+def _first_line(el) -> str:
+    for text in (el.get("message") or "", el.text or ""):
+        for line in text.splitlines():
+            if line.strip():
+                return " ".join(line.split())[:300]
+    return el.tag
+
+
+#: The identity every eval runs under unless it sets its own (owner, 2026-11-05).
+#: On an agent's host the evals inherited that agent (miles, winston), and the
+#: ledger's writer guard refused the fixtures' events in their temporary spaces:
+#: AGT-10, CAD-4 and LED-3/4/5 were red on every agent's board for that alone.
+#: It names no principal, so the guard leaves it to the commit and push gates.
+EVAL_ACTOR = "promise-eval"
+
+
+def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
+    """{file name: all tests in it passed}"""
+    import os
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
+        xml = fh.name
+    env = {**os.environ, "DATACORE_ACTOR": EVAL_ACTOR, **env_extra,
+           "PROMISE_EVALS_ALL": "1"}   # the scoreboard collects every eval
+    if AGENTS:
+        env["DATACORE_AGENT_EVALS"] = "1"   # without it an agent eval fails by design (n-a is never a pass)
+    result: dict[str, bool] = {f.name: False for f in files}   # a file pytest never reported is not a pass
+    try:
+        subprocess.run([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--junitxml={xml}",
+                        *[str(f) for f in files]], cwd=cwd, env=env, capture_output=True, text=True,
+                       timeout=SUITE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        print(f"TIMEOUT after {SUITE_TIMEOUT_S}s in {cwd}: an eval hangs; every file in this batch counts red",
+              file=sys.stderr)
+        return result
+    try:
+        tree = ET.parse(xml)
+    except (ET.ParseError, OSError):
+        return result
+    seen: dict[str, bool] = {}
+    by_name = {f.name: f for f in files}
+    for case in tree.iter("testcase"):
+        fname = (case.get("file") or case.get("classname", "").split(".")[-1] + ".py").split("/")[-1]
+        bad = any(child.tag in ("failure", "error") for child in case)
+        skipped = any(child.tag == "skipped" for child in case)
+        seen[fname] = seen.get(fname, True) and not bad and not skipped
+        failed = next((c for c in case if c.tag in ("failure", "error")), None)
+        if failed is not None and fname in by_name:
+            FIRST_FAILURES.setdefault(str(by_name[fname]), []).append(
+                (case.get("name", ""), _first_line(failed)))
+    for f in files:
+        if f.name in seen:
+            result[f.name] = seen[f.name]
+    return result
+
+
+#: Files per pytest run. SUITE_TIMEOUT_S covers one chunk, not a whole suite:
+#: the core suite (160+ files) takes ~10 min on a quiet machine, so a single
+#: limit over all of it tripped under load and counted every promise red.
+CHUNK_FILES = 20
+
+
+def run_suite_chunked(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
+    """run_suite per chunk of CHUNK_FILES: a hang reds its own chunk only."""
+    result: dict[str, bool] = {}
+    for i in range(0, len(files), CHUNK_FILES):
+        result.update(run_suite(cwd, files[i:i + CHUNK_FILES], env_extra))
+    return result
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--only", default="")
+    ap.add_argument("--list", action="store_true", help="list promises and eval files, run nothing")
+    ap.add_argument("--agents", action="store_true",
+                    help="also run agent-behaviour evals (costs model runs; pass^3 each)")
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="record the green promises in .datacore/registry/promise-baseline.json (the CI gate)")
+    args = ap.parse_args()
+    global AGENTS, SUITE_TIMEOUT_S
+    AGENTS = args.agents
+    if AGENTS:
+        SUITE_TIMEOUT_S = max(SUITE_TIMEOUT_S, 5400)   # agent cases run minutes each
+
+    ps = promises()
+    files = eval_files()
+    only = {norm(x) for x in args.only.split(",") if x.strip()}
+    wanted = {pid: text for pid, text in ps.items() if not only or norm(pid) in only}
+
+    status: dict[str, str] = {}
+    if args.list:
+        for pid in wanted:
+            status[pid] = f"{len(files.get(norm(pid), []))} eval file(s)"
+    else:
+        by_suite: dict[str, list[Path]] = defaultdict(list)
+        for pid in wanted:
+            for suite, f in files.get(norm(pid), []):
+                by_suite[suite].append(f)
+        passed: dict[str, bool] = {}
+        for name, cwd, _tdir, env in SUITES:
+            if by_suite.get(name):
+                for fname, ok in run_suite_chunked(cwd, sorted(set(by_suite[name])), env).items():
+                    passed[f"{name}:{fname}"] = ok
+        for pid in wanted:
+            fs = files.get(norm(pid), [])
+            if not fs:
+                status[pid] = "no-eval"
+            else:
+                status[pid] = "green" if all(passed.get(f"{s}:{f.name}", False) for s, f in fs) else "red"
+
+    if args.write_baseline and not args.list:
+        import promise_gate
+        greens = sorted(norm(p) for p, st in status.items() if st == "green")
+        prev = promise_gate.green()
+        lost = sorted(prev - set(greens)) if not only else []
+        promise_gate.BASELINE.write_text(json.dumps({"green": sorted(set(greens) | (prev if only else set()))},
+                                                    indent=1) + "\n")
+        if lost:
+            print(f"REGRESSED since the last baseline: {', '.join(lost)}")
+
+    counts = defaultdict(int)
+    for v in status.values():
+        counts[v.split()[0] if args.list else v] += 1
+    if args.json:
+        print(json.dumps({"counts": counts, "promises": status,
+                          "first_failures": {f: [list(x) for x in v] for f, v in FIRST_FAILURES.items()}},
+                         indent=1))
+    else:
+        for pid, st in status.items():
+            print(f"{st:10} {pid:10} {wanted[pid][:90]}")
+        print("\n" + "  ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    return 0 if not args.list and counts.get("red", 0) == 0 and counts.get("no-eval", 0) == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

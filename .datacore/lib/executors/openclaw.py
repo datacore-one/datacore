@@ -13,9 +13,25 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 from process_run import run as run_process
 
 from .base import Executor, estimate_cost_cents, register
+
+
+def _run_openclaw(command, *, env, **kwargs):
+    """Run openclaw with a private TMPDIR that is removed afterwards.
+
+    `openclaw agent exec` leaves a ~108 MB state dir (openclaw-agent-exec-*) in
+    the temp dir on every run and never removes it; a claim retried every 15
+    minutes through it filled plur-claw's disk (2026-09-28..30). Whatever the
+    outcome, nothing a run puts in its temp dir survives it.
+    """
+    private = tempfile.mkdtemp(prefix="openclaw-run-", dir=tempfile.gettempdir())
+    try:
+        return run_process(command, env={**env, "TMPDIR": private}, **kwargs)
+    finally:
+        shutil.rmtree(private, ignore_errors=True)
 
 
 @register
@@ -32,9 +48,9 @@ class OpenClawExecutor(Executor):
         config = os.environ.get("DATACORE_OPENCLAW_CONFIG")
         if config:
             command.extend(["--config", config])
-        result = run_process(command, input=prompt, capture_output=True, text=True,
-                                timeout=timeout_s + 15, check=False, cwd=workspace,
-                                env=self._execution_env())
+        result = _run_openclaw(command, input=prompt, capture_output=True, text=True,
+                               timeout=timeout_s + 15, check=False, cwd=workspace,
+                               env=self._execution_env())
         try:
             envelope = json.loads(result.stdout)
         except (ValueError, TypeError):
@@ -66,3 +82,57 @@ class OpenClawExecutor(Executor):
             cents = estimate_cost_cents(prompt, text)
             self._cost_estimated = True
         return text, cents
+
+
+@register
+class OpenClawGatewayExecutor(OpenClawExecutor):
+    """One OpenClaw turn through the Gateway, in a fresh session per run.
+
+    `agent exec` is an embedded run that reads provider credentials from the
+    environment, so on plur-claw it used a pay-per-use API key that had run dry
+    (2026-09-23) while the Gateway's own agent -- the one Telegram talks to --
+    runs on the Codex harness with the owner's stored subscription login. This
+    route uses that agent. Its workspace is the Gateway's, not the caller's, so
+    the prompt is told to work in the dispatched directory; a turn that writes
+    elsewhere leaves no evidence there and fails the run, it cannot pass silently.
+    """
+    name = "openclaw-gateway"
+
+    def _invoke(self, prompt: str, timeout_s: int) -> tuple[str, int]:
+        import uuid
+        binary = shutil.which("openclaw")
+        if binary is None:
+            raise RuntimeError("'openclaw' binary not found on PATH")
+        workspace = str(Path(self._cwd or os.getcwd()).resolve())
+        message = (f"Work only in `{workspace}`: `cd` there before anything else; every relative path "
+                   f"below is relative to it.\n\n{prompt}")
+        # `openclaw agent` reads --message-file from a path only (stdin is an
+        # `agent exec` feature): a private file, removed after the turn.
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", prefix="dispatch-") as fh:
+            fh.write(message)
+            fh.flush()
+            command = [binary, "agent", "--agent", "main", "--session-key",
+                       f"agent:main:dispatch-{uuid.uuid4().hex[:12]}",
+                       "--message-file", fh.name, "--json", "--timeout", str(timeout_s)]
+            result = _run_openclaw(command, capture_output=True, text=True, timeout=timeout_s + 30,
+                                   check=False, cwd=workspace, env=self._execution_env())
+        try:
+            envelope = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            tail = (result.stderr or "").strip().splitlines()
+            raise RuntimeError(f"openclaw gateway returned no result (exit {result.returncode})"
+                               + (f" [stderr: {tail[-1][:160]}]" if tail else "")) from None
+        body = envelope.get("result") if isinstance(envelope, dict) else None
+        payloads = (body or {}).get("payloads") or []
+        text = "\n".join(str(p.get("text") or "") for p in payloads if isinstance(p, dict)).strip()
+        meta = ((body or {}).get("meta") or {}).get("agentMeta") or {}
+        if isinstance(meta.get("model"), str):
+            self._model = meta["model"]
+        if result.returncode != 0 or envelope.get("status") != "ok":
+            detail = envelope.get("error") or envelope.get("summary") or envelope.get("status")
+            self._in_band_error = (f"openclaw gateway turn failed (exit {result.returncode})"
+                                   + (f": {str(detail)[:200]}" if detail else ""))
+        elif not text:
+            self._in_band_error = "openclaw gateway turn produced no reply"
+        self._cost_estimated = True  # subscription-billed: no per-run price exists
+        return text, estimate_cost_cents(prompt, text)

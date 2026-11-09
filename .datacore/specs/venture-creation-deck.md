@@ -47,7 +47,7 @@ A venture is any effort serious enough to have **its own clock**.
 - Its own standing commitments, chased whether or not anyone remembers
 - Its own definition of going well, and someone accountable for it
 
-Datafund, the trading fund, the product company, the health practice — each is a venture. A landing page is not.
+A data company, a trading fund, a product company, a health practice — each is a venture. A landing page is not.
 
 > **In plain words:** a venture gets its own folder, its own budget and its own heartbeat. A project just gets a to-do list.
 

@@ -27,6 +27,8 @@ import os as _os
 
 import argparse
 import json
+import subprocess
+import uuid
 import sys
 import sys as _sys
 import socket as _socket
@@ -35,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tag_utils import sanitize_org_tags  # noqa: E402
-from org_transaction import SafeOrgWorkspace, new_org_id, serialized
+from org_transaction import SafeOrgWorkspace, delete_file, new_org_id, serialized, watch_file, write_org_text
 
 
 def _load_ws(*paths: str, state_config=None):
@@ -97,18 +99,41 @@ def cmd_count(args):
     judges the blast radius unacceptable, and declines. It has declined every
     night for months, so the pile never shrinks and the next run sees the same
     number. The refusal was right; the number was wrong.
+
+    The inbox SECTION counts as the top level. The real layout keeps captures
+    as `** TODO` under a stateless `* Inbox` heading (every team space, and
+    most of 0-personal); counting only level-1 headings made those inboxes
+    read as empty, so the morning run skipped them (promise INB-1). A direct
+    child of a stateless level-1 heading titled "Inbox" is a capture too.
     """
     ws = _load_ws(*args.files)
     count = 0
     terminal = ws.state_config.terminal_states
     for node in ws.all_nodes():
-        if getattr(args, "top_level", False) and node.level != 1:
+        if getattr(args, "top_level", False) and not _is_capture(node):
             continue
         if node.todo and node.todo not in terminal:
+            count += 1
+        elif (getattr(args, "top_level", False) and not node.todo and node.level == 1
+              and not list(node.children) and (node.heading or "").strip().lower() != "inbox"
+              and "[NEEDS_REVIEW]" not in (node.heading or "")):
+            # A stateless top-level heading with nothing under it: a bare
+            # capture, or a group heading whose last child has left (which the
+            # processor removes). Uncounted, a space holding only that read 0
+            # and was never processed (5-plur, 2026-10-03; INB-8).
             count += 1
     return {"count": count, "files": args.files,
             "unit": "top-level captures" if getattr(args, "top_level", False)
                     else "headings"}
+
+
+def _is_capture(node) -> bool:
+    """A top-level entry, or a direct child of the stateless `* Inbox` section."""
+    if node.level == 1:
+        return True
+    parent = node.parent if node.level == 2 else None
+    return bool(parent is not None and not parent.todo
+                and (parent.heading or "").strip().lower() == "inbox")
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +223,161 @@ def _assignee_from_tags(file_path, tags):
     return None
 
 
+# DIP-0009 v2.0 ruling 5: DONE and CANCELLED both dismiss (CANCELLED as
+# `dropped`); DEFERRED is closed-but-wakeable and never dismisses.
+_DISMISS_KIND = {"DONE": "done", "CANCELLED": "dropped"}
+
+
+#: DIP-0009 v2.0 "Valid transitions" table, plus DEFERRED→CANCELLED (owner
+#: decision G2, 2026-09-23: dropping a benched task need not wake it first).
+#: org-workspace's `can_transition` is looser (any non-terminal state to any
+#: other state), and callers rely on some of that looseness
+#: (`gtd_decision_board` sends REVIEW→TODO, `delegation_gate` REVIEW→DEFERRED).
+#: Decision G1 is WARN ONLY: a move outside this table is reported and then
+#: performed exactly as before. Model: DatacoreSpec/GtdState.lean section 5.
+DIP0009_V2_TRANSITIONS = {
+    "TODO": frozenset({"NEXT", "WAITING", "REVIEW", "DONE", "DEFERRED", "CANCELLED"}),
+    "NEXT": frozenset({"TODO", "WAITING", "REVIEW", "DONE", "DEFERRED", "CANCELLED"}),
+    "WAITING": frozenset({"TODO", "NEXT", "REVIEW", "DONE", "DEFERRED", "CANCELLED"}),
+    "REVIEW": frozenset({"DONE", "NEXT", "DEFERRED", "CANCELLED"}),
+    "DEFERRED": frozenset({"TODO", "CANCELLED"}),
+}
+
+
+def dip0009_allows(from_state, to_state) -> bool:
+    """True iff `from_state → to_state` is in the adapter's DIP-0009 relation."""
+    return to_state in DIP0009_V2_TRANSITIONS.get(from_state or "", frozenset())
+
+
+def _transition_warning(node, to_state):
+    """A warning string when the requested move is outside DIP-0009, else None.
+
+    A request for the state the task already holds is not a move (org-workspace
+    treats it as a no-op), so it never warns. The warning goes to stderr, where
+    the adapter's diagnostics go, and is returned for the JSON `warnings` list.
+    Nothing is refused: decision G1 is warn only.
+    """
+    from_state = node.todo
+    if from_state == to_state or dip0009_allows(from_state, to_state):
+        return None
+    msg = (f"transition {from_state}→{to_state} is not in the DIP-0009 v2.0 table "
+           f"(task {node.id() or node.heading!r}); performing it anyway")
+    print(f"org_workspace_adapter: WARNING: {msg}", file=_sys.stderr)
+    return msg
+
+
+def _generated_target(file_path) -> bool:
+    """True when `_ledger_emit` reconciles by diff (`sync_generated`), not by append.
+
+    In a Phase 1 space the generated next_actions.org is a projection, and an
+    update/dismiss to it is published as the three-way diff between file, base
+    and ledger. That diff already derives the right events from what the file
+    now SAYS (a repeater that reopened as TODO yields no dismissal). Every other
+    file is appended to directly, so the caller must choose the events itself.
+    """
+    from org_space import ledger_space_for_file
+    space = ledger_space_for_file(file_path)
+    if space is None:
+        return False
+    from ledger_project_org import phase, ORG
+    return phase(space) == 1 and Path(file_path).resolve() == (space / ORG).resolve()
+
+
+def _readonly_space(args):
+    """The space whose read-only list `args.file` is (phase F), else None.
+
+    In such a space the adapter never writes the list: it applies the change to
+    a scratch copy of the ledger's own rendering, records the difference as
+    events (`org_readonly.commit_text`) and regenerates the list.
+    """
+    if getattr(args, "_generated_scratch", False) or not getattr(args, "file", None):
+        return None
+    if not _generated_target(args.file):
+        return None
+    from org_space import ledger_space_for_file
+    import org_readonly
+    space = ledger_space_for_file(args.file)
+    return space if space is not None and org_readonly.enabled(space) else None
+
+
+def _via_ledger(command, args, space, observe=()):
+    import copy
+    import tempfile
+    import org_readonly
+    real = Path(args.file).resolve()
+    with tempfile.TemporaryDirectory(prefix="org-readonly-") as d:
+        scratch = Path(d) / space.name / "org" / real.name
+        scratch.parent.mkdir(parents=True)
+        scratch.write_text(org_readonly.ledger_text(space), encoding="utf-8")
+        scratch_args = copy.copy(args)
+        scratch_args.file = str(scratch)
+        scratch_args._generated_scratch = True
+        out = command(scratch_args)
+        if not isinstance(out, dict) or out.get("error"):
+            return out
+        creates = {}
+        if out.get("_create_payload"):
+            creates[out["id"]] = out.pop("_create_payload")
+        ledger = org_readonly.commit_text(space, scratch.read_text(encoding="utf-8"), creates=creates)
+    out.pop("observed", None)
+    out["ledger"] = ledger
+    out["file"] = str(real)
+    if observe and out.get("id"):
+        out["observed"] = _observed(real, out["id"], set(observe))
+    return out
+
+
+def _ledger_emit_close(file_path, node, reason):
+    """Dismiss the ledger item iff the org task ACTUALLY closed.
+
+    `ws.transition(node, "DONE")` on a task with a SCHEDULED repeater does not
+    close it: org-workspace advances the date and reopens it as TODO. Deciding
+    from the requested state instead of the resulting one dismissed live
+    recurring tasks, and dismissal is terminal (DIP-0034). Returns the actor,
+    or None when nothing was appended.
+    """
+    kind = _DISMISS_KIND.get(node.todo or "")
+    if kind is None or not node.id() or _generated_target(file_path):
+        return None
+    return _ledger_emit(file_path, "item.dismiss",
+                        {"id": node.id(), "kind": kind, "reason": reason})
+
+
+def _actor_is_agent(requested_by=None):
+    """True when this writer is an agent principal (principals.yaml kind: agent)
+    filing for itself -- not when a person asked for the task (requested_by
+    names a human principal: the owner's own request through an agent).
+
+    Unknown or unreadable identity answers False: the stamp only ever ADDS a
+    review, and a fresh install without a registry has no agents."""
+    try:
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import actor_identity
+        from actor_identity import principal_of, resolve
+        actor, _source = resolve()
+        if not actor:
+            return False
+        # An explicit DATACORE_ROOT with no registry of its own yet (actor_identity
+        # never borrows one for it since 2026-10-08) would make every agent look
+        # unknown, and its :AI: tasks run unreviewed (MEM-57). For this read-only
+        # check, and only then, the registry beside this code answers: the stamp
+        # only ever ADDS a review.
+        path = None
+        if not Path(actor_identity.PRINCIPALS).exists():
+            beside = Path(__file__).resolve().parents[1] / "registry" / "principals.yaml"
+            path = beside if beside.exists() else None
+        _name, entry = principal_of(actor, path)
+        if (entry or {}).get("kind") != "agent":
+            return False
+        if requested_by:
+            _who, requester = principal_of(str(requested_by), path)
+            if (requester or {}).get("kind") == "human":
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _ledger_emit(file_path, event_type, payload):
     from org_space import ledger_space_for_file
     space = ledger_space_for_file(file_path)
@@ -211,12 +391,17 @@ def _ledger_emit(file_path, event_type, payload):
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
         from ledger.log import EventLog
         from actor_identity import this_actor
-        actor = this_actor()
+        # STRICT (owner follow-up Q2): an undeclared host raises UndeclaredActor
+        # here, before any event is planned -- in Phase 1 that propagates (the
+        # write is refused and the caller rolls Org back); in Phase 0 the
+        # mirror stays optional, as for any other ledger failure.
+        actor = this_actor(strict=True)
         if authoritative and Path(file_path).resolve() == (space / ORG).resolve() and event_type in ('item.update', 'item.dismiss'):
             from ledger.fold import fold
             from ledger.log import read_events
             from ledger.projection_state import sync_generated
-            sync_generated(space, fold(read_events(space)), actor)
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            sync_generated(space, authoritative_state(space), actor)
         else:
             EventLog(space, actor).append(event_type, payload)
         return actor
@@ -258,6 +443,9 @@ def _observed(file_path, task_id, keys):
 
 def cmd_add(args):
     """Add a new task to an org file."""
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_add, args, space)
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -300,6 +488,12 @@ def cmd_add(args):
     # Priority belongs in the heading as [#A], not in PROPERTIES
     heading = f"[#{args.priority}] {args.heading}" if args.priority else args.heading
 
+    # A Phase 1 space's next_actions.org is generated from the ledger. The node
+    # is still built here -- the ledger payload is read from it -- but the file
+    # that remains is the projection, never this adapter's layout (below).
+    generated = _generated_target(file_path)
+    generated_before = watch_file(file_path)["before"] if generated else None
+
     # Find parent node
     parent_node = None
     if getattr(args, 'parent_id', None):
@@ -314,8 +508,9 @@ def cmd_add(args):
                 break
         if parent_node is None:
             return {"error": f"Parent heading not found: {args.parent}"}
-    else:
-        # Default: first level-1 heading
+    elif not generated and not getattr(args, "_generated_scratch", False):
+        # Default: first level-1 heading. Not in a generated file: it has no
+        # sections, and its first heading is just some task.
         for n in ws.all_nodes():
             if n.level == 1:
                 parent_node = n
@@ -338,6 +533,16 @@ def cmd_add(args):
                     multiline_props[k] = v
                 else:
                     extra_props[k] = v
+
+    # MEM-57: a task an AGENT files for the fleet is machine-made. The
+    # nightshift gate keys on :ORIGIN: and reads an unmarked task as the
+    # owner's own, so an :AI: task Miles filed here ran without Winston's
+    # review. Stamped at this choke point, unless the caller said otherwise.
+    if tags and any(t == "AI" or t.startswith("AI") for t in tags) \
+            and "ORIGIN" not in extra_props and "ORIGIN" not in multiline_props \
+            and _actor_is_agent(getattr(args, "requested_by", None)
+                                or _os.environ.get("DATACORE_REQUESTED_BY")):
+        extra_props["ORIGIN"] = "agent"
 
     # Body text
     body = getattr(args, 'body', None)
@@ -382,9 +587,40 @@ def cmd_add(args):
     _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
     if _assignee:
         _create_payload["assignee"] = _assignee
+    if generated:
+        return _add_to_generated(file_path, generated_before, _create_payload, node_id, args.heading)
+    if getattr(args, "_generated_scratch", False):
+        # A read-only list (phase F): the caller records this payload.
+        return {"added": True, "id": node_id, "heading": args.heading,
+                "_create_payload": _create_payload}
     emitted = _ledger_emit(file_path, "item.create", _create_payload)
     return {"added": True, "id": node_id, "heading": args.heading,
             "ledger_actor": emitted}
+
+
+def _add_to_generated(file_path, before, payload, node_id, heading):
+    """Create the task in the ledger, then re-render the generated file from it.
+
+    Writing the heading into the projection and appending `item.create` beside
+    it left a file item the projection base had never seen. The first time the
+    ledger's copy moved on (another host's edit) or rendered differently, the
+    three-way merge met base-absent / file-present / ledger-different and
+    refused the whole space -- the system space on the overnight host, 2026-09-23 to 09-27,
+    which stopped every night's task admission. Rendered from the ledger, the
+    file and its base agree with the record by construction.
+    """
+    from org_space import ledger_space_for_file
+    from ledger_project_org import project_space
+    # Undo this adapter's own layout before the ledger hears of the task.
+    delete_file(file_path) if before is None else write_org_text(file_path, before)
+    emitted = _ledger_emit(file_path, "item.create", payload)
+    line = project_space(ledger_space_for_file(file_path))
+    out = {"added": True, "id": node_id, "heading": heading, "ledger_actor": emitted}
+    if line.startswith("REFUSED"):
+        # The task IS recorded; the file already held changes the ledger has not
+        # admitted, and the next ingest-then-project cycle renders it.
+        out["projection"] = "deferred: " + line
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +629,9 @@ def cmd_add(args):
 
 def cmd_complete(args):
     """Mark a task DONE, matched by title substring or ID."""
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_complete, args, space, observe=("STATE",))
     ws = _load_ws(args.file)
 
     if not getattr(args, 'id', None) and not getattr(args, 'title', None):
@@ -418,8 +657,12 @@ def cmd_complete(args):
         return {"error": f"Task already in terminal state: {node.todo}", "heading": node.heading}
 
     file_path = Path(args.file).resolve()
+    warnings = [w for w in [_transition_warning(node, "DONE")] if w]
     ws.transition(node, "DONE")
     ws.save(file_path)
+    # A repeater reopened as TODO with SCHEDULED advanced: that is a new cycle,
+    # not a closure, so the ledger hears an update, never a dismissal.
+    repeated = node.todo != "DONE"
 
     # THE LEDGER HEARS ABOUT COMPLETIONS TOO. `cmd_add` has emitted
     # `item.create` since DIP-0046 C4b; complete and update emitted nothing, so
@@ -428,14 +671,27 @@ def cmd_complete(args):
     # from the ledger, so the edit survives until the next cycle and then
     # silently reverts. For inbox.org it survives, but the ledger -- the record
     # every other reader consults -- stays wrong until the nightly sweep.
-    emitted = _ledger_emit(file_path, "item.dismiss", {
-        "id": node.id(),
-        "kind": "done",
-        "reason": "completed via org_workspace_adapter",
-    })
-    return {"completed": True, "heading": node.heading, "id": node.id(),
-            "ledger_actor": emitted,
-            "observed": _observed(file_path, node.id(), {"STATE"})}
+    #
+    # A heading without an :ID: has no ledger identity to address; appending
+    # `{"id": null}` only filed an orphan event (ID-less habits, 0-personal).
+    emitted = None
+    if node.id() and _generated_target(file_path):
+        emitted = _ledger_emit(file_path, "item.dismiss", {"id": node.id()})  # diff decides
+    elif node.id() and not repeated:
+        emitted = _ledger_emit_close(file_path, node, "completed via org_workspace_adapter")
+    elif node.id():
+        from ledger.genesis import task_payload, valid_time
+        created_date, rung = valid_time(node)
+        current = task_payload(node, file_path.parent.parent.name, created_date, rung)
+        emitted = _ledger_emit(file_path, "item.update", {
+            "id": node.id(), "state": current["state"], "scheduled": current["scheduled"],
+            "org": {"properties": current["org"]["properties"]}})
+    out = {"completed": True, "repeated": repeated, "heading": node.heading, "id": node.id(),
+           "ledger_actor": emitted,
+           "observed": _observed(file_path, node.id(), {"STATE"})}
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -443,12 +699,34 @@ def cmd_complete(args):
 # ---------------------------------------------------------------------------
 
 def cmd_agenda(args):
-    """List tasks SCHEDULED within the next N days."""
-    from org_workspace import Query
+    """List open tasks SCHEDULED up to N days ahead, including missed dates.
+
+    TSK-7: a task scheduled in the past and still open stays on the agenda
+    flagged ``overdue`` instead of silently dropping out the day after its
+    date (Query.agenda's window starts today). Finished tasks do not show.
+    """
+    from org_workspace.query import _to_date
     ws = _load_ws(args.file)
-    q = Query(ws)
-    nodes = q.agenda(days=args.days)
-    return {"days": args.days, "count": len(nodes), "tasks": [_node_to_dict(n) for n in nodes]}
+    today = date.today()
+    end = today + timedelta(days=args.days)
+    state_config = ws.state_config
+    picked = []
+    for n in ws.all_nodes():
+        d = _to_date(n.scheduled) if n.scheduled is not None else None
+        if d is None or d > end:
+            continue
+        if n.todo and state_config.is_terminal(n.todo):
+            continue
+        picked.append((d, n))
+    picked.sort(key=lambda p: p[0])
+    tasks = []
+    for d, n in picked:
+        task = _node_to_dict(n)
+        task["days_until"] = (d - today).days
+        task["overdue"] = d < today
+        tasks.append(task)
+    return {"days": args.days, "count": len(tasks),
+            "overdue": sum(1 for t in tasks if t["overdue"]), "tasks": tasks}
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +1003,48 @@ def cmd_duplicates(args):
 # ensure-ids
 # ---------------------------------------------------------------------------
 
+class _CommitAnchor:
+    """The identity of a heading that ARRIVED without one, the same on every host.
+
+    Fleet week simulation, finding 8 (2026-09-30): a heading committed without
+    an :ID: reached two hosts, each host's ingest minted its own random UUID,
+    and their next converge conflicted on the :ID: line ("human needed").
+
+    Identity is still never inferred from a title (org_transaction.new_org_id):
+    two captures with the same words are two tasks. What makes two hosts'
+    copies the SAME heading is the commit that brought it, so a heading that is
+    already committed gets uuid5(the oldest commit that added its text to this
+    file, the file's repository path, the text, its position among identical
+    un-identified headings in the file). A heading not committed yet -- a fresh
+    local capture -- and any file outside git get a random identity, as before.
+    Any git failure falls back to random: never worse than before.
+    """
+    NS = uuid.UUID("5b0e7c52-8f1e-4c1a-9d57-3f2d6c0a9e11")
+
+    def __init__(self, path: Path):
+        self.dir, self.name, self.rel = path.parent, path.name, None
+        r = self._git("ls-files", "--full-name", "--error-unmatch", "--", self.name)
+        if r:
+            self.rel = r.splitlines()[0].strip()
+
+    def _git(self, *args: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "-C", str(self.dir), *args], capture_output=True, text=True,
+                               timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout if r.returncode == 0 else None
+
+    def id_for(self, heading: str, k: int) -> str | None:
+        if not self.rel or not heading.strip():
+            return None
+        out = self._git("log", "--reverse", "--format=%H", "-S", heading, "--", self.name)
+        commit = (out or "").split("\n", 1)[0].strip()
+        if not commit:
+            return None
+        return str(uuid.uuid5(self.NS, "\0".join((commit, self.rel, heading, str(k)))))
+
+
 def cmd_ensure_ids(args):
     """Add :ID: properties to EVERY heading that lacks one, task or not.
 
@@ -734,6 +1054,8 @@ def cmd_ensure_ids(args):
 
     New captures use independent UUIDs, including identical headings created
     in separate files or on separate hosts. Existing identities never change.
+    A heading that is already COMMITTED without an ID gets the same identity on
+    every host that pulled it (see _CommitAnchor).
 
     PLAIN HEADINGS COUNT. This skipped anything without a todo state, while
     `genesis._section_payload` documents the opposite as its premise --
@@ -757,10 +1079,13 @@ def cmd_ensure_ids(args):
             seen_ids.add(node.id())
 
     pending = []
+    anchor = _CommitAnchor(file_path)
+    ordinal: dict[str, int] = {}
     for node in ws.all_nodes():
         if node.id():
             continue
-        new_id = new_org_id()
+        k = ordinal[node.heading] = ordinal.get(node.heading, -1) + 1
+        new_id = anchor.id_for(node.heading, k) or new_org_id()
         while new_id in seen_ids:
             new_id = new_org_id()
         seen_ids.add(new_id)
@@ -786,6 +1111,9 @@ def cmd_ensure_ids(args):
 def cmd_write_clock(args):
     """Write a CLOCK entry to a task's LOGBOOK, matched by title or ID."""
     from org_workspace.log import add_clock_entry
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_write_clock, args, space)
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -843,6 +1171,19 @@ def cmd_move(args):
     """Move a task from one file to another, preserving all properties and body."""
     from_path = Path(args.source).resolve()
     to_path = Path(args.target).resolve()
+
+    # Out of a Phase 1 space's generated file a move is a removal the projection
+    # puts back (a duplicate), so it stays refused. INTO one it is admission:
+    # the task is created in the ledger and the file re-rendered from it (owner,
+    # fleet console 2026-10-30) -- refused, the nightly inbox run could never
+    # file a single next action and left it in the inbox every night.
+    if _generated_target(to_path) and not _generated_target(from_path):
+        return _admit_to_generated(args, from_path, to_path)
+    for end in (from_path, to_path):
+        if _generated_target(end):
+            return {"error": f"{end} is generated from the ledger (Phase 1, DIP-0046); a move "
+                             "cannot reach the ledger. Capture into inbox.org, or change the "
+                             "task's state with update (DEFERRED for someday)."}
 
     ws = _load_ws(args.source, args.target)
 
@@ -903,6 +1244,54 @@ def cmd_move(args):
     }
 
 
+def _admit_to_generated(args, from_path, to_path):
+    """Move a capture into a generated next_actions.org through the ledger.
+
+    Created in the ledger when it is not there yet (a hand- or mail-written
+    capture), kept as it is when it is live (captured through `add`), refused
+    when the ledger already closed it. Only after the ledger holds it live does
+    it leave the source file, and the projection is re-rendered from the ledger,
+    as `_add_to_generated` does for a new task.
+    """
+    from org_space import ledger_space_for_file
+    from ledger_project_org import project_space
+    from ledger.hub import authoritative_state
+    ws = _load_ws(args.source)
+    node = ws.find_by_id(args.id) if getattr(args, "id", None) else None
+    if node is None and getattr(args, "title", None):
+        search = args.title.lower()
+        node = next((n for n in ws.all_nodes()
+                     if n.path == from_path and n.todo and search in n.heading.lower()), None)
+    if node is None or node.path != from_path:
+        return {"error": f"Task not found in {args.source}: '{args.id or args.title}'"}
+    tid = node.id()
+    if not tid:
+        return {"error": "the task has no :ID:; run ensure-ids on the source first"}
+    space = ledger_space_for_file(to_path)
+    item = authoritative_state(space).items.get(tid)
+    if item is not None and item.status in ("dismissed", "archived", "verified"):
+        return {"error": f"{tid} is already closed in the ledger ({item.status}); left in {from_path.name}"}
+    if item is None:
+        from ledger.genesis import task_payload, valid_time
+        created_date, rung = valid_time(node)
+        payload = task_payload(node, from_path.parent.parent.name, created_date, rung)
+        # Its place in the inbox is not its place in the projection: a generated
+        # file has no sections, so the task is top level unless a parent is named.
+        payload.update(parent=getattr(args, "parent_id", None), level=None, outline=[])
+        _ledger_emit(to_path, "item.create", payload)
+        item = authoritative_state(space).items.get(tid)
+        if item is None:
+            return {"error": f"the ledger did not admit {tid}; left in {from_path.name}"}
+    ws.remove_node(node)
+    ws.save(from_path)
+    line = project_space(space)
+    out = {"moved": True, "admitted": True, "id": tid, "heading": node.heading,
+           "from": str(from_path), "to": str(to_path)}
+    if line.startswith("REFUSED"):
+        out["projection"] = "deferred: " + line
+    return out
+
+
 # ---------------------------------------------------------------------------
 # show
 # ---------------------------------------------------------------------------
@@ -939,6 +1328,10 @@ def cmd_show(args):
 
 def cmd_update(args):
     """Update fields on an existing task."""
+    space = _readonly_space(args)
+    if space is not None:
+        keys = {"STATE", "SCHEDULED", "DEADLINE"} | {p.split("=", 1)[0] for p in (getattr(args, "property", None) or []) if "=" in p}
+        return _via_ledger(cmd_update, args, space, observe=tuple(keys))
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -957,9 +1350,13 @@ def cmd_update(args):
         return {"error": f"Task not found: '{args.id or args.title}'"}
 
     changes = []
+    warnings = []
 
-    # State transition
+    # State transition (G1: a move outside DIP-0009 v2.0 warns, then proceeds)
     if args.state:
+        warning = _transition_warning(node, args.state)
+        if warning:
+            warnings.append(warning)
         ws.transition(node, args.state)
         changes.append(f"state→{args.state}")
 
@@ -993,6 +1390,19 @@ def cmd_update(args):
             ws.set_scheduled(node, sched_dt)
             changes.append(f"scheduled→{args.scheduled}")
 
+    # Deadline, same rules as scheduled ("none" clears it).
+    if getattr(args, 'deadline', None):
+        if args.deadline.strip().lower() == "none":
+            ws.set_deadline(node, None)
+            changes.append("deadline→(cleared)")
+        else:
+            try:
+                deadline_dt = datetime.strptime(args.deadline, "%Y-%m-%d").date()
+            except ValueError:
+                return {"error": f"Invalid date: '{args.deadline}'. Use YYYY-MM-DD or 'none'."}
+            ws.set_deadline(node, deadline_dt)
+            changes.append(f"deadline→{args.deadline}")
+
     # Heading
     if getattr(args, 'new_heading', None):
         ws.set_heading(node, args.new_heading)
@@ -1009,17 +1419,28 @@ def cmd_update(args):
         _payload['title'] = current['title']
     if args.state:
         _payload['state'] = current['state']
+        if node.todo != args.state:
+            # A repeater reopened instead of closing: the date and LAST_REPEAT
+            # moved, and the ledger must hear that too.
+            _payload['scheduled'] = current['scheduled']
+            _payload['org'] = {'properties': _props}
     if args.tags:
         _payload['tags'] = current['tags']
         _payload['effective_tags'] = current['effective_tags']
     if args.scheduled:
         _payload['scheduled'] = current['scheduled']
+    if getattr(args, 'deadline', None):
+        _payload['deadline'] = current['deadline']
     if getattr(args, 'property', None):
         _payload['org'] = {'properties': _props}
     emitted = _ledger_emit(file_path, "item.update", _payload)
+    if args.state:
+        # DIP-0009 v2.0 ruling 5. An `item.update` carrying state DONE left the
+        # ledger item live forever (the drift the ruling was made to end).
+        emitted = _ledger_emit_close(file_path, node, f"closed as {node.todo} via org_workspace_adapter") or emitted
 
     _keys = set(_props) | {"STATE", "SCHEDULED", "DEADLINE"}
-    return {
+    out = {
         "updated": True,
         "id": node.id(),
         "heading": node.heading,
@@ -1027,6 +1448,9 @@ def cmd_update(args):
         "ledger_actor": emitted,
         "observed": _observed(file_path, node.id(), _keys),
     }
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1146,6 +1570,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "REVIEW | DONE, DEFERRED, CANCELLED)")
     p.add_argument("--tags", help="Replace tags (:tag1:tag2: format)")
     p.add_argument("--scheduled", help="YYYY-MM-DD")
+    p.add_argument("--deadline", help="YYYY-MM-DD, or 'none' to clear it")
     p.add_argument("--heading", dest="new_heading", help="New heading text")
     p.add_argument("--property", action="append", metavar="KEY=VALUE",
                    help="Set property (repeatable)")

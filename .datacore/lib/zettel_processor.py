@@ -18,6 +18,7 @@ Usage:
     python zettel_processor.py --full-process [--space SPACE]
 """
 
+import hashlib
 import json
 import os
 import re
@@ -32,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from zettel_db import (
     get_connection, init_database, get_db_path, detect_file_type,
-    detect_author, SPACES, DATA_ROOT, sync_to_root
+    detect_author, SPACES, DATA_ROOT, sync_to_root, drop_other_ids_for_path
 )
 
 
@@ -232,7 +233,14 @@ def get_space_from_path(path):
 
 
 def generate_file_id(path, frontmatter):
-    """Generate unique file ID."""
+    """Generate a file ID that is unique per file.
+
+    KNW-7: the id used to be the file stem, so zettel/Ideas.md and
+    literature/Ideas.md -- or two spaces' journal/2026-09-25.md in the root
+    index -- shared one id, and ON CONFLICT(id) let the second overwrite the
+    first: a note lost to a name clash. The id is now the readable stem slug
+    plus a short hash of the file's path relative to the Data root.
+    """
     stem = Path(path).stem
     clean_id = re.sub(r'[^a-zA-Z0-9-]', '-', stem.lower())
     clean_id = re.sub(r'-+', '-', clean_id).strip('-')
@@ -242,7 +250,12 @@ def generate_file_id(path, frontmatter):
         if not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', fm_id):
             return fm_id
 
-    return clean_id
+    resolved = Path(path).resolve()
+    try:
+        where = resolved.relative_to(DATA_ROOT.resolve()).as_posix()
+    except ValueError:
+        where = resolved.as_posix()
+    return f"{clean_id}-{hashlib.sha1(where.encode('utf-8')).hexdigest()[:8]}"
 
 
 def process_file(path, space=None, dry_run=False):
@@ -324,6 +337,10 @@ def save_to_database(file_data, space=None):
         if isinstance(val, (dict, list)):
             return json.dumps(val)
         return str(val)
+
+    # One row per file: drop a row left for this path under an older id (the
+    # stem-only ids before KNW-7), or it would show in search twice.
+    drop_other_ids_for_path(cursor, file_data['path'], file_data['id'])
 
     cursor.execute("""
         INSERT INTO files

@@ -125,6 +125,7 @@ def scan_module(mod: Path) -> dict:
 
     writes: dict[str, list[int]] = {}
     decorated: dict[str, str] = {}
+    unparsed: list[str] = []
     for py in sorted(mod.rglob("*.py")):
         # SKIP CODE THE MODULE DID NOT WRITE. The health module reported 131
         # sites, of which the overwhelming majority were build output and
@@ -151,7 +152,10 @@ def scan_module(mod: Path) -> dict:
             continue
         try:
             tree = ast.parse(py.read_text(errors="replace"))
-        except SyntaxError:
+        except (SyntaxError, ValueError):
+            # Not skipped silently: a file this interpreter cannot parse is a
+            # file whose egress is unknown (2026-09-23, Guards.lean).
+            unparsed.append(py.relative_to(mod).as_posix())
             continue
         v = _Visitor()
         v.visit(tree)
@@ -161,7 +165,7 @@ def scan_module(mod: Path) -> dict:
         for fn, kind in v.decorated.items():
             decorated[f"{rel}:{fn}"] = kind
     return {"declared": declared, "exempt": exempt,
-            "writes": writes, "decorated": decorated}
+            "writes": writes, "decorated": decorated, "unparsed": unparsed}
 
 
 def main() -> int:
@@ -181,6 +185,7 @@ def main() -> int:
     unopted: list[str] = []
     undecorated: list[str] = []
     bad_kind: list[str] = []
+    unscannable: list[str] = []
     covered = 0
 
     wanted = set(a.module or [])
@@ -189,14 +194,23 @@ def main() -> int:
             continue
         r = scan_module(mod)
         if "error" in r:
+            # A manifest that cannot be read cannot say whether the module
+            # opted in, so under --enforce it FAILS. It used to be printed and
+            # skipped, which let a module escape the ratchet by breaking its
+            # own module.yaml (2026-09-23, Guards.lean `enforce_counts_unknowns`).
             print(f"  {mod.name:22} manifest error: {r['error']}")
+            unscannable.append(f"{mod.name}/module.yaml ({r['error'][:60]})")
             continue
         # A module that has declared ANY egress is held to the full contract.
-        # One that has not is reported and not failed -- otherwise turning this
-        # on would fail every module at once and the check would be switched
-        # off the same day. Declaring is the ratchet: once a module opts in, it
-        # cannot silently grow a new action.
+        # One that has not used to be reported and not failed, so the rollout
+        # would not fail every module at once. The rollout is done (every
+        # installed module declares or exempts what it sends), and the
+        # exception had become the hole: a module that never declared could
+        # grow a POST and pass --enforce (MOD-5). Now an outward write nobody
+        # declared fails whether or not its module opted in.
         opted_in = bool(r["declared"] or r["exempt"])
+        if opted_in:
+            unscannable += [f"{mod.name}/{f} (does not parse)" for f in r["unparsed"]]
         for site in sorted(r["writes"]):
             if site in r["declared"] or _exempted(site, r["exempt"]):
                 covered += 1
@@ -213,11 +227,13 @@ def main() -> int:
     print(f"\nEGRESS SCAN — {covered} declared/exempted, "
           f"{len(undeclared)} undeclared in opted-in modules, "
           f"{len(undecorated)} undecorated, "
+          f"{len(unscannable)} unscannable, "
           f"{len(unopted)} in modules not yet declaring")
     for label, rows in (("UNDECLARED (acts, nothing says so)", undeclared),
                         ("UNDECORATED (declared, not wired)", undecorated),
                         ("UNKNOWN KIND (not in vocabulary)", bad_kind),
-                        ("NOT YET DECLARING (reported, not failed)", unopted)):
+                        ("UNSCANNABLE (egress unknown)", unscannable),
+                        ("UNDECLARED IN A MODULE THAT DECLARES NOTHING (acts, nothing says so)", unopted)):
         if rows:
             print(f"\n  {label}: {len(rows)}")
             cap = len(rows) if a.limit == 0 else a.limit
@@ -226,7 +242,7 @@ def main() -> int:
             if len(rows) > cap:
                 print(f"    ... and {len(rows)-cap} more")
 
-    bad = len(undeclared) + len(undecorated) + len(bad_kind)
+    bad = len(undeclared) + len(undecorated) + len(bad_kind) + len(unscannable) + len(unopted)
     if not a.enforce:
         print("\n  (report-only; --enforce to fail)")
         return 0

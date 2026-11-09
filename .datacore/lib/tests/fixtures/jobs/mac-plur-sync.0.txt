@@ -1,0 +1,7 @@
+# fixture for mac-plur-sync artifact[0]
+# producer artifact: ~/.datacore/state/plur-sync.json on mac
+# harvested: 2026-10-02
+# regex under test: "in_sync": true
+# represents: SUCCESS
+# ---
+  "in_sync": true,

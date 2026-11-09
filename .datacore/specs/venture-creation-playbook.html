@@ -55,9 +55,9 @@ footer { grid-column:1/-1; margin-top:54px; padding-top:15px; border-top:1px sol
 @media print { nav { display:none; } .shell { grid-template-columns:1fr; } }
 </style></head>
 <body><div class="shell">
-<nav><div class="navtitle">Contents</div><a class="part" href="#part-0">Creating a venture in Datacore — the whole path</a><a href="#the-nine-stages">The nine stages</a><a href="#stage-0-decide-it-is-a-venture">Stage 0 — Decide it is a venture</a><a href="#stage-1-the-space-and-the-constitution">Stage 1 — The space and the constitution</a><a href="#stage-2-the-intent-graph">Stage 2 — The intent graph</a><a href="#stage-3-the-hypothesis-board">Stage 3 — The hypothesis board</a><a href="#stage-4-brand-and-positioning">Stage 4 — Brand and positioning</a><a href="#stage-5-the-roadmap">Stage 5 — The roadmap</a><a href="#stage-6-roles-and-cadences-the-workflow-layer">Stage 6 — Roles and cadences: the workflow layer</a><a href="#stage-7-sprints-and-execution">Stage 7 — Sprints and execution</a><a href="#stage-8-make-it-visible">Stage 8 — Make it visible</a><a href="#stage-9-stage-transitions">Stage 9 — Stage transitions</a><a href="#the-minimum-that-is-actually-a-venture">The minimum that is actually a venture</a><a href="#checklist">Checklist</a><a href="#known-gaps-in-the-framework-itself">Known gaps in the framework itself</a><a class="part" href="#part-1">What a conversational venture wizard still needs</a><a href="#the-shape-of-the-wizard">The shape of the wizard</a><a href="#blockers-the-wizard-cannot-run-without-these">Blockers — the wizard cannot run without these</a><a href="#needed-for-the-stages-beyond-the-minimum">Needed for the stages beyond the minimum</a><a href="#fix-while-passing">Fix while passing</a><a href="#build-order">Build order</a></nav>
+<nav><div class="navtitle">Contents</div><a class="part" href="#part-0">Creating a venture in Datacore — the whole path</a><a href="#the-nine-stages">The nine stages</a><a href="#stage-0-decide-it-is-a-venture">Stage 0 — Decide it is a venture</a><a href="#stage-1-the-space-and-the-constitution">Stage 1 — The space and the constitution</a><a href="#stage-2-the-intent-graph">Stage 2 — The intent graph</a><a href="#stage-3-the-hypothesis-board">Stage 3 — The hypothesis board</a><a href="#stage-4-brand-and-positioning">Stage 4 — Brand and positioning</a><a href="#stage-5-the-roadmap">Stage 5 — The roadmap</a><a href="#stage-6-roles-and-cadences-the-workflow-layer">Stage 6 — Roles and cadences: the workflow layer</a><a href="#stage-7-sprints-and-execution">Stage 7 — Sprints and execution</a><a href="#stage-8-make-it-visible">Stage 8 — Make it visible</a><a href="#stage-9-stage-transitions">Stage 9 — Stage transitions</a><a href="#the-minimum-that-is-actually-a-venture">The minimum that is actually a venture</a><a href="#checklist">Checklist</a><a class="part" href="#part-1">What a conversational venture wizard still needs</a><a href="#the-shape-of-the-wizard">The shape of the wizard</a><a href="#blockers-the-wizard-cannot-run-without-these">Blockers — the wizard cannot run without these</a><a href="#needed-for-the-stages-beyond-the-minimum">Needed for the stages beyond the minimum</a><a href="#fix-while-passing">Fix while passing</a><a href="#build-order">Build order</a></nav>
 <main><section id="part-0" class=""><h1>Creating a venture in Datacore — the whole path</h1>
-<p>Written 2026-09-18 by reading the code and the seven ventures that already run,
+<p>Written 2026-09-18 by reading the code and the ventures that already run,
 not from the design docs. Where a file and its documentation disagreed, the file
 won and the disagreement is noted.</p>
 <p>A <strong>venture</strong> in Datacore is a numbered space at <code>~/Data/[N]-&lt;slug&gt;/</code> that owns
@@ -266,10 +266,10 @@ tags: [...]
   maturity   → growth | archived
   archived   → discovery              (restore only)</code></p>
 <p><strong>On <code>north_star</code>:</strong> one metric per venture is a trap when the venture has more
-than one motion. PLUR carried <code>1000 enterprise installs by 2026-10-26</code> across a
-sales cycle <em>and</em> an ecosystem — two different physics, one number that could
-not be true of both. It was replaced on 2026-09-01 by three goals with three
-clocks in <code>roadmap.yaml</code>, and <code>venture.yaml</code> still records the superseded metric.
+than one motion. A venture carrying one install-count target across a
+sales cycle <em>and</em> an ecosystem has two different physics and one number that
+cannot be true of both. Replace it with one goal per motion, each with its own
+clock, in <code>roadmap.yaml</code>.
 If your venture has two motions, expect to carry the goals in the roadmap and
 keep <code>north_star</code> only for the tooling that reads it.</p>
 <p>Validate before moving on:</p>
@@ -292,7 +292,7 @@ reads as real and is worse than a visible blank.</p>
 <pre><code>Vision → Intents → Strategic goals (with :SUCCESS:) → Initiatives → Projects
 </code></pre>
 <p>Heading depth is the parent edge. A <code>:SERVES:</code> property adds cross-branch
-parents and <strong>may point into another space</strong> (<code>5-plur:knowledge-exchange</code>) —
+parents and <strong>may point into another space</strong> (<code>4-acme:knowledge-exchange</code>) —
 that is how ventures that serve each other stay visible as one graph under the
 personal view. Multi-parent nodes are high-leverage by design and get worked
 first. IDs are namespaced by space, so two ventures can both have a <code>growth</code>
@@ -342,8 +342,8 @@ Statuses map onto them: <code>proposed</code>/<code>backlog</code> → backlog; 
 its own lane</strong> when you update it — useful for <code>cold</code> or <code>infeasible</code>, but know
 that you are creating a lane, not annotating a row.</p>
 <p>A hypothesis needs a <code>metric</code> with a threshold, a window, and a budget, or it
-cannot be settled. Forge's H001 sat <code>ASSETS_READY</code> for months and its
-measurement window closed without the experiment ever running — the record now
+cannot be settled. A hypothesis left at <code>ASSETS_READY</code> for months had its
+measurement window close without the experiment ever running — the record now
 says, correctly, "hypothesis not disproven, only untested." Write the requeue
 date when you park one.</p>
 <p>Wire a <code>hypothesis-review</code> cadence (template exists) so cold hypotheses surface
@@ -402,9 +402,9 @@ audience plus sneezers), voice guidelines, and a Purple Cow angle.</p>
 </tr>
 </tbody>
 </table>
-<p>Two worked examples in the tree: <code>3-fds/1-tracks/comms/positioning/</code> is the
+<p>Two worked examples in the tree: <code>[N]-team/1-tracks/comms/positioning/</code> is the
 minimum honest version (brandscript, tribe profile, <code>voice.yaml</code>).
-<code>5-plur/1-tracks/comms/brand/</code> is the full build — <code>tokens.json</code> + <code>tokens.css</code>
+<code>[N]-venture/1-tracks/comms/brand/</code> is the full build — <code>tokens.json</code> + <code>tokens.css</code>
 as the source, with <code>build_guide.py</code>, <code>build_assets.py</code>, <code>build_merch.py</code>,
 <code>build_motion_css.py</code> generating the guide, the assets and the PDF. Start at the
 first; the second is what a growth-stage venture grows into.</p>
@@ -413,8 +413,8 @@ Status values are <code>missing | stub | draft | reviewed | published</code> —
 generated by an agent is not a position.</p>
 <hr />
 <h2 id="stage-5-the-roadmap">Stage 5 — The roadmap</h2>
-<p>Only once something is validated. Use the skill — it encodes the PLUR rebuild
-(five drifted documents to one validated source of 93 epics and 750 tasks):</p>
+<p>Only once something is validated. Use the skill — it encodes a rebuild from
+several drifted documents to one validated source:</p>
 <pre><code>/roadmap-build
 </code></pre>
 <p>Its one claim: <strong>a roadmap is good when it is CHECKABLE, not when it is well
@@ -440,23 +440,23 @@ prose was fine throughout. The prose is always fine.</p>
 <p>An item, in full:</p>
 <pre><code class="language-yaml">- id: R-001
   milestone: M2                  # or `continuous` — work that runs alongside the ladder
-  track: enterprise
+  track: wholesale
   lane: prod
-  title: First customer deployment reaches steady state
+  title: Pilot store deployment reaches steady state
   done_when:
     condition: &gt;-
       Runs unattended for 14 consecutive days with no human intervention
     evidence: metric              # metric | test | artifact
     verify: &gt;-
       gh issue list --repo org/repo --label incident --search &quot;created:&gt;14d ago&quot; returns none
-  outcome: The first signed customer is running unattended and is referenceable
-  serves: [enterprise-beachhead]  # INTENT_IDs
+  outcome: The pilot store reorders widgets unattended and is referenceable
+  serves: [wholesale-beachhead]  # INTENT_IDs
   drive: status
   horizon: now                    # now | next | later | gated
   status: in_progress
   blocked_on: null                # null | human | standing_block | &lt;id&gt;
   delegable: false
-  owner: gregor
+  owner: owner
   shipped: false
 </code></pre>
 <p>Three standing checks, all re-runnable:</p>
@@ -471,7 +471,7 @@ notes asserting a state older than 45 days, stray roadmap files declaring no
 canonical source. One afternoon of it found five epics whose state the roadmap
 had wrong.</p>
 <p><strong>Caveat for a new venture:</strong> <code>agent_readiness.py</code> hardcodes
-<code>ROADMAP = 5-plur/roadmap.yaml</code> (it scans all spaces only for <em>which</em> have a
+<code>ROADMAP</code> to one space's roadmap (it scans all spaces only for <em>which</em> have a
 roadmap). The validate/render/drift trio take <code>--space</code> or <code>ROADMAP_SPACE</code>;
 agent-readiness does not. Parameterise it or run its five checks by hand.</p>
 <hr />
@@ -484,10 +484,10 @@ variants (<code>dev.backend</code>, <code>dev.qa</code>, <code>dev.contracts</co
 <code>&lt;space&gt;/.datacore/roles/&lt;role&gt;.md</code>, and <code>role_loader.py</code> merges base + overlay
 so an agent gets the shared archetype <strong>and</strong> the venture-specific focus.</p>
 <p>A role entry in <code>venture.yaml</code> carries <code>description</code>, <code>cadences</code>,
-<code>budget_authority</code>, and optionally <code>agent:</code> (a named agent instance — PLUR's
-<code>cmo</code> is Data, its <code>cio</code> is Tris) and <code>autonomy_override:</code>. Extras round-trip,
+<code>budget_authority</code>, and optionally <code>agent:</code> (a named agent instance — e.g. Acme's
+<code>cmo</code> is agent-alpha, its <code>cio</code> is agent-beta) and <code>autonomy_override:</code>. Extras round-trip,
 so <code>decisions</code>, <code>receives</code>, <code>boundary</code>, <code>metrics</code> are all legitimate to add.
-Write the <strong>hard boundaries</strong> in the description. PLUR's bizdev role reads:
+Write the <strong>hard boundaries</strong> in the description. Acme's bizdev role reads:
 "qualifies prospects, it never contacts them" — that sentence is load-bearing.</p>
 <h3>Cadences</h3>
 <p>A cadence is a markdown file at <code>.datacore/templates/cadences/&lt;name&gt;.md</code>:</p>
@@ -523,7 +523,7 @@ before you write one.</strong></p>
 </code></pre>
 <p>One inconsistency to know about: <code>sprint-claim.md</code> declares
 <code>frequency: hourly</code> in its frontmatter, which is <strong>not</strong> one of the four engine
-frequencies. PLUR wires it under <code>cto.cadences.daily</code>. The frontmatter documents
+frequencies. A venture can wire it under <code>cto.cadences.daily</code>. The frontmatter documents
 the intended rhythm; the venture.yaml entry is what fires.</p>
 <h3>How they fire</h3>
 <p><code>cadence_engine.py</code> reads the roles dict, compares against
@@ -561,12 +561,11 @@ are the difference between a cadence log and a fiction:</p>
 <li>Machine-generated tasks keep their true <code>ORIGIN</code> and never manufacture
   <code>APPROVED_BY</code>. Restoring an AI tag does not forge human authorization.</li>
 </ul>
-<p>Use <code>heartbeat.triggers</code> to control what wakes the venture at all. PLUR set
-<code>triggers: [cadences]</code> on 2026-09-04 — new GitHub issues, inbox size and
+<p>Use <code>heartbeat.triggers</code> to control what wakes the venture at all. Setting
+<code>triggers: [cadences]</code> means new GitHub issues, inbox size and
 hypotheses deliberately do <strong>not</strong> wake it.</p>
-<p><strong>Start with one cadence.</strong> PLUR cleared every cadence on its CEO, CTO and CMO
-roles on 2026-09-04 and rebuilt them one at a time; only the CIO's were live
-during the rebuild. A venture that declares twelve cadences on day one produces
+<p><strong>Start with one cadence.</strong> Clearing every cadence on most roles and rebuilding
+them one at a time works better than the reverse. A venture that declares twelve cadences on day one produces
 twelve overdue flags on day two and teaches you to ignore the section.</p>
 <hr />
 <h2 id="stage-7-sprints-and-execution">Stage 7 — Sprints and execution</h2>
@@ -600,7 +599,7 @@ must be an explicit list, not prose.</p>
 <li><strong><code>/sprint-start</code></strong> — the kickoff ceremony. Reads <code>CANVAS.md</code>, walks the
    backlog, takes last adjustments, then flips <code>status: planning → active</code> and
    commits. (Activation can also fall to the decision pipeline's <code>default_at</code>
-   SLA if GO never arrives — PLUR's W27 activated that way.)</li>
+   SLA if GO never arrives.)</li>
 <li><strong><code>sprint_sync.py</code></strong> — projects the active sprint into the agent queue.</li>
 <li><strong><code>sprint-claim</code></strong> (daily cadence) — an agent claims one ready item and ships it.</li>
 <li><strong><code>/retro</code></strong> — retrospective, HITL log fully classified, engrams captured.</li>
@@ -729,14 +728,7 @@ with the user first. It is not deletion, and the venture keeps its number.</p>
 <p>That is a venture. It wakes on the heartbeat, appears in <code>/today</code>, and has one
 falsifiable claim under test. Everything else — intent graph, brand system,
 roadmap, sprint train — earns its place when there is something to point it at.</p>
-<p>The evidence in this tree is one-directional on this point: the failures are
-structures built before there was work to put in them. Sprints 2 through 6 of
-PLUR Enterprise have no retro written. Forge's hypothesis board has four
-hypotheses proposed in April that went cold in July without a single experiment.
-PLUR cleared every cadence on three roles and rebuilt them one at a time. None
-of those were failures of the framework; they were the cost of installing more
-of it than the venture was ready to carry.</p>
-<hr />
+hr />
 <h2 id="checklist">Checklist</h2>
 <pre><code>[ ] 0  /office-hours design doc exists; triggering decision captured
 [ ] 1  venture.yaml loads; budget invariant holds; stage is honest
@@ -753,27 +745,11 @@ of it than the venture was ready to carry.</p>
 [ ] 8  venture appears in /today; budget ledger initialised
 </code></pre>
 <hr />
-<h2 id="known-gaps-in-the-framework-itself">Known gaps in the framework itself</h2>
-<p>Found while writing this. Each is a real defect, not a caveat:</p>
-<ol>
-<li><code>.datacore/templates/space/venture.yaml.template</code> writes <code>roles:</code> as a list;
-   <code>VentureConfig</code> requires a dict. The template cannot produce a loadable file.</li>
-<li><code>comms/module.yaml</code> declares a <code>brand-positioning</code> command; the file
-   <code>commands/brand-positioning.md</code> does not exist.</li>
-<li><code>agent_readiness.py</code> hardcodes <code>5-plur/roadmap.yaml</code>. A second venture with a
-   roadmap cannot be checked with it.</li>
-<li><code>sprint-claim.md</code> declares <code>frequency: hourly</code>, which the cadence engine does
-   not support.</li>
-<li>The ventures module <code>CLAUDE.base.md</code> lists <code>cadence-log.yaml</code> and
-   <code>budget-ledger.yaml</code> at the space root; both now live under
-   <code>.datacore/state/venture/</code>.</li>
-</ol>
-<hr />
 <p><em>Sources: <code>.datacore/modules/ventures/</code> (loader, cadence engine, heartbeat,
 commands), <code>.datacore/lib/intent_*.py</code>, <code>.datacore/lib/roadmap_*.py</code>,
 <code>.datacore/lib/sprint_sync.py</code>, <code>.datacore/specs/task-lifecycle-and-ledger-coverage.md</code>,
 <code>~/.claude/skills/roadmap-build/SKILL.md</code>, <code>datacore-app/daemon/datacored/adapters/spaces.py</code>,
-and the seven ventures that already run.</em></p></section><section id="part-1" class="partrule"><h1>What a conversational venture wizard still needs</h1>
+and the ventures that already run.</em></p></section><section id="part-1" class="partrule"><h1>What a conversational venture wizard still needs</h1>
 <p>Companion to <code>venture-creation-playbook.md</code>. That document describes the nine
 stages as they are performed today — largely by hand, with a different tool per
 stage and several stages having no tool at all. This one lists the code that has
@@ -833,7 +809,7 @@ Code cannot call it.</p>
 <p><strong>This is a lift, not a rewrite.</strong> Move the scaffolder and <code>TEMPLATE_REGISTRY</code>
 into the ventures module (it is the ventures module's job), expose a CLI, and
 have the daemon adapter import it. One implementation, two callers.</p>
-<pre><code class="language-bash">python3 .datacore/lib/venture_scaffold.py --name &quot;The Practice&quot; \
+<pre><code class="language-bash">python3 .datacore/lib/venture_scaffold.py --name &quot;Acme Widgets&quot; \
     --stage discovery --template blank --dry-run
 </code></pre>
 <p><code>--dry-run</code> already exists in the daemon version and returns the planned file
@@ -851,7 +827,7 @@ of the nine stages are complete — and it is three things at once:</p>
 <p><code>venture_status.py</code> does not do this. It reports cadence, budget and hypothesis
 health for ventures that already load — runtime health, not setup completeness,
 and it cannot run at all before stage 1 finishes.</p>
-<pre><code>$ python3 .datacore/lib/venture_doctor.py --space 9-practice
+<pre><code>$ python3 .datacore/lib/venture_doctor.py --space 4-acme
   1  constitution   FAIL  no venture.yaml
   2  intent graph   n/a   (blocked by 1)
   ...
@@ -883,7 +859,7 @@ real and is worse than a blank. Correct, and it means the wizard's job at stage
 <p>There is no API for that. The options today are hand-editing org text, which the
 house rule forbids, or <code>--force</code>, which rewrites the whole file and discards the
 answers already given.</p>
-<pre><code class="language-bash">python3 .datacore/lib/intent_node.py --space 9-practice \
+<pre><code class="language-bash">python3 .datacore/lib/intent_node.py --space 4-acme \
     --id north-star-sessions --set SUCCESS &quot;...&quot; --clear-tag DRAFT
 </code></pre>
 <p>Build it on org-workspace (<code>set_property</code>, <code>NodeView</code>), which already handles
@@ -903,7 +879,7 @@ condition never a date; <code>shipped: false</code> required on public claims).<
 <p><code>.datacore/schemas/</code> does not exist yet. It should — see item 7.</p>
 <h3>6. <code>agent_readiness.py</code> takes a <code>--space</code></h3>
 <p><strong>Missing:</strong> parameterisation. One line of real change.</p>
-<p>It hardcodes <code>ROADMAP = REPO / "5-plur" / "roadmap.yaml"</code> while its three sibling
+<p>It hardcodes <code>ROADMAP</code> to one space's <code>roadmap.yaml</code> while its three sibling
 tools all accept <code>--space</code>/<code>ROADMAP_SPACE</code>. A second venture with a roadmap
 cannot be checked with it, so the wizard cannot tell the user whether the
 roadmap it just helped write is agent-executable.</p>
@@ -911,7 +887,7 @@ roadmap it just helped write is agent-executable.</p>
 <p><strong>Missing:</strong> <code>.datacore/schemas/sprint.schema.json</code>, <code>.datacore/lib/sprint_validate.py</code>,
 <code>.datacore/lib/sprint_init.py</code></p>
 <p><code>sprint.schema.json</code> and <code>validate_sprint.py</code> exist only inside
-<code>5-plur/2-projects/enterprise/</code>. The fourteen required root keys, the
+one team space's project folder. The fourteen required root keys, the
 <code>planning|active|review|retro|closed</code> vocabulary, the rule that <code>dates.retro</code>
 and <code>carryover</code> become required at <code>closed</code> — all of it is correct and all of it
 is trapped in one project's <code>scripts/</code>.</p>
@@ -934,7 +910,7 @@ that both did stage 4 have it in two different shapes.</p>
 <code>&lt;space&gt;/.datacore/roles/&lt;role&gt;.md</code>. The base archetypes exist for all twelve
 roles; nothing writes the overlay. The wizard should ask the two questions that
 matter — what this role owns here, and what it must never do — and write the
-stub. PLUR's bizdev boundary ("qualifies prospects, it never contacts them") is
+stub. A bizdev boundary such as ("qualifies prospects, it never contacts them") is
 the example of why the second question is not optional.</p>
 <hr />
 <h2 id="fix-while-passing">Fix while passing</h2>

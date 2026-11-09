@@ -38,7 +38,7 @@ This project lives inside a Datacore space. Session lifecycle commands are avail
 
 | Key | Value |
 |-----|-------|
-| Space | [N]-[name] (e.g., `1-datafund`) |
+| Space | [N]-[name] (e.g., `2-team`) |
 | Journal | `~/Data/[space]/journal/YYYY-MM-DD.md` |
 | Org | `~/Data/[space]/org/next_actions.org` |
 | Schema | `~/Data/.datacore/templates/journal-schema.md` |

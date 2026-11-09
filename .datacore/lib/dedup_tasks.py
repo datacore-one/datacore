@@ -45,11 +45,37 @@ def fingerprint(node):
     )
 
 
+def has_repeater(node) -> bool:
+    """SCHEDULED carries an org repeater (+1w, ++1d, .+1m)."""
+    sched = node.scheduled
+    return getattr(sched, "_repeater", None) is not None if sched else False
+
+
+def rank_group(nodes):
+    """KEEP RULE order: most properties, then latest SCHEDULED, then lowest id.
+
+    Python's sort is stable (also with reverse=True), so ordering by id first
+    and then by the primary key leaves ties in ascending-id order.
+    """
+    by_id = sorted(nodes, key=lambda n: str(n.id() or ""))
+    return sorted(by_id, key=lambda n: (len(n.properties or {}), str(n.scheduled or "")),
+                  reverse=True)
+
+
 def retire_duplicate(ws, keep, duplicate):
-    """Retain the original ID, body and descendants for references/recovery."""
+    """Retain the original ID, body and descendants for references/recovery.
+
+    Refuses a repeater: org-workspace turns CANCELLED on a repeating task into
+    "advance SCHEDULED and reopen as TODO", so the copy would stay open, one
+    cycle ahead, stamped DEDUPE_OF as if it had been retired.
+    """
     if fingerprint(keep) != fingerprint(duplicate):
         return False
+    if has_repeater(duplicate):
+        return False
     ws.transition(duplicate, "CANCELLED")
+    if duplicate.todo != "CANCELLED":
+        raise RuntimeError("duplicate did not close; refusing to stamp DEDUPE_OF")
     ws.set_property(duplicate, "DEDUPE_OF", keep.id())
     ws.set_property(duplicate, "CLOSED_REASON", "identical active task retained under DEDUPE_OF")
     return True
@@ -79,17 +105,16 @@ def main() -> int:
             continue
         print(f"\n{f.parts[-3]}")
         for _, nodes in sorted(dups.items()):
-            ranked = sorted(nodes, key=lambda n: (
-                -len(n.properties or {}), str(n.scheduled or ""), str(n.id() or "")), reverse=False)
-            # most properties first; among equals prefer the LATEST scheduled
-            ranked = sorted(nodes, key=lambda n: (
-                len(n.properties or {}), str(n.scheduled or "")), reverse=True)
+            ranked = rank_group(nodes)
             keep, drop = ranked[0], ranked[1:]
             kept += 1
             print(f"  KEEP  {keep.heading[:66]}  (props={len(keep.properties or {})}, sched={keep.scheduled or '-'})")
             for d in drop:
                 if fingerprint(keep) != fingerprint(d):
                     print("  retain: matching title has different task data")
+                    continue
+                if has_repeater(d):
+                    print("  retain: repeating task -- CANCELLED would only advance its date")
                     continue
                 removed += 1
                 print(f"  drop    id={d.id() or 'NO-ID'} props={len(d.properties or {})} sched={d.scheduled or '-'}")

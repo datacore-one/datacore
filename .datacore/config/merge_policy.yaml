@@ -1,4 +1,4 @@
-# Merge policy (public, no secrets) — Winston's merge gatekeeper.
+# Merge policy (public, no secrets) — the chief-of-staff agent's merge gatekeeper.
 #
 # Read by cos_merge_runs.py (chief-of-staff module,
 # server/lib/cos_merge_runs.py) every morning before briefing generation.

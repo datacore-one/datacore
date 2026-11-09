@@ -1,7 +1,8 @@
 const HOST_NAME = "com.datacore.tab_capture";
 
 const FILTERED_PREFIXES = [
-  "brave://", "chrome://", "about:", "chrome-extension://", "devtools://"
+  "brave://", "chrome://", "about:", "chrome-extension://", "devtools://",
+  "chrome-untrusted://", "view-source:"
 ];
 
 function isFiltered(url) {

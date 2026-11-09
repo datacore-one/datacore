@@ -13,8 +13,9 @@ Finding them is the hard part and it is easy to get wrong. A first search of
 working copies, origin/main and dangling objects concluded they were
 UNRECOVERABLE; they were on a park branch the whole time, which only
 `git rev-list --all` reveals. Acting on that wrong conclusion -- clearing the
-witness mark, or DATACORE_HWM_OVERRIDE=1 -- would have written new events over
-those sequence numbers and made a recoverable situation permanent. So `--find`
+witness mark, or appending past it (the override flag that allowed that was
+removed 2026-09-28) -- would have written new events over those sequence
+numbers and made a recoverable situation permanent. So `--find`
 searches every commit in every history, and nothing here writes without proof.
 
 The proof required before any write, both conditions, no exceptions:
@@ -30,6 +31,7 @@ The proof required before any write, both conditions, no exceptions:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -59,31 +61,108 @@ def tail_seq(text: str) -> int | None:
         return None
 
 
+def remote_tips(space: Path) -> dict[str, str]:
+    """{sha: 'remote:branch'} for every branch on every remote, fetched as objects.
+
+    A branch another machine pushed after this clone last fetched is on no
+    local ref at all, so `rev-list --all` cannot see it. Ask each remote what
+    it has and fetch those tips WITHOUT writing any ref (no refspec
+    destination, no FETCH_HEAD): the objects arrive, nothing local moves.
+    """
+    tips: dict[str, str] = {}
+    for remote in git(space, 'remote').split():
+        for line in git(space, 'ls-remote', '--heads', remote).splitlines():
+            sha, _, ref = line.partition('\t')
+            if not sha or not ref.startswith('refs/heads/'):
+                continue
+            tips.setdefault(sha, f'{remote}:{ref[len("refs/heads/"):]}')
+            if subprocess.run(['git', '-C', str(space), 'cat-file', '-e', f'{sha}^{{commit}}'],
+                              capture_output=True).returncode != 0:
+                git(space, 'fetch', '-q', '--no-write-fetch-head', remote, ref)
+    return {sha: name for sha, name in tips.items()
+            if subprocess.run(['git', '-C', str(space), 'cat-file', '-e', f'{sha}^{{commit}}'],
+                              capture_output=True).returncode == 0}
+
+
 def find(space: Path, actor: str, since: str) -> list[tuple[str, int]]:
-    """Every commit in EVERY history whose copy of this log runs further."""
+    """Every commit in EVERY history whose copy of this log runs further.
+
+    Every history means: every local ref (`--all`), every reflog entry
+    (`--reflog`: a commit reset away is on no branch any more), and every
+    branch on every remote, including ones this machine never fetched.
+    """
     rel = log_path(space, actor)
-    current = tail_seq((space / rel).read_text(encoding='utf-8'))
+    log = space / rel
+    # A missing log is length -1: any copy in history runs further.
+    current = tail_seq(log.read_text(encoding='utf-8')) if log.exists() else -1
+    tips = remote_tips(space)
     out = []
-    for commit in git(space, 'rev-list', '--all', f'--since={since}', '--', rel).split():
+    for commit in git(space, 'rev-list', '--all', '--reflog', *tips,
+                      f'--since={since}', '--', rel).split():
         seq = tail_seq(git(space, 'show', f'{commit}:{rel}'))
         if seq is not None and current is not None and seq > current:
             subject = git(space, 'log', '-1', '--format=%s', commit).strip()
             refs = git(space, 'branch', '-a', '--contains', commit).strip().replace('\n', ', ')
+            if not refs:
+                refs = ', '.join(name for sha, name in tips.items()
+                                 if subprocess.run(['git', '-C', str(space), 'merge-base',
+                                                    '--is-ancestor', commit, sha],
+                                                   capture_output=True).returncode == 0)
             out.append((commit, seq, subject, refs))
     return sorted(out, key=lambda r: -r[1])
 
 
 def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
+    """Check PREFIX and CHAIN, then (with `apply`) write -- all under the log's lock.
+
+    THE LOCK IS THE ONE `EventLog.append` TAKES: `fcntl.flock(LOCK_EX)` on the
+    log file itself. Without it, an append landing between reading `current`
+    and writing `recovered` was silently overwritten: the prefix test had
+    passed against the OLD bytes, the post-write chain check passes because
+    `recovered` is a valid chain on its own, and the lost event's seq is
+    reused by the recovered event at that position -- a silent fork, while
+    this machine's sequence witness still vouches for the lost one. Found by
+    the Lean model (DatacoreSpec/LedgerSeal.lean, restore_*) and replayed
+    2026-09-23. Under the lock the read, both proofs and the write see ONE
+    file state; an append that lands first makes the prefix test fail, and one
+    that comes later waits and chains onto the restored tail.
+    """
+    import fcntl
     from ledger.events import from_line
     from ledger.seal import _chain_issue
     rel = log_path(space, actor)
     path = space / rel
-    current = path.read_text(encoding='utf-8')
     recovered = git(space, 'show', f'{rev}:{rel}')
 
     if not recovered:
         print(f'REFUSED — {rev} has no {rel}')
         return 1
+    with open(path, 'r+b') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            return _restore_locked(f, space, actor, path, recovered, apply,
+                                   from_line, _chain_issue)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _new_problems(prefix, events):
+    """(problems the extension adds, problems the current log already has).
+
+    The current log is what every append since has chained onto; a fault in
+    it is not this restore's to judge, and refusing on it made a restore
+    impossible (6-meridian, 2026-10-23: two events signed by a key no machine
+    still holds). A fault the extension brings still refuses.
+    """
+    from ledger.verify import chain_problems
+    old = chain_problems(prefix)
+    return [p for p in chain_problems(events) if p not in old], old
+
+
+def _restore_locked(f, space, actor, path, recovered, apply, from_line, _chain_issue) -> int:
+    f.seek(0)
+    raw = f.read()
+    current = raw.decode('utf-8')
     if not recovered.startswith(current):
         print('REFUSED — the recovered log is NOT a prefix extension of the current one.\n'
               '          That is a forked chain, not a restore, and belongs to a human.')
@@ -92,10 +171,17 @@ def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
         print('nothing to restore; the logs are identical')
         return 0
     events = [from_line(line) for line in recovered.splitlines() if line.strip()]
-    issue = _chain_issue(events)
-    if issue:
-        print(f'REFUSED — the recovered chain does not verify: {issue}')
-        return 1
+    prefix = [from_line(line) for line in current.splitlines() if line.strip()]
+    if _chain_issue(events):
+        new, old = _new_problems(prefix, events)
+        if new:
+            print('REFUSED — the recovered chain does not verify:')
+            for text in new:
+                print(f'  {text}')
+            return 1
+        print('  already in the current log, not added by this restore (fix separately):')
+        for text in old:
+            print(f'    {text}')
 
     added = [e.seq for e in events[len(current.splitlines()):]]
     print(f'{space.name}/{actor}: {len(current.splitlines())} -> {len(events)} events')
@@ -105,11 +191,21 @@ def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
         return 0
 
     backup = path.with_name(path.name + '.pre-restore')
-    shutil.copy2(path, backup)
-    path.write_text(recovered, encoding='utf-8')
-    after = [from_line(l) for l in path.read_text(encoding='utf-8').splitlines() if l.strip()]
-    if _chain_issue(after):
-        shutil.copy2(backup, path)
+    backup.write_bytes(raw)
+    shutil.copystat(path, backup)
+
+    def _put(data: bytes) -> None:
+        f.seek(0)
+        f.truncate()
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+
+    _put(recovered.encode('utf-8'))
+    f.seek(0)
+    after = [from_line(l) for l in f.read().decode('utf-8').splitlines() if l.strip()]
+    if _chain_issue(after) and _new_problems(prefix, after)[0]:
+        _put(raw)
         print('  post-write chain broken — ORIGINAL RESTORED, nothing changed')
         return 1
     print(f'  restored; chain verifies; previous log kept at {backup.name}')
@@ -121,7 +217,7 @@ def restore(space: Path, actor: str, rev: str, apply: bool) -> int:
     # commits left `bridge-v2-verify` REGRESSED on winston, unnoticed, until a
     # contract sweep found it a day later.
     print(f'  NEXT: commit this, then record the commit in '
-          f'.datacore/config/authorship-reviewed.yaml as writer {actor!r} in '
+          f'.datacore/config/authorship-reviewed.local.yaml as writer {actor!r} in '
           f'{space.name} -- the DIP-0044 authorship check fails until you do.')
     return 0
 
@@ -145,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         for commit, seq, subject, refs in rows:
             print(f'{commit[:9]}  tail seq {seq}  {subject[:50]}')
-            print(f'           refs: {refs or "(unreferenced)"}')
+            print(f'           refs: {refs or "(unreferenced: reflog only)"}')
         return 0
     if not a.rev:
         ap.error('--from is required unless --find')

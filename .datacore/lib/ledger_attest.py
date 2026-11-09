@@ -169,12 +169,11 @@ def _actor() -> str:
 def _roots() -> list[Path]:
     """Where spaces might live on THIS machine.
 
-    Not every box keeps them under ~/Data. plur-claw holds its spaces in
-    ~/spaces and uses ~/Data for the OpenClaw workspace, so a DATACORE_ROOT-only
-    lookup found no ledger and attest silently returned None — meaning Data,
-    the agent most likely to publish, was the one machine whose posts would not
-    have been recorded. Found by being asked "will the system know?" rather than
-    by any check, which is why the possible shapes are enumerated here.
+    Spaces live under ~/Data only (owner rule, 2026-09-23). plur-claw once
+    kept a second clone at ~/spaces/5-plur alongside ~/Data/2-plur-space; the
+    two copies forked one writer log on 2026-09-06, and the leftover clone was
+    retired on 2026-09-23. Discovery must never select such a copy again, so
+    ~/spaces is not a candidate even if the directory reappears.
     """
     home = Path.home()
     env = os.environ.get("DATACORE_ROOT")
@@ -186,7 +185,7 @@ def _roots() -> list[Path]:
         # caught immediately.
         cands = [Path(env)]
     else:
-        cands = [home / "Data", home / "spaces"]
+        cands = [home / "Data"]
     # Dedup on the RESOLVED path: ~/Data is a symlink into the OpenClaw
     # workspace on plur-claw, so two entries can name one directory while
     # comparing unequal. Comparing the literal paths deduped nothing that could
@@ -255,8 +254,11 @@ def _space(space: str | None) -> Path | None:
     # root's glob fallback outrank another root's exact match: on plur-claw
     # `~/Data/1-datacore-space` won over `~/spaces/5-plur`, so attestations
     # would have landed in a space nobody was looking at.
+    # The preferred spaces are this install's own (install.yaml roles.attest).
     roots = _roots()
-    for name in ("1-datafund", "5-plur", "0-personal"):
+    from spaces import space_for_all
+    names = list(dict.fromkeys(n for r in roots for n in space_for_all("attest", r)))
+    for name in names:
         for r in roots:
             cand = r / name
             if (cand / ".datacore" / "events").is_dir():
@@ -266,6 +268,32 @@ def _space(space: str | None) -> Path | None:
             if (cand / ".datacore" / "events").is_dir():
                 return cand
     return None
+
+
+def _space_members(space: Path) -> list[str]:
+    """The space's declared writers, read by the pre-push ownership guard's own
+    parser (one definition of membership); [] when it cannot be read."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "hooks" / "log_ownership_guard.py"
+    spec = importlib.util.spec_from_file_location("log_ownership_guard", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.members(space)
+
+
+def _is_member(actor: str, declared: list[str]) -> bool:
+    """The actor, or the principal declaring it under `writes_as`, is a member.
+
+    The overnight executor writes as `nightshift`, a writer the principal
+    `miles` declares; members.yaml lists `miles`. Comparing the raw name dropped
+    every attest the run made (2026-10-09: two git.rescue records)."""
+    if actor in declared:
+        return True
+    try:
+        from actor_identity import principal_of
+    except ImportError:
+        return False
+    return principal_of(actor)[0] in declared
 
 
 def attest(kind: str, *, ref: str = "", detail: str = "",
@@ -279,6 +307,14 @@ def attest(kind: str, *, ref: str = "", detail: str = "",
     try:
         target = _space(space)
         if target is None:
+            return None
+        # Only a declared member of the space may write in it (LED-3). The
+        # agent-eval harness read a credential as the test actor "fixture" and
+        # this wrote 12 events under that name into a real space (2026-09-27);
+        # only the pre-push ownership guard stopped them. A space that declares
+        # its members is the authority; one that declares none is not judged here.
+        declared = _space_members(Path(target))
+        if declared and not _is_member(_actor(), declared):
             return None
         _ensure_ledger_importable()
         from ledger.log import EventLog

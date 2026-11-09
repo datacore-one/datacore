@@ -60,6 +60,12 @@ DATACORE_NEW_FILE_ALLOW = [
     ".datacore/specs/**",
     ".datacore/templates/**",
     ".datacore/registry/**",
+    # Machine-readable contracts — JSON Schema for sprint.yaml and friends.
+    # Same class as specs/ (which holds the prose) and registry/ (which holds
+    # the data): declarative, public-safe, no credentials or user content.
+    # Added 2026-09-22, when promoting sprint.schema.json out of the single
+    # project it was trapped in so a second venture could validate against it.
+    ".datacore/schemas/**",
     ".datacore/docs/**",
     ".datacore/datacore-docs/**",
     ".datacore/workflows/**",
@@ -70,8 +76,17 @@ DATACORE_NEW_FILE_ALLOW = [
     # could not live in lib/. Added 2026-09-03 after the audit branch was
     # refused on this one file for two days.
     ".datacore/bin/**",
+    # Harness adapters: code that wires Datacore into another agent harness
+    # (adapters/cursor/: installer, hook bridge, live check). Same class as
+    # lib/ -- scripts only; every value they write (paths, keys) goes to the
+    # harness's own gitignored config, never into the repo. Added 2026-09-24
+    # with the Cursor adapter, which was refused here and parked in lib/.
+    ".datacore/adapters/**",
     ".datacore/config/**",
     ".datacore/tests/**",
+    # Evals, kept apart from the code they judge (ledger upgrade step E3;
+    # owner approved 2026-10-04). Same content class as tests/.
+    ".datacore/evals/**",
     ".datacore/skills/**",
     ".datacore/cos/*.example",
     # Retired agent/command definitions. Same content class as
@@ -127,6 +142,25 @@ def glob_match(path, pat):
         if fnmatch.fnmatch(path, base):
             return True
     return False
+
+
+def allowlist_summary(allow_globs):
+    """The allowed .datacore/ categories, as a refused author should read them.
+
+    Generated from the list being enforced, so the message cannot drift from
+    the rule: the hand-kept version had lost schemas/, datacore-docs/ and
+    4-archive/ by the time adapters/ was added.
+    """
+    parts = []
+    for glob in allow_globs:
+        rel = glob[len(".datacore/"):] if glob.startswith(".datacore/") else glob
+        if rel.endswith("/**"):
+            rel = rel[:-2]
+        elif rel == "*":
+            rel = "*(top-level files)"
+        if rel not in parts:
+            parts.append(rel)
+    return " ".join(parts)
 
 
 def match_any(path, patterns):
@@ -201,6 +235,16 @@ def main():
         return 2
     except OSError as e:
         eprint(f"pre-push-scan: FATAL: cannot read denylist {args.denylist}: {e}")
+        return 2
+    except Exception as e:  # noqa: BLE001 — yaml.YAMLError and friends
+        # A malformed policy is a scanner error (2), not a violation (1). It
+        # used to escape as a traceback, exit 1, and be reported by the hook
+        # as "policy violations … see ✗ lines above" with no ✗ lines.
+        eprint(f"pre-push-scan: FATAL: denylist {args.denylist} is not valid YAML "
+               f"({type(e).__name__}) — failing CLOSED")
+        return 2
+    if not isinstance(policy, dict):
+        eprint(f"pre-push-scan: FATAL: denylist {args.denylist} is not a mapping — failing CLOSED")
         return 2
 
     commits = [":index"] if args.index else [c.strip() for c in sys.stdin.read().split() if c.strip()]
@@ -289,9 +333,7 @@ def main():
         if not any(single_level_match(rel, a) for a in allow_globs):
             blocks.append(
                 f"new file: {p}  (not in .datacore new-file allowlist — "
-                "allowed: agents/ commands/ lib/ bin/ dips/ specs/ templates/ "
-                "registry/ docs/ workflows/ hooks/ githooks/ config/ tests/ "
-                "skills/ cos/*.example modules/*/{agents,commands,lib,...})")
+                f"allowed: {allowlist_summary(allow_globs)})")
 
     # --- 3. Content scan of complete changed blobs -----------------------------------
     seen = set()
@@ -325,6 +367,11 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, ValueError) as exc:
-        eprint(f"pre-push-scan: FATAL: validation could not complete: {exc}")
+    except Exception as exc:  # noqa: BLE001 — every internal failure is exit 2
+        # The docstring's contract is 0 clean / 1 violation / 2 scanner error.
+        # Only (OSError, ValueError) used to map to 2; anything else (a
+        # malformed policy value, a TypeError in a glob) exited 1 and read as
+        # a violation. Both block the push; only 2 says why.
+        eprint(f"pre-push-scan: FATAL: validation could not complete: "
+               f"{type(exc).__name__}: {exc}")
         sys.exit(2)

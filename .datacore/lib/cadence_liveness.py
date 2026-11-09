@@ -32,9 +32,10 @@ Artifact:
 from __future__ import annotations
 
 import argparse
+import re
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 LIB = Path(__file__).resolve().parent
@@ -87,23 +88,269 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
     return past, undated
 
 
-def collect(root: Path, grace: int, today: date | None = None) -> list:
-    """Overdue cadences across every space, via the engine that owns this."""
+#: Principals whose cadences already have an executor in this fleet: those
+#: whose principals.yaml entry declares `executors:` (here, the agent the
+#: venture heartbeat runs as). Read from the install's own registry, so no
+#: agent of ours is named in this file (INS-3). Every other owner's cadences are
+#: `pending-rollout` until its host registers them (DIP-0050 P2b). Judging them
+#: `late` before anything could run them is the "red by construction" this
+#: file refused on 2026-09-05 -- now they are listed, not hidden.
+#:
+#: This decides only what a MISSING registration means (red for an executing
+#: principal, grey otherwise). Every principal is judged from the same signed
+#: records; none from cadence-log.yaml (CAD-3, CAD-4).
+def _executing() -> set[str]:
+    if str(LIB) not in sys.path:
+        sys.path.insert(0, str(LIB))
+    import roster
+    return {name for name, p in roster.entries().items() if p.get("executors")}
+
+
+EXECUTING = _executing()
+
+
+def _members(space: Path) -> set[str] | None:
+    """Actors that may write to this space (DIP-0046 §11), or None if undeclared."""
     import yaml
-    from cadence_engine import (FREQUENCY_WINDOWS, cadence_log_path_for, cadence_observation,
-                            find_overdue_cadences, own_cadences, load_cadence_log_safe)
+    try:
+        doc = yaml.safe_load((space / ".datacore" / "members.yaml").read_text()) or {}
+    except (OSError, ValueError):
+        return None
+    from cadence_engine import OWNER_ALIASES
+    return {OWNER_ALIASES.get(str(m).lower(), str(m).lower()) for m in doc.get("members") or []}
+
+
+def _sig_ok(e) -> bool:
+    """A real signature by the actor's registered key -- not merely a non-empty field.
+
+    On 2026-09-25 an agent hand-wrote two cadence.run "ok" records in 6-meridian
+    with `sig` set to a copy of the event's own hash. Presence was all this judge
+    checked; only the missing artifact sha kept them from counting.
+    """
+    from ledger.events import body_dict, canonical_bytes
+    from ledger.keys import verify as verify_sig
+    try:
+        body = body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "",
+                         domain=getattr(e, "domain", "") or "")
+        return bool(e.sig) and verify_sig(e.actor, canonical_bytes(body), e.sig)
+    except Exception:  # noqa: BLE001 -- an unverifiable record is not a signed one
+        return False
+
+
+def _attests(space: Path, actor: str, metric: str) -> list[tuple[datetime, dict]]:
+    """(time, payload) of an actor's signed metric.attest events of one metric, oldest first."""
+    from ledger.events import from_line
+    p = space / ".datacore" / "events" / f"{actor}.jsonl"
+    out = []
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            e = from_line(line.strip())
+        except Exception:  # noqa: BLE001 -- a torn line is not a record
+            continue
+        if e.type == "metric.attest" and (e.payload or {}).get("metric") == metric and _sig_ok(e):
+            out.append((datetime.fromtimestamp(float(str(e.hlc).split(".")[0]) / 1000, timezone.utc), e.payload))
+    return out
+
+
+def space_named(root: Path, name: str) -> Path | None:
+    """The folder of a space named without its host-specific number ('personal' ->
+    0-personal), or None unless exactly one folder answers to the name."""
+    import re
+    hits = [p for p in Path(root).iterdir() if p.is_dir() and not p.is_symlink()
+            and (p.name == name or re.sub(r"^\d+-", "", p.name) == name)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _artifact_in_git(space: Path, rel: str, sha: str) -> bool:
+    """The artifact a run recorded exists in git with exactly that content."""
+    import hashlib
+    import subprocess
+    f = space / rel
+    if f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == sha:
+        tracked = subprocess.run(["git", "-C", str(space), "ls-files", "--error-unmatch", rel],
+                                 capture_output=True).returncode == 0
+        dirty = subprocess.run(["git", "-C", str(space), "diff", "--quiet", "HEAD", "--", rel],
+                               capture_output=True).returncode != 0
+        if tracked and not dirty:
+            return True
+    commits = subprocess.run(["git", "-C", str(space), "log", "-n", "30", "--format=%H", "--", rel],
+                             capture_output=True, text=True).stdout.split()
+    for c in commits:
+        blob = subprocess.run(["git", "-C", str(space), "show", f"{c}:{rel}"], capture_output=True).stdout
+        if hashlib.sha256(blob).hexdigest() == sha:
+            return True
+    return False
+
+
+_RESET = re.compile(r"resets\s+(?:([A-Z][a-z]{2})\s+(\d{1,2}),?\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(UTC\)", re.I)
+
+
+def _quota_reset(payload: dict, at: datetime) -> datetime | None:
+    """When a recorded usage limit resets, from its own words ("resets Oct 28, 2pm (UTC)"
+    or "resets 2pm (UTC)"), in UTC; None when the record does not say."""
+    m = _RESET.search(str(payload.get("reason") or ""))
+    if not m:
+        return None
+    mon, day, hh, mm, ap = m.groups()
+    hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
+    if mon:
+        try:
+            d = datetime.strptime(f"{mon} {int(day)} {at.year}", "%b %d %Y").replace(
+                hour=hour, minute=int(mm or 0), tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return d.replace(year=at.year + 1) if d < at - timedelta(days=180) else d
+    d = at.replace(hour=hour, minute=int(mm or 0), second=0, microsecond=0)
+    return d if d > at else d + timedelta(days=1)
+
+
+def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str, name: str,
+                    today: date, *, executing: bool = False) -> tuple | None:
+    """A cadence its owner's own scheduler runs (DIP-0050 P2): None while unregistered.
+
+    ("red", days, why) | ("amber", 0, why) | ("green", 0, why). Judged only from the
+    owner's SIGNED records: a registration naming the slug, and run records whose
+    artifact is in git at the recorded sha256. The agent's word counts for nothing.
+
+    `executing`: the owner's scheduler already runs in this fleet (EXECUTING), so
+    a missing registration is not "pending rollout" -- it is a duty nobody runs,
+    judged red until a signed run with its artifact says otherwise.
+    """
+    from cadence_engine import FREQUENCY_WINDOWS
+    from cadence_schedule import slug as _slug
+    regs = _attests(space, owner, "cadence.registration")
+    if not regs and not executing:
+        return None
+    sl = _slug(venture, role, name)
+    window = FREQUENCY_WINDOWS.get(freq, timedelta(days=1))
+    if regs:
+        registered_at, latest = regs[-1]
+        if sl not in (latest.get("slugs") or {}):
+            first = next((t for t, p in regs if p.get("slugs")), registered_at)
+            if (datetime.now(timezone.utc) - first) < timedelta(hours=2):
+                return ("amber", 0, f"not-registered yet: {owner} (within 2h)")
+            return ("red", -1, f"not-registered: {owner}'s scheduler does not hold {sl}")
+        since_reg = next((t for t, p in regs if sl in (p.get("slugs") or {})), registered_at)
+    else:
+        since_reg = None
+    limit = window + window / 4
+    now = datetime.now(timezone.utc)
+    ends = [(t, p) for t, p in _attests(space, owner, "cadence.run")
+            if p.get("slug") == sl and p.get("phase") == "end"]
+    def where(p):  # a duty whose output lives in another space names it (Winston's briefing)
+        return space_named(space.parent, p["artifact_space"]) if p.get("artifact_space") else space
+    good = [t for t, p in ends if p.get("result") == "ok" and p.get("artifact") and where(p)
+            and _artifact_in_git(where(p), p["artifact"], p.get("sha256", ""))]
+    last_ok = max(good) if good else None
+    anchor = last_ok or since_reg
+    if anchor is None:
+        return ("red", window.days, f"late: {owner} (never ran; no signed run with its artifact)")
+    if now - anchor <= limit:
+        return ("green", 0, f"ok: {owner}")
+    last = ends[-1][1] if ends else {}
+    days = (now - anchor - window).days
+    # WAITING ON QUOTA DECAYS (CAD-7). Amber only while the stop is fresh AND the
+    # streak of stops is younger than one window past the limit: a usage limit
+    # hit every morning for ten days, with no real run, is a duty not done.
+    streak = None
+    for t, p in reversed(ends):
+        if p.get("result") not in ("blocked", "quota"):
+            break
+        streak = t
+    # A usage limit that names its reset (owner, 2026-10-28: a usage limit is
+    # "waiting on quota", not a failure). Before the reset it waits; after it, the
+    # duty has one window to really run -- only then is it red, and it says the
+    # limit reset rather than "nothing runs until it resets" (2026-10-29 briefing).
+    reset = _quota_reset(last, ends[-1][0]) if last.get("result") == "quota" and ends else None
+    if reset is not None:
+        if now < reset:
+            return ("amber", 0, f"waiting on quota until {reset:%Y-%m-%d %H:%MZ} (usage limit, not a failure)")
+        if now - reset <= limit:
+            return ("amber", 0, f"usage limit reset at {reset:%Y-%m-%d %H:%MZ}; waiting for its next run")
+        return ("red", days, f"late: no real run since the usage limit reset at {reset:%Y-%m-%d %H:%MZ}: {owner}")
+    if (last.get("result") in ("blocked", "quota") and ends and (now - ends[-1][0]) <= limit
+            and streak is not None and (now - streak) <= limit + window):
+        return ("amber", 0, f"{last['result']}: {last.get('reason', '')[:80]}")
+    if last.get("result") in ("blocked", "quota") and streak is not None and (now - ends[-1][0]) > limit:
+        # The last stop is old and nothing was recorded since: the runs since failed
+        # before any record (a ledger refusal stops them at the first write), so
+        # "waiting on quota" would claim a usage limit nobody saw (W2, 2026-10-23).
+        return ("red", days, f"late: no run recorded since {ends[-1][0].date().isoformat()} "
+                             f"(the last recorded run: {last['result']}): {owner}")
+    if last.get("result") in ("blocked", "quota") and streak is not None:
+        return ("red", days, f"late: waiting on {last['result']} for {(now - streak).days} day(s), "
+                             f"no real run: {owner}")
+    if last.get("result") == "tripped":
+        return ("red", days, f"tripped: {owner}")
+    return ("red", days, f"late: {owner} ({'never ran' if not ends else 'last ' + str(last.get('result'))})")
+
+
+#: A pause older than this is repeated as a reminder in every daily report.
+PAUSE_REMIND_DAYS = 7
+
+
+def _pause_note(root: Path, owner: str, sl: str, st) -> str:
+    """'paused since <date> (would be: <state>)', and a reminder past a week."""
+    would = "pending-rollout" if st is None else f"{st[0]}: {st[2]}"
+    try:
+        from cadence_schedule import pause_span
+        span = pause_span(root, owner, sl)
+    except Exception:  # noqa: BLE001 -- an undatable pause is still a pause
+        span = None
+    if not span:
+        return f"paused (date unknown) (would be: {would})"
+    days = (datetime.now(timezone.utc) - span[0]).days
+    note = f"paused since {span[0].date().isoformat()} (would be: {would})"
+    if days > PAUSE_REMIND_DAYS:
+        note += f"; reminder: paused {days} days -- resume it or drop it"
+    return note
+
+
+def collect(root: Path, grace: int, today: date | None = None) -> list:
+    """Red rows only: what the contract counts (see collect_states)."""
+    return collect_states(root, grace, today)[0]
+
+
+def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[list, list]:
+    """(red rows, grey rows) for every assigned cadence (DIP-0050 P1).
+
+    Rows are (days, venture, role, frequency, cadence); an error row has days -1.
+    Red: late (past due beyond grace), not-held (the owner is not a member of
+    the space), and any venture whose ownership or history cannot be read.
+    Grey, listed but never counted: reminder (a human owns it) and
+    pending-rollout (an owner with no executor in this fleet yet).
+    Keyed by `venture.yaml: name`, never by a machine's folder number.
+    """
+    import yaml
+    from cadence_engine import HUMAN_OWNER, all_assignments
+    from cadence_schedule import CONTINUOUS
 
     today = today or date.today()
-    rows = []
+    rows, grey = [], []
+    try:
+        from cadence_schedule import control as _control
+        paused = {str(x) for x in (_control(root).get("paused") or [])}
+    except Exception:  # noqa: BLE001 -- no control file: nothing is paused here to report
+        paused = set()
     for space in sorted(root.glob("[0-9]-*")):
         vy = space / "venture.yaml"
         if not vy.is_file():
             vy = space / ".datacore" / "venture.yaml"
         if not vy.is_file():
             continue
+        # AN UNREADABLE VENTURE IS NOT AN ON-TIME ONE. Skipping it silently
+        # made one bad YAML line turn a venture with overdue cadences into
+        # "0 cadence(s) overdue" -- a green contract that checked nothing
+        # (DatacoreSpec/NightshiftGates.lean, Cadence). It counts as a row,
+        # like the engine error below; the type name only, never the content.
         try:
             data = yaml.safe_load(vy.read_text()) or {}
-        except Exception:                       # noqa: BLE001
+            if not isinstance(data, dict):
+                raise ValueError("not a mapping")
+        except Exception as exc:                # noqa: BLE001
+            rows.append((-1, space.name, "?", "?", f"venture.yaml unreadable: {type(exc).__name__}"))
             continue
         # An archived venture is OFF (2026-09-04: forge, megaphone, fds,
         # datafund parked until PLUR runs well). Its cadence catalogue is not
@@ -114,43 +361,70 @@ def collect(root: Path, grace: int, today: date | None = None) -> list:
         roles = data.get("roles") or {}
         if not roles:
             continue
-        # cadence_log_path_for FIRST. load_cadence_log_safe quarantines by
-        # renaming the path it is handed, so passing the space directory
-        # renames the space — which is exactly what happened on the first run
-        # of this file and sent eight spaces to `<space>.broken-*.bak`.
+        venture = str(data.get("name") or space.name)
         try:
-            log = load_cadence_log_safe(cadence_log_path_for(space))
-        except Exception:                       # noqa: BLE001
+            owners = all_assignments(roles, data.get("defaults"))
+        except Exception as exc:                # noqa: BLE001 -- OwnershipError, malformed roles
+            rows.append((-1, venture, "?", "?", f"ownership: {exc}"))
             continue
-        try:
-            # A cadence owned by an external agent (5-plur's cio is Tris on
-            # hermes) runs where that agent runs and records nothing in this
-            # fleet's shards, so this check can only ever call it overdue. The
-            # heartbeat already excludes those roles from its own work
-            # (own_cadences); the liveness must apply the same rule, or the
-            # box's contract is red by construction (2026-09-05: three of the
-            # last three "overdue" were Tris's).
-            for c in own_cadences(find_overdue_cadences(roles, log, today=today), roles):
-                # PAST DUE, which is what DEFAULT_GRACE is documented to measure.
-                # The engine's days_overdue is days since the LAST RUN -- right
-                # for ordering today's work, wrong against a grace: a weekly
-                # cadence reads 7 on the very day it falls due, so this alerted
-                # before the cadence had any chance to run. On 2026-09-17 two
-                # weekly cadences last run 09-10 were reported "7d overdue" at
-                # 07:40Z on their due date, having read 0 the day before.
-                # A cadence that has NEVER run keeps the old measure: the
-                # engine reports it at exactly one window, and never having
-                # run is the broken case this check exists to catch.
-                window = FREQUENCY_WINDOWS.get(c.frequency)
-                ran = cadence_observation(roles, log, c.role, c.frequency, c.cadence_name) is not None
-                past_due = (c.days_overdue - window.days) if (ran and window) else c.days_overdue
-                if past_due > grace:
-                    rows.append((past_due, space.name, c.role,
-                                 c.frequency, c.cadence_name))
-        except Exception as exc:                # noqa: BLE001
-            rows.append((-1, space.name, "?", "?", f"engine error: {exc}"))
+        members = _members(space)
+        for (role, freq, name), owner in sorted(owners.items()):
+            if owner == HUMAN_OWNER:
+                grey.append((0, venture, role, freq, f"{name} [reminder: {owner}]"))
+            elif freq in CONTINUOUS:
+                # A BOT LOOP, NOT A DUTY. The scheduler plans every_4h/every_15min
+                # for nobody (cadence_schedule.CONTINUOUS, CAD-1) and cadence_engine
+                # skips them, so "not registered" was red by construction
+                # (2026-09-28, three meridian loops). Listed, never counted.
+                grey.append((0, venture, role, freq, f"{name} [continuous: {owner}'s own loop, not a scheduled duty]"))
+            elif members is not None and owner not in members:
+                rows.append((-1, venture, role, freq, f"{name} [not-held: {owner} is not a member of this space]"))
+            else:
+                # EVERY PRINCIPAL IS JUDGED FROM SIGNED RECORDS (CAD-3, CAD-4).
+                # Miles's duties used to be read from cadence-log.yaml, a file the
+                # agent writes: one typed line turned a never-run duty green. The
+                # log stays output only; what counts is his signed cadence.run end
+                # whose artifact is in git -- the same test as everyone's.
+                st = scheduled_state(space, venture, owner, role, freq, name, today,
+                                     executing=owner in EXECUTING)
+                from cadence_schedule import slug as _slug
+                sl = _slug(venture, role, name)
+                if paused & {"all", owner, sl}:
+                    # PAUSE KEEPS A SHADOW (DIP-0050, CAD-10): listed grey with
+                    # what it would have been, never counted, and never silent.
+                    grey.append((0, venture, role, freq, f"{name} [{_pause_note(root, owner, sl, st)}]"))
+                    continue
+                if st is None:
+                    grey.append((0, venture, role, freq, f"{name} [pending-rollout: {owner}]"))
+                elif st[0] == "red":
+                    rows.append((st[1], venture, role, freq, f"{name} [{st[2]}]"))
+                elif st[0] == "amber":
+                    grey.append((0, venture, role, freq, f"{name} [{st[2]}]"))
     rows.sort(reverse=True)
-    return rows
+    return rows, grey
+
+
+def duty_owner(root: Path, venture: str, role: str, freq: str, name: str) -> str | None:
+    """Who owns one duty, named as collect_states names it (a trailing "[state]" is ignored).
+
+    The morning repair hands a red duty to ITS agent (CAD-6); addressing every red
+    duty to miles sent Tris's geo-research to the wrong agent.
+    """
+    import yaml
+    from cadence_engine import all_assignments
+    name = str(name).split(" [", 1)[0]
+    for space in sorted(Path(root).glob("[0-9]-*")):
+        for vy in (space / "venture.yaml", space / ".datacore" / "venture.yaml"):
+            if not vy.is_file():
+                continue
+            try:
+                data = yaml.safe_load(vy.read_text()) or {}
+                if str(data.get("name") or space.name) != venture:
+                    break
+                return all_assignments(data.get("roles") or {}, data.get("defaults")).get((role, freq, name))
+            except Exception:  # noqa: BLE001 -- an unreadable venture names no owner
+                return None
+    return None
 
 
 def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:
@@ -182,9 +456,14 @@ def _unrunnable(root: Path, spaces: set[str]) -> dict[str, str]:
         from venture_loader import VentureConfig
     except Exception:  # noqa: BLE001 -- no loader here means no diagnosis, not a crash
         return out
-    for name in spaces:
-        cfg = root / name / "venture.yaml"
-        if not cfg.exists():
+    # `spaces` holds venture names (rows are keyed by name); find each file by
+    # the name it declares, not by a machine's folder number.
+    for cfg in sorted(root.glob("[0-9]*-*/venture.yaml")):
+        try:
+            name = str((yaml.safe_load(cfg.read_text()) or {}).get("name") or cfg.parent.name)
+        except Exception:  # noqa: BLE001 -- the unreadable case is already its own row
+            name = cfg.parent.name
+        if name not in spaces:
             continue
         try:
             VentureConfig.model_validate(yaml.safe_load(cfg.read_text()) or {})
@@ -207,12 +486,16 @@ def main() -> int:
 
     root = Path(a.root).expanduser()
     today = date.today()
-    rows = collect(root, a.grace_days)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
+    rows, grey = collect_states(root, a.grace_days)
+    OUT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lines = [f"=== {today.isoformat()} cadence liveness "
              f"(grace {a.grace_days}d) ==="]
-    for days, space, role, freq, name in rows:
-        lines.append(f"  {days:5}d  {space:<12} {role}.{freq}.{name}")
+    for days, venture, role, freq, name in rows:
+        lines.append(f"  {days:5}d  {venture:<12} {role}.{freq}.{name}")
+    # GREY: assigned, visible, not counted (DIP-0050 P1). A cadence nobody runs
+    # yet is listed with its owner instead of vanishing, as Tris's did.
+    for _d, venture, role, freq, name in grey:
+        lines.append(f"  grey   {venture:<12} {role}.{freq}.{name}")
     # WHY, PER SPACE, ONCE. Eight cadences in one space going overdue on the
     # same day is one cause, not eight, and the count alone never said which.
     # 6-meridian's eight sat overdue from 2026-09-15 and alerted daily: the

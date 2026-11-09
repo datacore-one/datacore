@@ -29,7 +29,7 @@ Mic Input -> Wake Word Detection -> STT (Whisper) -> Datacore Action -> TTS Resp
 | `wake_word` | `hey_datacore` | Activation phrase |
 | `stt_model` | `medium` | Whisper model size |
 | `tts_voice` | `en_US-lessac-medium` | Piper TTS voice |
-| `brain` | `local` | `local` (Mac) or network (Blackpi IP) |
+| `brain` | `local` | `local` (this machine) or network (a self-hosted server on your network) |
 
 ## Agents & Commands
 

@@ -568,7 +568,7 @@ class TestLogOwnershipGuardAuthorship:
                                   text=True, **kw)
 
         g("init", "-q", "-b", "main")
-        g("config", "user.email", "gregor+miles@datafund.io")
+        g("config", "user.email", "alice+agent@example.com")
         g("config", "user.name", "Miles")
         (tmp_path / ".datacore" / "events").mkdir(parents=True, exist_ok=True)
         (tmp_path / ".datacore" / "events" / "miles.jsonl").write_text('{"a":1}\n')
@@ -588,13 +588,17 @@ class TestLogOwnershipGuardAuthorship:
                               capture_output=True, text=True, env=env)
 
     def test_foreign_authored_commit_in_range_is_allowed(self, tmp_path):
-        """Winston's own commit, merged in, must not be blamed on Miles."""
+        """Winston's own commit, fetched and merged in, must not be blamed on Miles.
+
+        Decision S3 (2026-09-23): what excludes it is that a remote already has
+        it (a fetch recorded it on a remote-tracking ref), not its author email."""
         g = self._repo(tmp_path)
         g("checkout", "-q", "-b", "wside", "base-ref")
         (tmp_path / ".datacore" / "events" / "winston.jsonl").write_text('{"w":1}\n')
         g("add", "-A")
-        g("-c", "user.email=gregor+winston@datafund.io",
+        g("-c", "user.email=alice+cos@example.com",
           "-c", "user.name=Winston (CoS)", "commit", "-q", "-m", "cos: local autosave")
+        g("update-ref", "refs/remotes/origin/wside", "wside")   # what the fetch records
         g("checkout", "-q", "main")
         g("merge", "-q", "--no-edit", "wside", "-m", "Merge")
 

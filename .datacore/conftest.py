@@ -1,5 +1,17 @@
 """All bundled test suites use disposable state, including module tests."""
+import sys
+from pathlib import Path
+
 import pytest
+
+# lib/tests/conftest.py added lib to sys.path for lib-only tests (2026-09-11).
+# tests/ and modules/*/tests/ collect here too but had no conftest adding lib,
+# so `from yaml_safety import ...` (added 2026-09-15, commit 04496c32) fell
+# through to `yaml = None` inside spaces.py -- causing 197 test failures on
+# every PR opened after that date.  Add it once, here, for everything.
+_LIB = Path(__file__).resolve().parent / "lib"
+if str(_LIB) not in sys.path:
+    sys.path.insert(0, str(_LIB))
 
 
 @pytest.fixture(autouse=True)
@@ -12,6 +24,20 @@ def _isolated_datacore_state(tmp_path_factory, monkeypatch):
     in a Git repository" for reasons that had nothing to do with the test.
     """
     monkeypatch.setenv("DATACORE_STATE", str(tmp_path_factory.mktemp("dc-state")))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_alerts(tmp_path_factory, monkeypatch):
+    """No test run sends a real alert. The host's alert command (~/.datacore/alerts.yaml)
+    is the first route for job_verify and the promise board; on 2026-09-30 a board test
+    posted to The Firm through it, twice. A test that needs a command sets
+    DATACORE_ALERT_COMMAND itself."""
+    monkeypatch.setenv("DATACORE_ALERTS_FILE", str(tmp_path_factory.mktemp("no-alerts") / "alerts.yaml"))
+    monkeypatch.delenv("DATACORE_ALERT_COMMAND", raising=False)
+    # Nor a fake lost one: the wrong-weekday eval's refused message landed in the
+    # box's real undelivered list each night, and the morning sweep reported it to
+    # the owner as an alert that reached nobody (2026-10-10 to 10-12).
+    monkeypatch.setenv("DATACORE_UNDELIVERED_LOG", str(tmp_path_factory.mktemp("no-alerts") / "undelivered-alerts.jsonl"))
 
 
 @pytest.fixture(autouse=True)
@@ -40,12 +66,11 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
     `ledger.keys` resolves its key directory, its local registry and
     principals.yaml from DATACORE_ROOT at import -- the REAL ~/Data. So a test
     that signed with the default registry wrote its keys into the host's real
-    `.datacore/keys/`: nightshift's registry carries `actor1`, `fixture`,
+    `.datacore/keys/`: one host's registry carried `actor1`, `fixture`,
     `hosta`, `hostb`, `testactor`, `worker`, `writer` beside its genuine
     writers. And every signature check read the host's real principals.yaml,
-    which is why a test signing as `miles` began failing the moment proven keys
-    were given precedence (2026-09-17): the real `miles` key outranked the
-    test's. A test that needs principals sets DATACORE_ROOT on the module
+    which is why a test signing as a real agent name began failing the moment
+    proven keys were given precedence: the real key outranked the test's. A test that needs principals sets DATACORE_ROOT on the module
     itself, as the ones that exercise distribution already do.
     """
     try:
@@ -53,6 +78,17 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
     except Exception:  # noqa: BLE001 -- suites that never import the ledger are unaffected
         return
     root = tmp_path_factory.mktemp("dc-keys-root")
+    # Processes a test starts (ledger_cli.py and the like) read this; the patches
+    # below reach only this process.
+    monkeypatch.setenv("DATACORE_KEYS_DIR", str(root / ".datacore" / "keys"))
+    # A host declares its actor and its signing in identity.env (dayshift signs).
+    # Tests and the processes they start would inherit both and sign where they
+    # expect the default; they get an empty identity instead. A test that needs
+    # an actor or signing sets it itself.
+    ident = root / "identity.env"
+    ident.write_text("")
+    monkeypatch.setenv("DATACORE_IDENTITY_FILE", str(ident))
+    monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
     monkeypatch.setattr(keys, "DATACORE_ROOT", root)
     monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", root / ".datacore" / "keys")
     monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", root / ".datacore" / "keys" / "registry.yaml")
@@ -69,8 +105,8 @@ def _isolated_attestations(tmp_path_factory, monkeypatch):
     machine. attest() never raises and returns None on failure, so nothing in
     the test fails and nothing in the output says it happened.
 
-    Found on 2026-09-19 with 48 x.post/x.reply attestations sitting unpublished
-    in 1-datafund. Attestations are the evidence record for DIP-0047 egress:
+    Found with dozens of x.post/x.reply attestations sitting unpublished in a
+    team space. Attestations are the evidence record for DIP-0047 egress:
     false entries there are worse than missing ones, because the whole point is
     that the record can be trusted about what actually went out.
 
@@ -82,3 +118,91 @@ def _isolated_attestations(tmp_path_factory, monkeypatch):
         return
     root = tmp_path_factory.mktemp("dc-attest-root")
     monkeypatch.setattr(ledger_attest, "_roots", lambda: [root])
+
+
+# ── what this checkout can run (config/test-needs.yaml, lib/needs_gate.py) ────
+# A test that checks the INSTALLATION -- its principal registry, its fleet, a
+# module repository, the PLUR CLI, a live agent -- is left out only where that
+# need is missing, and every run says so. On a full install nothing changes.
+def _load_lib(name):
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parent / "lib" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_NG = _load_lib("needs_gate")
+_PG = _load_lib("promise_gate")
+_UNMET = _NG.unmet_by_test()
+_LEFT_OUT: dict[str, list[str]] = {}
+
+
+def _repo_rel(path) -> str | None:
+    from pathlib import Path
+    try:
+        return Path(str(path)).resolve().relative_to(_NG.ROOT).as_posix()
+    except ValueError:
+        return None
+
+
+def pytest_ignore_collect(collection_path, config):
+    # The promise gate (evals first) holds for every suite under .datacore, not
+    # only lib/tests: a module's red-by-design eval must not break CI either.
+    if _PG.should_ignore(collection_path):
+        return True
+    rel = _repo_rel(collection_path)
+    if rel is None or rel not in _UNMET:
+        return None
+    _LEFT_OUT[rel] = _UNMET[rel]
+    return True
+
+
+def pytest_collection_modifyitems(session, config, items):
+    named = {k: v for k, v in _UNMET.items() if "::" in k}
+    if not named:
+        return
+    keep, drop = [], []
+    for item in items:
+        rel = _repo_rel(item.path)
+        key = f"{rel}::{item.nodeid.split('::', 1)[1]}" if rel and "::" in item.nodeid else rel
+        hit = next((d for d in named if key and _NG.matches(key, d)), None)
+        if hit is None:
+            keep.append(item)
+        else:
+            drop.append(item)
+            _LEFT_OUT[hit] = named[hit]
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if not _LEFT_OUT:
+        return
+    import os
+    from collections import Counter
+    by_need = Counter(n for needs in _LEFT_OUT.values() for n in needs)
+    lines = [f"{len(_LEFT_OUT)} test file(s)/test(s) not run: they check an installation "
+             f"and this machine lacks what they need (config/test-needs.yaml). "
+             f"A full install runs them; PROMISE_EVALS_ALL=1 runs them anywhere."]
+    lines += [f"  {n}: {c}" for n, c in sorted(by_need.items())]
+    lines += [f"  - {t}  [needs {', '.join(n)}]" for t, n in sorted(_LEFT_OUT.items())]
+    terminalreporter.write_sep("-", "not run here: needs this checkout does not have")
+    for line in lines:
+        terminalreporter.write_line(line)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        try:
+            with open(summary, "a", encoding="utf-8") as f:
+                f.write("### Not run in CI: tests that need an installation\n\n")
+                f.write(lines[0] + "\n\n| need | tests |\n|---|---|\n")
+                f.writelines(f"| `{n}` | {c} |\n" for n, c in sorted(by_need.items()))
+                f.write("\n<details><summary>Each test left out</summary>\n\n")
+                f.writelines(f"- `{t}` needs {', '.join(f'`{x}`' for x in n)}\n"
+                             for t, n in sorted(_LEFT_OUT.items()))
+                f.write("\n</details>\n")
+        except OSError:
+            pass

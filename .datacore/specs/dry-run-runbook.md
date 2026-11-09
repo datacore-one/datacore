@@ -1,7 +1,7 @@
 # Dry run — clean machine, founder as new user
 
 Written 2026-09-18. This is validation instance **(a)** from the CoS product
-proposal §9: *clean second box, Gregor-as-new-user, empty data, measuring
+proposal §9: *clean second box, owner-as-new-user, empty data, measuring
 time-to-first-briefing without the benefit of an existing installation.*
 
 Sunday's external user is instance (b). Monday's workshop is the first group.

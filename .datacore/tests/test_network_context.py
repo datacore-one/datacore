@@ -66,9 +66,9 @@ def test_the_explanation_names_the_vpn_and_the_next_action():
         "host": "mac", "default_interface": "en0",
         "full_tunnel_vpn": True, "full_tunnel_detail": "split-default pair via utun6",
         "vpn_interfaces": ["utun6"], "tailscale_interface": "utun4",
-        "remotes": {"100.115.67.71": 2222}, "unreachable": {"100.115.67.71": 2222},
+        "remotes": {"100.64.0.10": 2222}, "unreachable": {"100.64.0.10": 2222},
     })
-    assert "100.115.67.71" in msg
+    assert "100.64.0.10" in msg
     assert "full-tunnel VPN" in msg and "utun6" in msg
     assert "Not a fault" in msg, "a VPN is a condition of the machine, not a defect"
     assert "local-network access" in msg, "must name what to change"
@@ -78,7 +78,7 @@ def test_a_missing_tailscale_route_is_distinguished_from_a_vpn():
     msg = nc.explain({
         "host": "mac", "default_interface": "en0", "full_tunnel_vpn": False,
         "full_tunnel_detail": "", "vpn_interfaces": [], "tailscale_interface": "",
-        "remotes": {"100.115.67.71": 2222}, "unreachable": {"100.115.67.71": 2222},
+        "remotes": {"100.64.0.10": 2222}, "unreachable": {"100.64.0.10": 2222},
     })
     assert "Tailscale is down" in msg
 

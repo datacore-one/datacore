@@ -9,7 +9,7 @@ Three scan types:
 Uses `gh` CLI for API access. Caches results in scan_cache.json.
 
 Usage:
-    python3 github_scanner.py --username plur9 --orgs datacore-one,plur-ai [--hours 24]
+    python3 github_scanner.py --username <github-user> --orgs <org1>,<org2> [--hours 24]
 
 Output: JSON to stdout with structured scan results.
 """
@@ -17,6 +17,7 @@ Output: JSON to stdout with structured scan results.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -151,6 +152,52 @@ def scan_authored(username: str, since_date: str) -> list[dict]:
     return items
 
 
+AUDIT_LABEL = "audit-finding"
+OPS_ROLE = "chief of operations"
+
+
+def chief_of_operations() -> tuple[str | None, str | None]:
+    """(principal, GitHub account) of the install's chief of operations, from
+    principals.yaml; (None, None) when the install names none."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+        import roster
+        who = roster.by_role(OPS_ROLE)
+        account = ((roster.entries().get(who) or {}) if who else {}).get("github")
+    except Exception as exc:  # noqa: BLE001 -- no registry: no audit queue, said on stderr
+        print(f"Warning: chief of operations unresolved ({exc})", file=sys.stderr)
+        return None, None
+    return (who, str(account)) if who and account else (None, None)
+
+
+def scan_assigned_findings(account: str) -> list[dict]:
+    """Every open audit-finding issue assigned to `account` -- the whole open
+    queue the weekly cross-model audit filed for the chief of operations (AUD-1),
+    not only what changed today."""
+    raw = _gh_search([
+        "issues",
+        f"--assignee={account}",
+        f"--label={AUDIT_LABEL}",
+        "--state=open",
+        "--json", "repository,number,title,url,state,updatedAt",
+        "--limit", "200",
+    ])
+    items = []
+    for r in raw:
+        repo_name = r.get("repository", {}).get("nameWithOwner", "") if isinstance(r.get("repository"), dict) else ""
+        items.append({
+            "repo": repo_name,
+            "number": r.get("number"),
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "state": r.get("state", ""),
+            "updated_at": r.get("updatedAt", ""),
+            "type": "issue",
+            "scan_type": "audit_finding",
+        })
+    return items
+
+
 def scan_org_activity(org: str, since_date: str) -> dict:
     """Get org-wide activity counts: new issues, closed, PRs merged.
 
@@ -247,6 +294,8 @@ def run_full_scan(
     org_activity = {}
     for org in orgs:
         org_activity[org] = scan_org_activity(org, since)
+    ops, ops_account = chief_of_operations()
+    audit_findings = scan_assigned_findings(ops_account) if ops_account else []
 
     result = {
         "scan_date": today,
@@ -255,6 +304,9 @@ def run_full_scan(
         "mentions": mentions,
         "authored": authored,
         "org_activity": org_activity,
+        # AUD-1: the open audit findings assigned to the chief of operations.
+        "audit_findings": audit_findings,
+        "audit_assignee": ops,
         "scanned_at": datetime.now().isoformat(),
         # Without this a zero-result scan is indistinguishable from a scan whose
         # every query failed. That ambiguity hid an unauthenticated `gh` on the
@@ -331,12 +383,15 @@ def format_summary(scan: dict, org_to_spaces: dict[str, list[str]] = None) -> st
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Scan GitHub for activity")
-    parser.add_argument("--username", default="plur9")
+    parser.add_argument("--username", default=os.environ.get("GITHUB_TRIAGE_USERNAME") or None,
+                        help="GitHub user to scan for (default: $GITHUB_TRIAGE_USERNAME; required)")
     parser.add_argument("--orgs", required=True, help="Comma-separated org names")
     parser.add_argument("--hours", type=int, default=24)
     parser.add_argument("--cache", help="Path to scan_cache.json")
     parser.add_argument("--format", choices=["json", "markdown"], default="json")
     args = parser.parse_args()
+    if not args.username:
+        parser.error("no GitHub user: pass --username or set GITHUB_TRIAGE_USERNAME")
 
     orgs = [o.strip() for o in args.orgs.split(",")]
     cache_path = Path(args.cache) if args.cache else None

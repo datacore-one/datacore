@@ -71,7 +71,7 @@ def test_a_corrupt_chain_that_does_carry_evidence_still_raises(fleet):
     # not evidence, and the reader is told rather than quietly given it.
     space = fleet / "1-work"
     _attest(space, "worker", "worker-daily")
-    log = space / ".datacore" / "events" / "worker.jsonl"
+    log = space / ".datacore" / "telemetry" / "worker.jsonl"  # the telemetry log (LED-8)
     log.write_text(log.read_text().replace('"job": "worker-daily"', '"job": "tampered"')
                    .replace('"job":"worker-daily"', '"job":"tampered"'))
 

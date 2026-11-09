@@ -119,11 +119,11 @@ def main() -> int:
         try:
             import sys as _sys
             _sys.path.insert(0, str(Path(__file__).resolve().parent))
-            from ledger.fold import fold as _fold
-            from ledger.log import read_events as _read
+            from ledger.hub import authoritative_state
             # ROOT / name, not a path relative to the working directory: under
             # cron that is $HOME, every lookup failed, and every root was None.
-            roots[name] = _fold(_read(ROOT / name)).state_root()[:16]
+            # A hub space's root is its admitted state, the one its seals carry.
+            roots[name] = authoritative_state(ROOT / name).state_root()[:16]
         except Exception:      # a root is diagnostic, never load-bearing here
             roots[name] = None
 

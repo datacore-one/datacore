@@ -62,7 +62,7 @@ KNOWLEDGE_PREFIXES = (
     '0-inbox/',
     '1-tracks/',
     '3-knowledge/',
-    '4-outbox/',
+    '4-archive/',
     '.datacore/state/',
     '.datacore/learning/',
 )
@@ -81,6 +81,10 @@ class GitError(RuntimeError):
     non_fast_forward = False
 
 
+class LedgerForkRefused(GitError):
+    """The push would fork or rewind a ledger log; nothing was pushed (L9)."""
+
+
 def _push_commit(repo: Path, branch: str, sha: str) -> None:
     from git_publication import push_arguments
     from publication_history import checked_destination
@@ -94,12 +98,35 @@ def _push_commit(repo: Path, branch: str, sha: str) -> None:
         error = GitError('Publication destination advanced; explicit integration required')
         error.non_fast_forward = ancestry.returncode == 1
         raise error
+    # NEVER PUSH A FORK (owner decision L9). The lease proves `sha` fast-forwards
+    # the branch, not that its ledger logs extend origin's: `sha`'s ancestry
+    # carries every unpushed local commit, including a rewound-and-re-appended
+    # log. Check what the push publishes against origin/<branch> (the decided
+    # ref) and against the destination just fetched, which may be newer.
+    _refuse_ledger_fork(repo, branch, sha, (f'origin/{branch}', base))
     # A lease is safe only after verifying the candidate preserves this base.
     # Bind transport to the URL we verified, even if a hook changes origin.
     args = push_arguments(sha, f'refs/heads/{branch}', expected=base)
     args[-2] = origin
     _git(repo, *args)
     _git(repo, 'update-ref', '-d', base_ref, base)
+
+
+def _refuse_ledger_fork(repo: Path, branch: str, sha: str, refs) -> None:
+    """Raise GitError, naming the recovery, if pushing `sha` forks a ledger log."""
+    from git_relay import publication_forks
+    found = []
+    for ref in dict.fromkeys(refs):
+        found = publication_forks(repo, sha, ref)
+        if found:
+            break
+    if found:
+        raise LedgerForkRefused(
+            f"push REFUSED — ledger fork against origin/{branch}: {'; '.join(found)[:240]}. "
+            "The commit stays local and origin is unchanged. Recover: inspect with "
+            "`python3 .datacore/lib/git_relay.py --forks`; restore the log to origin's history "
+            f"with `python3 .datacore/lib/ledger_restore_prefix.py --space {repo.name} "
+            "--actor <writer> --find` (a genuinely divergent chain needs a human)")
 
 
 def _run_git(repo: Path, *args: str, env=None, input_bytes=None):
@@ -121,6 +148,11 @@ def _git(repo: Path, *args: str, env=None, check=True, input_bytes=None) -> str:
         error = GitError('Git publication command failed; inspect local Git configuration and hooks')
         error.non_fast_forward = 'push' in args and any(
             marker in (r.stderr or b'') for marker in (b'non-fast-forward', b'fetch first', b'behind', b'stale info'))
+        # Carried, never in str(): a caller that keeps a PRIVATE local record
+        # can say what git said (nightshift's commit-failures log, fleet sim
+        # 2026-10-03 break 8). Log lines still get only the fixed text above.
+        error.command = str(args[0]) if args else ''
+        error.git_output = ((r.stderr or b'') + (r.stdout or b'')).decode('utf-8', errors='replace')[-4000:]
         raise error
     return (r.stdout or b'').decode('utf-8', errors='replace').strip()
 
@@ -265,6 +297,38 @@ def _publication_mode(repo: Path, base: str, rel: str, mode: str) -> str:
     return mode
 
 
+def _sparse_pattern(rel: str) -> str:
+    """One published path as an exact, anchored checkout pattern."""
+    if '\n' in rel or '\r' in rel:
+        raise GitError('publication path cannot be expressed as a checkout pattern')
+    escaped = ''.join('\\' + c if c in '\\*?[' else c for c in rel)
+    stripped = escaped.rstrip(' ')
+    return '/' + stripped + '\\ ' * (len(escaped) - len(stripped))
+
+
+def _check_out_only(worktree: Path, paths: list[str]) -> None:
+    """Fill a --no-checkout worktree's index from HEAD; write only `paths`
+    and the .gitattributes files.
+
+    Every other entry keeps its place in the index, so the commit's tree is
+    still the whole base tree plus this publication, but is marked
+    skip-worktree and never written: no smudge filter (LFS) runs on content
+    the publication does not touch, and no status check reads it. The pattern
+    file is this worktree's own; the shared repository config is not changed.
+    """
+    gitdir = Path(_git(worktree, 'rev-parse', '--path-format=absolute', '--git-dir'))
+    (gitdir / 'info').mkdir(mode=0o700, exist_ok=True)
+    # Every .gitattributes too: Git reads attributes from the work tree, and
+    # the clean filters and EOL rules they name decide the published blob.
+    patterns = '.gitattributes\n' + ''.join(_sparse_pattern(rel) + '\n' for rel in paths)
+    fd = os.open(gitdir / 'info' / 'sparse-checkout',
+                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        stream.write(patterns)
+    _git(worktree, '-c', 'core.sparseCheckout=true', '-c', 'core.sparseCheckoutCone=false',
+         'read-tree', '-mu', 'HEAD')
+
+
 def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, push: bool,
                        *, append_only: bool = False, publication=None, moves=()) -> str:
     """Reserve the target checkout; validate a detached commit before advancing it."""
@@ -283,9 +347,17 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
     try:
         # Git's own worktree ownership prevents a normal concurrent checkout of
         # this branch. If another writer already has it, no ref is changed.
+        # NEITHER WORKSPACE CHECKS OUT THE SPACE (2026-10-01). Both used to be
+        # full checkouts, so a claim publishing one events log depended on
+        # every other file in the space: 3-fds holds images committed raw
+        # under an LFS rule, a fresh checkout of them can read as modified
+        # (same-second index write), and the status check below refused most
+        # claims overnight. An LFS object missing from the server fails the
+        # checkout outright. The reservation only has to hold the branch; the
+        # candidate gets exactly the published paths (_check_out_only).
         for path, target, detached in ((reservation, branch, False), (candidate, base, True)):
             try:
-                _git(repo, '-c', f'core.hooksPath={hooks}', 'worktree', 'add',
+                _git(repo, '-c', f'core.hooksPath={hooks}', 'worktree', 'add', '--no-checkout',
                      *(['--detach'] if detached else []), '--', str(path), target)
             finally:
                 # A rejecting post-checkout hook can return failure after Git
@@ -294,8 +366,15 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
                     created.append(path)
         if _git(reservation, 'rev-parse', 'HEAD') != base:
             raise GitError('publication destination advanced during reservation')
-        if _git(candidate, 'status', '--porcelain', '--untracked-files=all'):
-            raise GitError('checkout hook changed publication workspace; all output retained')
+        # The reservation writes no file but keeps the whole tree in its index:
+        # publication_workspace_gc reclaims a retired worktree only when its
+        # index is a tree on origin, and an empty index never is.
+        _check_out_only(reservation, [])
+        _check_out_only(candidate, paths)
+        changed = _git(candidate, 'status', '--porcelain', '--untracked-files=all')
+        if changed:
+            named = ', '.join(line[3:] for line in changed.splitlines()[:3])
+            raise GitError(f'checkout hook changed publication workspace ({named}); all output retained')
         for rel, (content, mode) in captured.items():
             mode = _publication_mode(candidate, base, rel, mode)
             # --path preserves the target tree's clean filters and encoding/EOL
@@ -339,10 +418,10 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
             else:
                 publication.verified = True
     finally:
-        errors = []
+        errors, retired = [], []
         for path in reversed(created):
             try:
-                retire_worktree(repo, path)
+                retired.append(retire_worktree(repo, path).path)
             except RuntimeError as exc:
                 errors.append(str(exc))
         if errors:
@@ -350,6 +429,14 @@ def _commit_off_branch(repo: Path, branch: str, paths: list[str], message: str, 
     if push:
         # A later local branch advance is not part of this publication.
         _push_commit(repo, branch, sha or base)
+        # Pushed: both checkouts are now copies. Reclaim them under the
+        # collector's proof; trouble leaves them, never fails a landed push.
+        try:
+            import publication_workspace_gc
+            for path in retired:
+                publication_workspace_gc.reclaim_worktree(repo, path)
+        except Exception:
+            pass
     return sha
 
 
@@ -372,12 +459,23 @@ def _push_converging(repo: Path, branch: str, sha: str) -> None:
                 f"push failed — {msg}")
     if current_branch(repo) != branch or _git(repo, 'rev-parse', 'HEAD') != sha:
         raise GitError('Publication source advanced; captured work retained for separate reconciliation')
+    def authorize(base, origin):
+        from publication_history import require_verified
+        require_verified(repo, branch, sha, base, origin=origin)
+        # The integration pushes merge(base, sha), whose tree is exactly
+        # `merge-tree base sha` (integrate() refuses any other). Gate THAT
+        # tree, as _push_commit gates `sha` (L9). A conflicted merge-tree is
+        # refused by integrate() itself; nothing is published to check.
+        merged = _run_git(repo, 'merge-tree', '--write-tree', base, sha)
+        if merged.returncode == 0:
+            tree = (merged.stdout or b'').decode().split()[0]
+            _refuse_ledger_fork(repo, branch, tree, (base,))
+
     try:
         from git_integration import integrate
-        from publication_history import require_verified
-        integrate(repo, sha, f'refs/heads/{branch}',
-                  authorize_source=lambda base, origin: require_verified(
-                      repo, branch, sha, base, origin=origin))
+        integrate(repo, sha, f'refs/heads/{branch}', authorize_source=authorize)
+    except LedgerForkRefused:
+        raise
     except (OSError, RuntimeError, subprocess.SubprocessError):
         raise GitError(
             f"{repo.name}: committed locally on {branch} ({sha[:10]}); remote "

@@ -2,11 +2,19 @@
 // Plain JS for direct dynamic import by the MCP server.
 // Backend: org_workspace_adapter.py (replaces org_parser.py)
 
-import { z } from '@datacore-one/mcp/runtime'
+import { z, findPython } from '@datacore-one/mcp/runtime'
 import * as fs from 'fs'
 import * as path from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { fileURLToPath } from 'url'
+
+// <root>/.datacore/modules/<name>/tools/index.js -> <root>
+const DATA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
+// The MCP server's own interpreter selection: DATACORE_PYTHON, then .datacore/venv,
+// then the first Python that can import yaml. A bare 'python3' ran whatever was
+// first on PATH, which on a Homebrew Mac cannot import the venv's packages.
+const pythonBin = () => findPython(DATA_ROOT) ?? 'python3'
 
 const execFileAsync = promisify(execFile)
 
@@ -46,7 +54,7 @@ function findAllOrgFiles(basePath, filename) {
 async function runAdapter(basePath, args) {
   const adapterScript = path.join(basePath, '.datacore', 'lib', 'org_workspace_adapter.py')
   try {
-    const { stdout } = await execFileAsync('python3', [adapterScript, ...args], {
+    const { stdout } = await execFileAsync(pythonBin(), [adapterScript, ...args], {
       timeout: 30000,
       env: { ...process.env },
     })
@@ -100,9 +108,12 @@ export const tools = [
       scheduled: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Schedule date: YYYY-MM-DD'),
       space: z.string().optional().describe('Target space (default: 0-personal)'),
       priority: z.enum(['A', 'B', 'C']).optional().describe('Priority level'),
+      body: z.string().optional().describe('Task context and instructions'),
+      properties: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/), z.string()).optional()
+        .describe('Task properties, e.g. SURFACE, DONE_WHEN, ROADMAP, TARGET_SPACE. AI tags require explicit user delegation.'),
     }),
     handler: async (args, ctx) => {
-      const { title, tags, scheduled, space, priority } = args
+      const { title, tags, scheduled, space, priority, body, properties } = args
 
       const targetSpace = space || '0-personal'
       const orgPath = findOrgFile(ctx.storage.basePath, targetSpace, 'inbox.org')
@@ -112,6 +123,10 @@ export const tools = [
       if (tags) adapterArgs.push('--tags', tags)
       if (scheduled) adapterArgs.push('--scheduled', scheduled)
       if (priority) adapterArgs.push('--priority', priority)
+      if (body !== undefined) adapterArgs.push('--body', body)
+      for (const [key, value] of Object.entries(properties || {})) {
+        adapterArgs.push('--property', `${key}=${value}`)
+      }
 
       const result = await runAdapter(ctx.storage.basePath, adapterArgs)
       return { ...result, space: targetSpace }

@@ -284,7 +284,7 @@ Per DIP-0003, every project must have:
 **Source Content**:
 - `[space]/3-knowledge/` - Space knowledge base
 - `0-personal/3-knowledge/pages/` - Personal strategic docs
-- `0-personal/4-outbox/archive/dated/chatgpt-export-*/` - ChatGPT insights
+- `0-personal/4-archive/dated/chatgpt-export-*/` - ChatGPT insights
 
 **Output**:
 - `[space]/0-inbox/report-*-scaffolding-audit.md` - Audit reports

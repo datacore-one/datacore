@@ -57,7 +57,7 @@ cursors:
   ".datacore/learning/patterns.md": "2026-04-19"
   ".datacore/learning/corrections.md": "2026-04-18"
   "0-personal/.datacore/learning/patterns.md": "2026-04-20"
-  "1-datafund/.datacore/learning/patterns.md": "2026-04-15"
+  "2-team/.datacore/learning/patterns.md": "2026-04-15"
   # ... per-file cursors keyed by relative path from Data root
 ```
 

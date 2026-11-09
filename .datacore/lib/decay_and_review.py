@@ -45,14 +45,21 @@ HISTORY_MONTHS = 3         # look back 3 months
 # History reading
 # ---------------------------------------------------------------------------
 
-def month_keys(months_back: int) -> list[str]:
-    """Return YYYY-MM strings for the last N months including current."""
-    now = datetime.utcnow()
+def month_keys(months_back: int, now=None) -> list[str]:
+    """Return YYYY-MM strings for the last N months including current.
+
+    Calendar months, counted on a month index. Stepping back 30 days per month
+    skipped one: from Mar 31 it gave Mar 31, Mar 1, Jan 30 -- February never
+    read. Proved in DatacoreSpec/Dates.lean (month_keys_distinct).
+    """
+    if now is None:
+        now = datetime.utcnow()
+    idx = now.year * 12 + (now.month - 1)
     keys = []
     for i in range(months_back):
-        dt = now - timedelta(days=30 * i)
-        keys.append(dt.strftime("%Y-%m"))
-    return sorted(set(keys))
+        y, m = divmod(idx - i, 12)
+        keys.append(f"{y:04d}-{m + 1:02d}")
+    return sorted(keys)
 
 
 def read_history(months_back: int = HISTORY_MONTHS) -> list[dict]:

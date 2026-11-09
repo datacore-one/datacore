@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 """What version is every machine running? One command, no guessing.
 
-Built after a component sat six weeks behind on one machine with nothing
-surfacing it, and after three wrong diagnoses in a single session that all had
-the same cause: ASSUMING how to reach a machine instead of reading it.
-
-  - Tris's repos were reported as "not git repos". They were git repos; ssh
-    lands on hermes as root, the repos are gregor-owned, and git refused them.
-  - The nightshift watchdog reported 15 phantom `origin/HEAD unset` failures
-    every 30 minutes for weeks. Same cause, under systemd with no HOME.
-  - A filesystem search for datacore-mcp found it on NO machine while Winston
-    was demonstrably running v1.6.0.
+Wrong diagnoses of a machine's state share one cause: ASSUMING how to reach
+it instead of reading it. When the ssh user and the user that owns the repos
+differ, git run as the ssh user refuses the repos ("not a git repo"), and a
+systemd unit with no HOME reports phantom failures.
 
 So this reads `registry/infrastructure.yaml -> servers.<name>.access`, which
-records ssh_user and service_user SEPARATELY because on hermes they differ.
+records ssh_user and service_user SEPARATELY because on some hosts they differ.
 Nothing here hardcodes a user or a path.
 
 A machine that cannot be reached is reported as unreachable, never skipped:
@@ -40,10 +34,25 @@ PROBE = r'''
 # cd'd into a literal "~/Data" and reported every head as empty.
 D=$(eval echo __DATA__); R=$(eval echo __RUNNER__)
 cd "$D" 2>/dev/null && echo "data_head=$(git rev-parse --short HEAD 2>/dev/null)"
-# Core version can live in the data root OR the runner. On plur-claw and
-# hermes the "Data" tree is the AGENT'S OWN SPACE repo (data-space /
-# tris-space), not the datacore core — so reading VERSION only from there
-# reported them as having no core at all, when the core is in their runner.
+# WHICH BRANCH, not only which commit (SYN-4): a satellite's runner served from
+# a fix branch 29 commits behind main, and a short head hash alone never said
+# so. data_core says whether the data root is a Datacore code checkout at all
+# (on a satellite agent host it is the agent's own space).
+is_core() { case "$(git -C "$1" remote get-url origin 2>/dev/null)" in
+  *datacore-one/datacore|*datacore-one/datacore.git|*/datacore.git|*/datacore) return 0;; esac; return 1; }
+[ -d "$D/.git" ] && echo "data_branch=$(git -C "$D" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+[ -d "$D/.git" ] && is_core "$D" && echo "data_core=1"
+# How many commits this checkout is behind origin/main — 0 means current, non-zero
+# means stale even when the branch name is "main" (SYN-4 follow-up).
+[ -d "$D/.git" ] && is_core "$D" && \
+  echo "data_behind=$(git -C "$D" rev-list --count HEAD..origin/main 2>/dev/null)"
+[ -n "$R" ] && [ -d "$R/.git" ] && echo "runner_branch=$(git -C "$R" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+[ -n "$R" ] && [ -d "$R/.git" ] && \
+  echo "runner_behind=$(git -C "$R" rev-list --count HEAD..origin/main 2>/dev/null)"
+# Core version can live in the data root OR the runner. On a satellite agent
+# host the "Data" tree is the AGENT'S OWN SPACE repo, not the datacore core —
+# so reading VERSION only from there reported it as having no core at all,
+# when the core is in its runner.
 CORE=""
 [ -f "$D/.datacore/VERSION" ] && CORE=$(head -1 "$D/.datacore/VERSION" | tr -d " ")
 [ -z "$CORE" ] && [ -n "$R" ] && [ -f "$R/.datacore/VERSION" ] && \
@@ -52,14 +61,14 @@ echo "core=${CORE:-?}"
 [ -n "$R" ] && cd "$R" 2>/dev/null && echo "runner_head=$(git rev-parse --short HEAD 2>/dev/null)"
 # datacore-mcp is an IN-REPO BUILD, not a package. The deployed tree has dist/
 # and node_modules/ and NO package.json, so a package.json probe reports it
-# absent on every server while Winston serves v1.6.0. The version is compiled
+# absent on every server while the always-on host serves v1.6.0. The version is compiled
 # into dist/index.js, and the launch path lives in ~/.hermes/config.yaml — not
 # .mcp.json, which is why a config fallback missed it as well.
 # ASK THE SYSTEM WHAT IT ACTUALLY RUNS, FIRST.
 # Every other branch below is inference — a config file that may name a path
 # nothing uses, or a source checkout that may be a leftover. `command -v` is
 # the only one that answers "what executes when something types this". It was
-# last, so on winston the probe kept reporting the stale in-repo build (1.6.0)
+# last, so on the always-on host the probe kept reporting the stale in-repo build (1.6.0)
 # while /usr/bin/datacore-mcp was 2.1.0: a machine we had just upgraded looked
 # un-upgraded, and the disagreement pointed at the wrong thing entirely.
 m=""
@@ -72,11 +81,11 @@ fi
 [ -z "$m" ] && m=$(grep -ho "[^ \"']*datacore-mcp[^ \"']*" ~/.hermes/config.yaml ~/.claude.json ~/.mcp.json "$D/.mcp.json" 2>/dev/null | head -1 | sed "s#/dist/.*##")
 # A config may name a path that DOES NOT EXIST — nightshift's .mcp.json points
 # at a tree that was never deployed there. Accepting it non-empty made every
-# later fallback unreachable, so the machine reported no MCP while Miles was
+# later fallback unreachable, so the machine reported no MCP while the executor host was
 # running one. Validate before accepting.
 [ -n "$m" ] && [ ! -d "$m" ] && m=""
 [ -z "$m" ] && m=$(ls -d "$D"/*/2-projects/datacore-mcp 2>/dev/null | head -1)
-# GLOBAL NPM INSTALL. Miles runs /usr/bin/datacore-mcp ->
+# GLOBAL NPM INSTALL. The executor host runs /usr/bin/datacore-mcp ->
 # /usr/lib/node_modules/@datacore-one/mcp, which no in-repo search could ever
 # find — the third place this probe had to learn to look, after a guessed path
 # and the hermes config.
@@ -85,7 +94,7 @@ fi
   [ -f "$g/package.json" ] && { m="$g"; break; }
 done
 # Hermes ships its OWN node install, so the package is not on the default PATH
-# and `command -v` finds nothing — Tris has been running v1.6.0 for 14 days
+# and `command -v` finds nothing — the gateway host has been running v1.6.0 for 14 days
 # while every probe reported it absent.
 for hp in "$HOME/.hermes/node/lib/node_modules/@datacore-one/mcp"; do
   [ -z "$m" ] && [ -f "$hp/package.json" ] && m="$hp"
@@ -111,11 +120,11 @@ echo "org_workspace=$("$PY3" -c 'import org_workspace as o;print(getattr(o,"__ve
 
 # Hermes ships its OWN node, so its global bin is not on a non-interactive
 # PATH and `command -v datacore` finds nothing there — the same blind spot that
-# reported Tris as having no MCP for 14 days. List it explicitly rather than
+# reported the gateway host as having no MCP for 14 days. List it explicitly rather than
 # hoping the login shell exports it.
 for c in datacore "$HOME/.hermes/node/bin/datacore" "$HOME/.local/bin/datacore" \
          /usr/local/bin/datacore /usr/bin/datacore; do
-  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>&1 | head -1)"; break; }
+  command -v "$c" >/dev/null 2>&1 && { echo "cli=$("$c" --version 2>/dev/null | head -1)"; break; }
 done
 '''
 
@@ -136,23 +145,34 @@ def probe(name: str, cfg: dict) -> dict:
     script = PROBE.replace("__DATA__", data).replace("__RUNNER__", runner or "")
 
     # BASE64 the script. Nesting quotes through ssh AND sudo -u is how the
-    # first version died on hermes — the only machine where the two users
-    # differ, i.e. the exact case this tool exists for. Encoding removes the
+    # first version died on a host where the two users differ, i.e. the exact
+    # case this tool exists for. Encoding removes the
     # entire quoting class rather than escaping it more carefully.
     import base64
     b64 = base64.b64encode(script.encode()).decode()
     inner = f"echo {b64} | base64 -d | bash"
     # Run AS THE SERVICE USER when it differs from the ssh user. Reading a
-    # gregor-owned repo as root produced every wrong answer this replaces.
+    # repo owned by another user produced every wrong answer this replaces.
     if svc and ssh_user and svc != ssh_user:
         inner = f"sudo -u {svc} bash -lc 'echo {b64} | base64 -d | bash'"
 
-    if alias == "-" or name == "mac":
+    out = {"machine": name, "reachable": False}
+    # A pod, or an agent living as a user on a shared host, is reached the way
+    # fleet_reach resolves it. Treating ssh_alias '-' as "run it here" printed
+    # the Mac's versions under Tris's and Data's names (2026-10-30).
+    if access.get("k8s", {}).get("deployment") and alias == "-" or access.get("host_machine"):
+        import fleet_reach
+        try:
+            pl = fleet_reach.place(name, ROOT / ".datacore/registry/infrastructure.yaml")
+        except fleet_reach.Unreachable as exc:
+            out["error"] = str(exc)[:70]
+            return out
+        cmd = fleet_reach.argv(pl, f"echo {b64} | base64 -d | bash")
+    elif alias == "-" or name == "mac":
         cmd = ["bash", "-lc", inner]
     else:
         cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, inner]
 
-    out = {"machine": name, "reachable": False}
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -170,9 +190,38 @@ def probe(name: str, cfg: dict) -> dict:
     return out
 
 
+def off_main(row: dict) -> list[str]:
+    """Datacore code checkouts on this machine that are not on main, or are on
+    main but behind origin/main (SYN-4)."""
+    out = []
+    rb = row.get("runner_branch")
+    if rb and rb != "main":
+        out.append(f"runner on {rb}" if rb != "HEAD" else "runner on a detached HEAD")
+    elif rb == "main":
+        try:
+            behind = int(row.get("runner_behind") or 0)
+        except (ValueError, TypeError):
+            behind = 0
+        if behind:
+            out.append(f"runner on main but {behind} commit(s) behind origin/main")
+    db = row.get("data_branch")
+    if row.get("data_core") and db and db != "main":
+        out.append(f"data root on {db}" if db != "HEAD" else "data root on a detached HEAD")
+    elif row.get("data_core") and db == "main":
+        try:
+            behind = int(row.get("data_behind") or 0)
+        except (ValueError, TypeError):
+            behind = 0
+        if behind:
+            out.append(f"data root on main but {behind} commit(s) behind origin/main")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--branches", action="store_true",
+                    help="only check that every Datacore checkout is on main; exit 1 naming any that is not")
     a = ap.parse_args()
 
     import yaml
@@ -190,6 +239,19 @@ def main() -> int:
         print(json.dumps({"machines": rows}, indent=2))
         return 1 if any(not r["reachable"] for r in rows) else 0
 
+    if a.branches:
+        # A machine left on a side branch is named, and the run fails so the
+        # job's alert fires. Unreachable is "could not tell", never a pass.
+        bad = [(r["machine"], w) for r in rows if r["reachable"] for w in off_main(r)]
+        for r in rows:
+            if not r["reachable"]:
+                print(f"{r['machine']}: UNREACHABLE — could not check ({r.get('error', '?')})")
+        for machine, what in bad:
+            print(f"{machine}: {what}, not main")
+        print(f"branches: {len(rows)} machine(s), {len(bad)} checkout(s) off main, "
+              f"{sum(1 for r in rows if not r['reachable'])} unreachable")
+        return 1 if bad or any(not r["reachable"] for r in rows) else 0
+
     cols = ["data_head", "core", "mcp", "org_workspace", "cli", "python"]
     print(f"  {'machine':<12} {'data':<9} {'core':<7} {'mcp':<7} {'org-ws':<7} {'cli':<7} py")
     for r in rows:
@@ -197,9 +259,9 @@ def main() -> int:
             print(f"  {r['machine']:<12} UNREACHABLE — {r.get('error','?')}")
             continue
         # "?" means THE PROBE COULD NOT TELL; "—" would say "not installed".
-        # Conflating those is the error that made me report Tris as having no
-        # MCP while it had 14 days of uptime: a failed lookup rendered as a
-        # finding. An unknown must look different from a known absence.
+        # Conflating those renders a failed lookup as a finding ("no MCP" on a
+        # machine that was running it). An unknown must look different from a
+        # known absence.
         vals = [r.get(c, "?") for c in cols]
         print(f"  {r['machine']:<12} {vals[0]:<9} {vals[1]:<9} {vals[2]:<7} "
               f"{vals[3]:<7} {vals[4]:<7} {vals[5]}")
@@ -218,6 +280,9 @@ def main() -> int:
                   for k in ("core", "mcp", "org_workspace", "cli")
                   if r.get(k, "?") == "?")
     unreachable = [r["machine"] for r in rows if not r["reachable"]]
+    for r in rows:
+        for what in off_main(r) if r["reachable"] else []:
+            print(f"  OFF MAIN: {r['machine']} {what}")
     print(f"\nfleet: {len(rows)} machine(s), {len(unreachable)} unreachable"
           + (f", DRIFT in {', '.join(drift)}" if drift else ", all versions agree")
           + (f", {unknown} value(s) the probe COULD NOT DETERMINE — ask the "

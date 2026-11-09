@@ -25,6 +25,95 @@ echo "python: $PY"
 
 echo "=== $(date '+%F %T') ledger daily (verification) ==="
 
+# EVERY SPACE'S HISTORY, EVERY DAY (OPS-3, audit C8). The daily "ledger
+# verify" ran `ledger_cli.py verify --space ~/Data`, which reads only the
+# root's gitignored telemetry dir ("OK 2 files 1734 events") -- the ~82k space
+# events were never checked, so the alert was green by construction. Verify
+# each space that carries an event log, discovered exactly as v2_verify.spaces()
+# does, and report each one. Any failure fails the job.
+#
+# ledger-verify.log is what the manifest contract reads with `^OK ` in
+# MULTILINE mode, so per-space lines are indented and only the LAST line may
+# start with OK -- and only when every space verified.
+verify_out="$STATE/ledger-verify.log"
+verify_tmp="$(mktemp "$verify_out.XXXXXX")" || exit 2
+verify_rc=0
+spaces_list="$("$PY" -c 'import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from spaces import discover_spaces
+for s in discover_spaces(Path(sys.argv[2])):
+    if (s.path / ".datacore" / "events").is_dir():
+        print(s.path)' "$LIB" "$DATACORE_ROOT" 2>"$verify_tmp.err")"
+disc_rc=$?
+n_ok=0; n_bad=0; n_unk=0
+if [ "$disc_rc" -ne 0 ]; then
+  { echo "  discovery: $(tail -1 "$verify_tmp.err" 2>/dev/null)"
+    echo "FAIL could not discover the spaces under $DATACORE_ROOT (rc=$disc_rc)"; } > "$verify_tmp"
+  verify_rc=1
+elif [ -z "$spaces_list" ]; then
+  # Could-not-tell, never a pass: no line starts with OK, so the manifest
+  # contract stays red, but an installation with no ledger yet is not a crash.
+  echo "NONE no space carries an event log under $DATACORE_ROOT" > "$verify_tmp"
+else
+  while IFS= read -r sp; do
+    [ -n "$sp" ] || continue
+    name="$(basename "$sp")"
+    # --full: the daily pass re-judges all history, so a machine-local
+    # "verified up to here" marker never stands in for a check (Phase 2), and
+    # it leaves fresh markers that make every other verify of the day fast.
+    one="$("$PY" "$LIB/ledger_cli.py" verify --full --space "$sp" 2>&1)"
+    rc=$?
+    if [ $rc -eq 0 ]; then
+      n_ok=$((n_ok + 1))
+      echo "  $name: OK $(printf '%s\n' "$one" | grep -v '^[[:space:]]*$' | tail -1 | sed 's/^OK //')" >> "$verify_tmp"
+    elif [ $rc -eq 3 ]; then
+      # Could not check on this machine (e.g. a writer's verify key is not
+      # here): not a fault in the data, and never a pass (V5).
+      n_unk=$((n_unk + 1))
+      echo "  $name: COULD NOT CHECK on this machine" >> "$verify_tmp"
+      printf '%s\n' "$one" | head -20 | sed 's/^/    /' >> "$verify_tmp"
+    else
+      n_bad=$((n_bad + 1))
+      echo "  $name: FAIL" >> "$verify_tmp"
+      printf '%s\n' "$one" | head -20 | sed 's/^/    /' >> "$verify_tmp"
+    fi
+  done <<< "$spaces_list"
+  if [ "$n_bad" -gt 0 ]; then
+    echo "FAIL $n_bad of $((n_ok + n_bad + n_unk)) space(s) failed verification" >> "$verify_tmp"
+    verify_rc=1
+  elif [ "$n_unk" -gt 0 ]; then
+    echo "NOT CHECKED $n_unk of $((n_ok + n_unk)) space(s) could not be checked on this machine" >> "$verify_tmp"
+    verify_rc=3
+  else
+    echo "OK $n_ok space(s) verified" >> "$verify_tmp"
+  fi
+fi
+rm -f "$verify_tmp.err"
+mv -f "$verify_tmp" "$verify_out" || exit 2
+echo "verify rc=$verify_rc"
+cat "$verify_out"
+
+# SEALS, EVERY DAY (plan 2026-10-31, phase H). Verify checks chains and
+# signatures, not that the seals -- which define "final" -- still recompute.
+# Every hub space's newest seal must be the sequencer's and verify over the
+# admitted events: the hub's own seal-age check (ledger.hub.seal_report) with
+# the age limit off; the hourly box-ledger-seal-age contract judges age.
+# ledger-seal.log's last line is OK / FAIL / NONE and a manifest contract
+# reads it. FAIL fails this job. NONE (no hub space here) or a checker that
+# could not run (rc 2) is written down and left to that contract, which never
+# reads it as a pass; it does not fail the history verify.
+seal_out="$STATE/ledger-seal.log"
+seal_tmp="$(mktemp "$seal_out.XXXXXX")" || exit 2
+"$PY" "$LIB/ledger_seal_age_check.py" --root "$DATACORE_ROOT" --no-age > "$seal_tmp" 2>&1
+seal_rc=$?
+if [ "$seal_rc" -ne 0 ] && [ "$seal_rc" -ne 1 ] && ! tail -1 "$seal_tmp" | grep -q '^NONE '; then
+  echo "NOT CHECKED the seal check could not run (rc=$seal_rc)" >> "$seal_tmp"
+fi
+mv -f "$seal_tmp" "$seal_out" || exit 2
+echo "seal   rc=$seal_rc"
+tail -1 "$seal_out"
+
 # Run the check even if the most recent ingest had a non-zero exit: its result
 # is still the truth about drift, and suppressing it would hide the consequence
 # of the ingest failure.
@@ -45,9 +134,11 @@ if [ "$write_rc" -ne 0 ]; then
   exit "$write_rc"
 fi
 "$PY" "$LIB/ledger_checkpoint.py" verify > "$STATE/checkpoint-verify.log" 2>&1
-verify_rc=$?
-echo "ckpt   rc=$verify_rc"
+ckpt_rc=$?
+echo "ckpt   rc=$ckpt_rc"
 tail -1 "$STATE/checkpoint-verify.log"
 
-[ "$verify_rc" -eq 0 ] || exit "$verify_rc"
-exit $check_rc
+[ "$ckpt_rc" -eq 0 ] || exit "$ckpt_rc"
+[ "$check_rc" -eq 0 ] || exit "$check_rc"
+[ "$seal_rc" -ne 1 ] || exit 1
+exit "$verify_rc"

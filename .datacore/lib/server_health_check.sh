@@ -40,13 +40,8 @@ cat >> "$REPORT_FILE" << 'EOF'
 EOF
 
 # Check sizes of key directories
-for dir in "$DATACORE_ROOT" \
-           "$DATACORE_ROOT/0-personal" \
-           "$DATACORE_ROOT/1-datafund" \
-           "$DATACORE_ROOT/2-datacore" \
-           "$DATACORE_ROOT/3-fds" \
-           "$DATACORE_ROOT/4-forge" \
-           "$DATACORE_ROOT/.datacore"; do
+# Every space this install has (N-name), not a list of ours (INS-3).
+for dir in "$DATACORE_ROOT" "$DATACORE_ROOT"/[0-9]-* "$DATACORE_ROOT/.datacore"; do
     if [ -d "$dir" ]; then
         size=$(du -sh "$dir" 2>/dev/null | cut -f1)
         echo "| $dir | $size | |" >> "$REPORT_FILE"

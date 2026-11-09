@@ -69,6 +69,16 @@ ventures:
       client-report: reasoning
       contract-review: high-stakes
     privacy_floor: internal  # Never use public models
+    # Decision C3, 2026-09-23: the OWNER'S EXPLICIT CHOICE, made on the
+    # decision board, to let exactly these two dmcc task types escalate to
+    # frontier models past the internal floor above. The floor still holds
+    # for every other dmcc task, and a caller's privacy_class still applies
+    # to these two. Do not add entries without the owner's decision.
+    # Proof: DatacoreSpec.Credentials.pick_respects_all (floor holds for all
+    # tasks except the listed exceptions).
+    floor_exceptions:
+      - client-report
+      - contract-review
 
   verity:
     budget: 200  # USD/month

@@ -71,7 +71,7 @@ def test_registered_executors_includes_every_adapter():
     openrouter joined on 2026-08-27. It was the one provider in live use
     (comms module draft_evaluator) that the registry could not account for,
     making its spend invisible to shadow accounting."""
-    assert set(registered_executors()) == {"claude-code", "hermes", "api", "openclaw", "openrouter"}
+    assert set(registered_executors()) == {"claude-code", "hermes", "api", "openclaw", "openclaw-gateway", "openrouter"}
 
 
 def test_get_executor_unknown_name_raises_value_error_listing_known():
@@ -157,7 +157,7 @@ class TestExecutorConformance:
         assert p["cents"] == 42 and p["ref"] == f"executor:{name}"
         assert p["executor"] == name
         assert spend_events[0].actor == "test-actor"
-        assert spend_events[0].sig == ""  # unsigned by default
+        assert spend_events[0].sig  # signed by default (2026-10-31)
 
     def test_error_run_emits_no_spend_event(self, name, hermetic_env, monkeypatch):
         executor = get_executor(name)
@@ -337,11 +337,15 @@ class TestExecutorConformance:
 # --- actor / env resolution ------------------------------------------------
 
 
-def test_actor_defaults_to_hostname_when_datacore_actor_unset(tmp_path, monkeypatch):
+def test_actor_defaults_to_this_hosts_declared_actor(tmp_path, monkeypatch):
+    """With DATACORE_ACTOR unset the actor is the host's declaration
+    (identity.env or the registry), not its hostname (owner decisions L10, Q2)."""
+    import actor_identity
     monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
     monkeypatch.delenv("DATACORE_ACTOR", raising=False)
     monkeypatch.delenv("DATACORE_LEDGER_SIGN", raising=False)
     monkeypatch.delenv("DATACORE_NO_SPEND", raising=False)
+    monkeypatch.setattr(actor_identity, "resolve", lambda *a, **k: ("declared-host", "identity.env"))
 
     executor = get_executor("claude-code")
     monkeypatch.setattr(executor, "_invoke", lambda prompt, timeout_s: ("ok", 5))
@@ -349,7 +353,24 @@ def test_actor_defaults_to_hostname_when_datacore_actor_unset(tmp_path, monkeypa
     executor.run("hi")
 
     events = read_events(tmp_path)
-    assert events[0].actor == socket.gethostname()
+    assert events[0].actor == "declared-host"
+    assert events[0].actor != socket.gethostname().lower()
+
+
+def test_an_undeclared_host_gets_an_error_never_spend_under_its_hostname(tmp_path, monkeypatch):
+    import actor_identity
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    monkeypatch.delenv("DATACORE_ACTOR", raising=False)
+    monkeypatch.delenv("DATACORE_NO_SPEND", raising=False)
+    monkeypatch.setattr(actor_identity, "resolve", lambda *a, **k: (None, "none"))
+
+    executor = get_executor("claude-code")
+    monkeypatch.setattr(executor, "_invoke", lambda prompt, timeout_s: ("ok", 5))
+
+    result = executor.run("hi")
+
+    assert result.error, "an undeclared host must surface an error"
+    assert read_events(tmp_path) == []
 
 
 def test_space_dir_defaults_to_home_data_when_datacore_root_unset(monkeypatch):

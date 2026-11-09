@@ -1,0 +1,7 @@
+# fixture for mac-lens-push artifact[0]
+# producer artifact: ~/.datacore/state/lens-push.log on mac
+# harvested: 2026-09-28
+# regex under test: ^sqlite_push: ok 
+# represents: SUCCESS
+# ---
+sqlite_push: ok ~/.datacore/example.db -> example-host:.datacore/example.db bytes=4096 remote_bytes=4096

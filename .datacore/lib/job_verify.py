@@ -116,11 +116,72 @@ def _default_manifest_path() -> Path:
     reason. The manifest that ships beside this file is the one belonging to
     the code actually running.
     """
+    # THE INSTALL'S OWN LIST COMES FIRST (INS-5). The tracked manifest is THIS
+    # fleet's list -- 57 jobs on mac, box, nightshift, hermes and plur-claw --
+    # and every `git pull` rewrites it, so an install that wants its own jobs
+    # cannot keep them there. `manifest.local.yaml` (gitignored) is the
+    # install's list; the tracked one is used only on a machine whose roster
+    # declares a machine that list schedules, i.e. by the fleet it describes.
+    # Loading the local list lays it over that tracked list for such a machine
+    # (jobs.manifest.effective_doc), so returning it loses none of the tracked jobs.
+    local =DATACORE_ROOT / ".datacore" / "lib" / "jobs" / LOCAL_MANIFEST
+    if local.exists():
+        return local
+    # A data root that is an install decides alone: never fall through to the
+    # code's own lists (a test's scratch root must not reach the real ones).
     from_root = DATACORE_ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
     if from_root.exists():
-        return from_root
+        return from_root if _fleet_member(from_root) else local
+    # A runner checkout: loading the tracked list beside the code lays the
+    # install's manifest.local.yaml over it, so the tracked path loses nothing.
     beside = Path(__file__).resolve().parent / "jobs" / "manifest.yaml"
-    return beside if beside.exists() else from_root
+    if beside.exists() and _fleet_member(beside):
+        return beside
+    beside_local = beside.with_name(LOCAL_MANIFEST)
+    return beside_local if beside_local.exists() else local
+
+
+LOCAL_MANIFEST = "manifest.local.yaml"
+
+
+def _fleet_member(manifest: Path) -> bool:
+    """Does this machine's roster declare a machine the tracked list schedules?"""
+    from jobs.manifest import lists_roster_machines
+    return lists_roster_machines(manifest)
+
+
+def _alert_command() -> str:
+    """The command an install routes `on_fail: command` alerts to, or "".
+
+    `$DATACORE_ALERT_COMMAND`, else `command:` in ~/.datacore/alerts.yaml. It
+    reads the alert text on stdin: `mail -s 'datacore' me@example.com`, a
+    `curl` to a webhook, `ntfy publish ...` -- whatever this install uses.
+    """
+    cmd = os.environ.get("DATACORE_ALERT_COMMAND", "").strip()
+    if cmd:
+        return cmd
+    try:
+        import yaml
+        # DATACORE_ALERTS_FILE moves the file (the test suite points it at nothing,
+        # so no test run can send a real alert -- 2026-09-30, CAP-4 posted twice).
+        where = os.environ.get("DATACORE_ALERTS_FILE") or str(Path.home() / ".datacore" / "alerts.yaml")
+        cfg = yaml.safe_load(Path(where).read_text()) or {}
+        return str(cfg.get("command") or "").strip() if isinstance(cfg, dict) else ""
+    except (OSError, ValueError, ImportError):
+        return ""
+
+
+def _send_command(message: str) -> bool:
+    """Deliver an alert through the install's own command; False when there is none or it failed."""
+    cmd = _alert_command()
+    if not cmd:
+        return False
+    try:
+        result = subprocess.run(["bash", "-c", cmd], input=message, capture_output=True,
+                                text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def _send_telegram(message: str) -> bool:
@@ -136,7 +197,7 @@ def _send_telegram(message: str) -> bool:
         return False
     try:
         result = subprocess.run(
-            [sys.executable, str(WINSTON_SEND)], input=message, capture_output=True, text=True
+            [sys.executable, str(WINSTON_SEND), "--alert"], input=message, capture_output=True, text=True
         )
     except OSError:
         return False
@@ -144,6 +205,13 @@ def _send_telegram(message: str) -> bool:
 
 
 _NO_EMIT = False
+
+#: MSG-13: a failure that was never alerted persists this long → tell the owner once.
+_WITHHELD_ALERT_WINDOW_S = 24 * 3600
+
+#: MSG-11: when set by main(), escalations are collected here (keyed by machine)
+#: instead of being sent one-per-job; main() flushes one grouped message per machine.
+_pending_escalations: dict | None = None
 
 
 def _recurrence():
@@ -196,6 +264,15 @@ def _note_pass(job_name: str) -> None:
     if _NO_EMIT:
         return
     rec = _rec.record(job_name, failed=False)
+    try:
+        from jobs.autofix import clear_escalation
+        clear_escalation(job_name)      # a later, different failure is news again
+    except Exception:  # noqa: BLE001 -- bookkeeping must not stop verification
+        pass
+    # Decision N7 (2026-09-23): a reset that could not be locked or saved is
+    # warned loudly -- in the verifier's own report, not only on stderr.
+    if isinstance(rec, dict) and rec.get("warning"):
+        print(f"WARNING {job_name}: {rec['warning']}")
     tid = rec.get("task_id") if isinstance(rec, dict) else None
     if tid:
         # The pass is the DONE_WHEN of the task the streak filed.
@@ -249,10 +326,46 @@ def _artifact_signature(job, *, now: float | None = None) -> str:
     return "|".join(parts)
 
 
-#: Where a recurring failure becomes a task. 2-datacore is the system space; the
-#: machine goes on the task as SURFACE so the owner knows where to look.
+def _failure_detail(job, failures: list[str], n: int = 3, width: int = 240) -> str:
+    """Which machine, and what each failure actually was.
+
+    The direct alert (box and agent hosts) read "job.verify FAILED: <job> (N
+    failure(s))" and nothing else: no machine, no artifact, no reason -- the
+    failure strings went to stderr and a log nobody reads (owner, 2026-10-02:
+    "Errors should say what they are"). Bounded so one alert stays one screen.
+    """
+    machine = getattr(job, "machine", None) if job is not None else None
+    lines = [f"  - {f[:width]}" + ("..." if len(f) > width else "") for f in failures[:n]]
+    if len(failures) > n:
+        lines.append(f"  - and {len(failures) - n} more")
+    if not lines:
+        return ""
+    head = f"\non {machine}:" if machine else "\nfailures:"
+    return head + "\n" + "\n".join(lines)
+
+
+def _artifact_tail(job, n: int = 8) -> str:
+    """The last `n` lines of each artifact, for an alert that must carry them."""
+    out = []
+    today = _dt.date.today().isoformat()
+    for a in getattr(job, "artifacts", []) or []:
+        raw = os.path.expanduser(str(a.path).replace("{today}", today))
+        try:
+            lines = Path(raw).read_text(errors="replace").rstrip().splitlines()[-n:]
+        except OSError:
+            continue
+        if lines:
+            out.append("\n".join(lines))
+    return ("\n\n" + "\n\n".join(out)) if out else ""
+
+
+#: Where a recurring failure becomes a task: the install's system space
+#: (install.yaml roles.system), else the personal space. The machine goes on the
+#: task as SURFACE so the owner knows where to look.
+from spaces import space_for  # noqa: E402
+
 TASK_FILE = os.environ.get("JOB_VERIFY_TASK_FILE") or str(
-    DATACORE_ROOT / "2-datacore" / "org" / "next_actions.org")
+    DATACORE_ROOT / space_for("system", DATACORE_ROOT, "0-personal") / "org" / "next_actions.org")
 
 
 def _delegate_repair(job, failures: list[str], rec: dict) -> tuple[str, str]:
@@ -276,6 +389,18 @@ def _delegate_repair(job, failures: list[str], rec: dict) -> tuple[str, str]:
         return "refused", f"{type(exc).__name__}: {exc}"
 
 
+def _escalate_once(job_name: str, detail: str) -> bool:
+    """True the first time this job's current escalation reaches the owner."""
+    try:
+        from jobs.autofix import escalate_once
+    except Exception:  # noqa: BLE001 -- cannot tell: say it rather than lose it
+        return True
+    # Keyed by the reason minus its numbers' noise: the class and fingerprint.
+    import re as _re
+    key = _re.sub(r"\d+ repair attempts", "N repair attempts", detail)
+    return escalate_once(job_name, key)
+
+
 def _file_task(job, rec: dict, failures: list[str]) -> str | None:
     """A recurring failure is a defect with no owner; give it one.
 
@@ -286,13 +411,21 @@ def _file_task(job, rec: dict, failures: list[str]) -> str | None:
     closes it. Best-effort: the adapter failing must not stop verification.
     """
     adapter = Path(__file__).resolve().parent / "org_workspace_adapter.py"
+    # INTO THE INBOX, never the generated file. This used `--allow-any-file`
+    # into next_actions.org, which in a Phase-1 space is a projection: the
+    # adapter nested the heading at level 2 while emitting item.create at
+    # level 1, and the projection then met a "concurrent edit" it could never
+    # resolve -- nightshift's 2-datacore was skipped for 56 cycles from
+    # 2026-09-23 (audit B-F2, P0-4). The inbox is the single capture point;
+    # ingest admits the task to the ledger and the projector renders it.
+    inbox = str(Path(TASK_FILE).with_name("inbox.org"))
     heading = (f"job-verify: {job.name} is failing on {job.machine} "
                f"({rec.get('consecutive')} runs since {rec.get('first_failed')})")
     body = ("Recurring failure (DIP-0031: 3 or more consecutive runs). Failures this run:\n"
             + "\n".join(f"- {f}" for f in failures[:6])
             + f"\nProducer: {getattr(job, 'cmd', '') or 'see manifest'}"
             + f"\nSchedule: {getattr(job, 'schedule', '') or 'see manifest'}")
-    cmd = [sys.executable, str(adapter), "add", "--allow-any-file", "--file", TASK_FILE,
+    cmd = [sys.executable, str(adapter), "add", "--file", inbox,
            "--state", "TODO", "--heading", heading, "--tags", "datacore,ops,job_verify",
            "--priority", "B", "--property", f"SURFACE={job.machine}", "--property", f"JOB={job.name}",
            "--property", (f"DONE_WHEN=job {job.name} passes verification on {job.machine} "
@@ -314,10 +447,56 @@ def _file_task(job, rec: dict, failures: list[str]) -> str | None:
     return None
 
 
+def _close_through_ledger(task_id: str) -> bool | None:
+    """Dismiss the task in the ledger of a phase-1 space. None = no ledger here.
+
+    THROUGH THE LEDGER, never the generated file (owner decision 2026-10-01).
+    `adapter complete` on 2-datacore's generated next_actions.org at 05:07
+    moved the file AND the projection base to DONE; at 05:07:51 the inbox
+    job's guard restored its 05:00 snapshot of the file, and from 06:00 every
+    hourly import refused the TODO it now showed ("edit to a terminal item")
+    until a hand repair at 17:30. A dismissal leaves the file and its base as
+    they are, so a revert of the file is no edit at all, and the projector
+    renders the task DONE on its next cycle.
+    """
+    try:
+        from org_space import ledger_space_for_file
+        from ledger_project_org import phase
+        space = ledger_space_for_file(TASK_FILE)
+        if space is None or phase(space) != 1:
+            return None
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space).items.get(task_id)
+        if item is None:
+            # Still a capture the import has not admitted: it sits in the
+            # inbox, an authored file, where the adapter may close it.
+            return _adapter_complete(str(Path(TASK_FILE).with_name("inbox.org")), task_id)
+        if item.status == "dismissed":
+            return True
+        EventLog(space, _default_actor()).append("item.dismiss", {
+            "id": task_id, "kind": "done",
+            "reason": "job_verify: the job passed verification (the task's DONE_WHEN)"})
+        return True
+    except Exception as exc:  # noqa: BLE001 -- bookkeeping must not stop verification
+        print(f"task {task_id} not closed through the ledger: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return False
+
+
 def _close_task(task_id: str) -> bool:
+    closed = _close_through_ledger(task_id)
+    if closed is not None:
+        return closed
+    return _adapter_complete(TASK_FILE, task_id)
+
+
+def _adapter_complete(task_file: str, task_id: str) -> bool:
+    """The pre-ledger path: mark the heading DONE in an authored org file."""
     adapter = Path(__file__).resolve().parent / "org_workspace_adapter.py"
     try:
-        out = subprocess.run([sys.executable, str(adapter), "complete", "--file", TASK_FILE,
+        out = subprocess.run([sys.executable, str(adapter), "complete", "--file", task_file,
                               "--id", task_id], capture_output=True, text=True, timeout=120)
         return out.returncode == 0
     except Exception:  # noqa: BLE001
@@ -362,9 +541,27 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
         sig = _artifact_signature(job) if job is not None else None
         _record = _rec.record(job_name, failed=True, artifact_sig=sig)
         if _record.get("same_artifact"):
-            print(f"alert withheld: {job_name} failed on the same artifact already counted "
-                  f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
-            return
+            # SAME ARTIFACT IS NOT SILENT FOREVER (MSG-3). Within the day it is
+            # the problem already sent; on a later day, if it was the
+            # operator's (it was alerted), it is reminded -- once, below. A
+            # problem handed to a repairer and never alerted stays with the
+            # repair path, whose escalations speak for it -- UNTIL 24h pass
+            # without delivery (MSG-13): then the owner is told once regardless.
+            already_cool = not _rec.should_alert(_record)
+            never_alerted = not _record.get("last_alerted")
+            if already_cool:
+                print(f"alert withheld: {job_name} failed on the same artifact already counted "
+                      f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
+                return
+            if never_alerted:
+                first_t = _record.get("first_failed_time")
+                past_window = (first_t is not None
+                               and (time.time() - float(first_t)) > _WITHHELD_ALERT_WINDOW_S)
+                if not past_window:
+                    print(f"alert withheld: {job_name} failed on the same artifact already counted "
+                          f"({_record.get('consecutive')}x); nothing new to report", file=sys.stderr)
+                    return
+                # past the window, never alerted: fall through to escalate once
         # DELEGATE ON THE FIRST FAILURE, NOT THE THIRD.
         #
         # This waited for DIP-0031's recurring threshold, so failures one and
@@ -381,7 +578,9 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
         # about who gets woken first.
         if job is not None:
             state, detail = _delegate_repair(job, failures, _record)
-            if state == "delegated":
+            if state in ("delegated", "exists"):
+                # `exists`: today's repair is already filed; the repair path
+                # (and its escalation report) owns it, as it did an hour ago.
                 print(f"delegated repair of {job_name} ({detail}); "
                       f"operator not alerted", file=sys.stderr)
                 if _record.get("recurring") and not _record.get("task_id"):
@@ -389,24 +588,150 @@ def _dispatch_alert(mode: str, job_name: str, failures: list[str], job=None) -> 
                     if tid:
                         _rec.note_task(job_name, tid)
                 return
-            print(f"could NOT delegate {job_name} ({detail}); "
-                  f"escalating to the operator", file=sys.stderr)
+            if state == "paused":
+                # The model usage limit: the dispatcher reported it once and
+                # paused; another repair would spend nothing but the wait.
+                # MSG-13: but if it stays paused past the window, tell the owner once.
+                first_t = _record.get("first_failed_time")
+                past_window = (first_t is not None
+                               and (time.time() - float(first_t)) > _WITHHELD_ALERT_WINDOW_S)
+                if past_window:
+                    if not _escalate_once(job_name, detail):
+                        print(f"alert withheld: {job_name} already escalated ({detail[:120]})",
+                              file=sys.stderr)
+                        return
+                    _rec.note_alerted(job_name)
+                    message = (f"job.verify NEEDS THE OWNER: {job_name} has been failing for "
+                               f">{_WITHHELD_ALERT_WINDOW_S // 3600}h while repairs are paused "
+                               f"({detail})")
+                    if mode in ("telegram", "command"):
+                        message += _failure_detail(job, failures)
+                    if mode == "telegram":
+                        if not _send_telegram(message):
+                            print(f"alert: telegram unavailable, logged only ({job_name})",
+                                  file=sys.stderr)
+                    elif mode == "command":
+                        if not _send_command(message):
+                            print(f"alert: no working alert command, logged only ({job_name}): "
+                                  f"{message}", file=sys.stderr)
+                    else:
+                        print(f"alert: {message}", file=sys.stderr)
+                    return
+                print(f"repairs paused for {job_name} ({detail}); operator not alerted",
+                      file=sys.stderr)
+                return
+            if state == "escalate":
+                # A host-state fault, or the breaker is open (W1): no agent can
+                # fix it, so the owner hears ONCE per job and fingerprint, with
+                # the real failure, and the recurring task below is the record.
+                if _record.get("recurring") and not _record.get("task_id"):
+                    tid = _file_task(job, _record, failures)
+                    if tid:
+                        _rec.note_task(job_name, tid)
+                if not _escalate_once(job_name, detail):
+                    print(f"alert withheld: {job_name} was already escalated to the owner "
+                          f"({detail[:120]})", file=sys.stderr)
+                    return
+                _rec.note_alerted(job_name)
+                message = f"job.verify NEEDS THE OWNER: {detail}"
+                if mode in ("telegram", "command"):
+                    message += _failure_detail(job, failures)
+                # MSG-11: when collecting per-machine escalations, defer the send so
+                # multiple jobs on the same machine that all escalate for the same
+                # host-state cause produce one grouped message instead of one each.
+                machine = getattr(job, "machine", None) if job is not None else None
+                if _pending_escalations is not None and machine:
+                    _pending_escalations.setdefault(machine, []).append(
+                        (job, job_name, detail, failures, mode, message))
+                    return
+                if mode == "telegram":
+                    if not _send_telegram(message):
+                        print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
+                elif mode == "command":
+                    if not _send_command(message):
+                        print(f"alert: no working alert command, logged only ({job_name}): {message}",
+                              file=sys.stderr)
+                else:
+                    print(f"alert: {message}", file=sys.stderr)
+                return
+            if state == "owner":
+                # Board D1, 2026-10-01: the owner's machine gets no repair agent;
+                # the alert and, when it recurs, the task below are the owner's.
+                print(f"{job_name} is on the owner's machine ({detail}); no repair agent, "
+                      f"the operator is told and a recurring failure becomes a task", file=sys.stderr)
+            else:
+                print(f"could NOT delegate {job_name} ({detail}); "
+                      f"escalating to the operator", file=sys.stderr)
         if _record.get("recurring") and job is not None and not _record.get("task_id"):
             tid = _file_task(job, _record, failures)
             if tid:
                 _rec.note_task(job_name, tid)
                 print(f"recurring: filed task {tid} for {job_name}", file=sys.stderr)
         message = _rec.describe(job_name, _record, len(failures))
+        if job is not None and not getattr(job, "delegate", True):
+            # A job that opts out of delegation is one whose failure IS the
+            # message to a person -- the escalation report above all. Its
+            # contract fails on one summary line; the lines above it are the
+            # list the person needs. Carry them.
+            message += _artifact_tail(job)
         if not _rec.should_alert(_record):
-            print(f"alert suppressed: {job_name} is recurring "
-                  f"({_record.get('consecutive')}x) and was already escalated today", file=sys.stderr)
+            print(f"alert withheld: {job_name} was already sent today "
+                  f"({_record.get('consecutive')}x); the cool-down is the day", file=sys.stderr)
             return
         _rec.note_alerted(job_name)
+    if mode in ("telegram", "command"):
+        message += _failure_detail(job, failures)
     if mode == "telegram":
         if not _send_telegram(message):
             print(f"alert: telegram unavailable, logged only ({job_name})", file=sys.stderr)
+    elif mode == "command":
+        if not _send_command(message):
+            print(f"alert: no working alert command (DATACORE_ALERT_COMMAND or ~/.datacore/alerts.yaml), "
+                  f"logged only ({job_name}): {message}", file=sys.stderr)
     else:
         print(f"alert: {message}", file=sys.stderr)
+
+
+def _not_yet_due(jobs) -> dict[str, tuple[float, float]]:
+    """OPS-15: jobs this verifier first saw less than one freshness window ago.
+
+    A job is judged once the longest max_age_hours of its artifacts (26 h when
+    none is set) has passed since this host's verifier first listed it --
+    before that it cannot have run on schedule. 2026-10-28: box-delegation-review
+    was declared at 10:28 for 23:30 and alerted within the hour on a file from
+    10-25. The first run of this bookkeeping (no state file) records every job
+    it already knows as old, so installing it hides nothing. {name: (age_h, window_h)}.
+    """
+    if _NO_EMIT:
+        return {}
+    import json as _json
+    path = Path(os.environ.get("DATACORE_STATE", Path.home() / ".datacore" / "state")) \
+        / "job-verify-first-seen.json"
+    try:
+        seen = _json.loads(path.read_text())
+        seeding = not isinstance(seen, dict)
+    except (OSError, ValueError):
+        seen, seeding = None, True
+    seen = seen if isinstance(seen, dict) else {}
+    now = time.time()
+    new = [j.name for j in jobs if j.name not in seen]
+    for name in new:
+        seen[name] = 0 if seeding else now
+    if new:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(_json.dumps(seen, indent=1, sort_keys=True))
+            os.replace(tmp, path)
+        except OSError as exc:  # bookkeeping must not stop verification
+            print(f"first-seen record not saved: {exc}", file=sys.stderr)
+    out = {}
+    for j in jobs:
+        window = max([a.max_age_hours or 0 for a in j.artifacts] or [0]) or 26
+        age = (now - float(seen.get(j.name, 0))) / 3600
+        if age < window:
+            out[j.name] = (age, window)
+    return out
 
 
 def _check_job(job: Job) -> list[str]:
@@ -459,9 +784,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--alert",
-        choices=("log", "telegram"),
+        choices=("log", "telegram", "command"),
         default=None,
-        help="Override every job's on_fail for this run (default: unset -- each job uses its own on_fail)",
+        help="Override every job's on_fail for this run (default: unset -- each job uses its own on_fail). "
+             "'command' pipes the alert to $DATACORE_ALERT_COMMAND or ~/.datacore/alerts.yaml's command",
     )
     parser.add_argument(
         "--no-emit",
@@ -528,13 +854,15 @@ def _run_doctor(machine: str, manifest_path: Path) -> None:
 
 
 def _attest_space() -> Path:
-    """First space checkout that converges: 2-datacore where present, else any
+    """First space checkout that converges: the system space where present, else any
     `[0-9]-*` repository with an event log under the root, then under ~/Data
-    (hermes keeps a 5-plur clone at ~/Data/2-plur), then ~/spaces."""
+    (hermes keeps a 5-plur clone at ~/Data/2-plur). Spaces live under ~/Data
+    only; a ~/spaces clone is never selected (see ledger_attest._roots)."""
     home = Path.home()
-    roots = [DATACORE_ROOT, home / "Data", home / "spaces"]
-    for r in roots:
-        c = r / "2-datacore"
+    roots = [DATACORE_ROOT, home / "Data"]
+    system = space_for("system", DATACORE_ROOT)
+    for r in roots if system else []:
+        c = r / system
         if (c / ".datacore" / "events").is_dir() and (c / ".git").exists():
             return c
     for r in roots:
@@ -547,8 +875,10 @@ def _attest_space() -> Path:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     # See _dispatch_alert: a dry run must not inflate the recurrence streak.
-    global _NO_EMIT
+    global _NO_EMIT, _pending_escalations
     _NO_EMIT = bool(getattr(args, "no_emit", False))
+    # MSG-11: collect escalations during the job loop; flush grouped at the end.
+    _pending_escalations = {}
 
     manifest_path = Path(args.manifest) if args.manifest else _default_manifest_path()
 
@@ -564,6 +894,12 @@ def main(argv: list[str] | None = None) -> None:
     # log wins; the root is the last resort.
     space = Path(args.space) if args.space else _attest_space()
 
+    if not args.manifest and manifest_path.name == LOCAL_MANIFEST and not manifest_path.exists():
+        # An install that has not chosen any jobs has none to verify. Said as
+        # "0 jobs" -- which v2_verify reads as "nothing checked", not a pass.
+        print(f"OK 0 jobs 0 artifacts (this install lists no jobs: {manifest_path})")
+        return
+
     try:
         jobs = load_manifest(manifest_path)
     except ManifestError as exc:
@@ -574,7 +910,14 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     _prune_recurrence(jobs)
-    machine_jobs = [job for job in jobs if job.machine == args.machine]
+    # Resolve machine name from actor (OPS-17): if a machine was renamed,
+    # the roster maps its old name to its new actor; check both.
+    machine_name = args.machine
+    from jobs.manifest import actor_to_machine, roster_path
+    resolved = actor_to_machine(args.machine, roster_path())
+    if resolved:
+        machine_name = resolved
+    machine_jobs = [job for job in jobs if job.machine == machine_name]
 
     if not machine_jobs:
         print("OK 0 jobs 0 artifacts")
@@ -584,7 +927,13 @@ def main(argv: list[str] | None = None) -> None:
 
     total_artifacts = 0
     any_failed = False
+    pending = _not_yet_due(machine_jobs)
     for job in machine_jobs:
+        if job.name in pending:
+            age, window = pending[job.name]
+            print(f"not yet due: job '{job.name}' first seen {age:.1f}h ago; judged once its "
+                  f"first {window:g}h window has passed (OPS-15)", file=sys.stderr)
+            continue
         failures = _check_job(job)
         total_artifacts += len(job.artifacts)
         ok = not failures
@@ -607,6 +956,29 @@ def main(argv: list[str] | None = None) -> None:
             # recovers must not carry its old count into an unrelated future
             # failure and escalate on the first one.
             _note_pass(job.name)
+
+    # MSG-11: flush grouped escalations — one message per machine.
+    # Multiple jobs on the same machine that all escalate for the same host-state
+    # fault are batched into one message so a single cause produces one alert.
+    for machine, items in (_pending_escalations or {}).items():
+        if len(items) == 1:
+            _, _, _, _, grp_mode, grp_msg = items[0]
+        else:
+            names = [jn for _, jn, _, _, _, _ in items]
+            lines = [f"  {jn}: {msg}" for _, jn, _, _, _, msg in items]
+            grp_mode = items[0][4]
+            grp_msg = (f"job.verify NEEDS THE OWNER: {len(items)} jobs on {machine} "
+                       f"all failing:\n" + "\n".join(lines))
+        if grp_mode == "telegram":
+            if not _send_telegram(grp_msg):
+                print(f"alert: telegram unavailable, logged only ({machine})", file=sys.stderr)
+        elif grp_mode == "command":
+            if not _send_command(grp_msg):
+                print(f"alert: no working alert command, logged only ({machine}): {grp_msg}",
+                      file=sys.stderr)
+        else:
+            print(f"alert: {grp_msg}", file=sys.stderr)
+    _pending_escalations = None
 
     if any_failed:
         sys.exit(1)

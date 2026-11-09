@@ -93,9 +93,167 @@ def known_machines(path: Path | None = None) -> frozenset[str] | None:
                 raise ManifestError("invalid manifest_machine alias")
             names.add(alias)
     return frozenset(names)
-CHECKS = frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex",
+
+
+# ── the roster as the one source of host names (INS-3) ───────────────────────
+# Tools used to carry this fleet's host names as defaults (HOSTS = ('winston',
+# ...), SSH_ALIAS = {"box": "winston"}), so a stranger's install ssh'd to our
+# machines. They ask the roster instead. None of these raise: a missing or
+# unreadable roster means "this install declares no hosts", and each caller
+# says so in its own terms rather than guessing one of ours.
+
+def _roster_doc(path: Path | None = None) -> dict:
+    try:
+        data = yaml.safe_load((path or roster_path()).read_text())
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _servers(path: Path | None = None) -> dict:
+    servers = _roster_doc(path).get("servers")
+    return {str(k): v for k, v in servers.items() if isinstance(v, dict)} if isinstance(servers, dict) else {}
+
+
+def _reachable_alias(cfg: dict) -> str | None:
+    alias = cfg.get("ssh_alias")
+    return str(alias) if alias not in (None, "", "-") else None
+
+
+def ssh_alias(machine: str, path: Path | None = None) -> str | None:
+    """How ssh reaches a roster machine, named by roster key or manifest_machine.
+
+    None for a machine the roster declares unreachable by ssh (ssh_alias null or
+    '-', e.g. the workstation this runs on). A name the roster does not know is
+    returned unchanged: it may already be an ssh alias.
+    """
+    for name, cfg in _servers(path).items():
+        if machine in (name, cfg.get("manifest_machine")):
+            return _reachable_alias(cfg)
+    return machine
+
+
+def actor_to_machine(actor: str, path: Path | None = None) -> str | None:
+    """Resolve an actor name to its machine name in the roster.
+
+    When a machine is renamed (e.g., Winston moved, hostname changed to
+    'winston' but manifest still lists 'box'), the infrastructure file's
+    servers.<machine>.access.actor maps the old machine name to the new actor.
+    This function goes backwards: given an actor, find its machine name.
+
+    Returns None if the actor is not found in the roster, or the actor itself
+    if it matches a manifest_machine alias (e.g. the actor IS already a machine name).
+    """
+    for machine_name, cfg in _servers(path).items():
+        if isinstance(cfg, dict):
+            access = cfg.get("access") or {}
+            if str(access.get("actor", "")).lower() == actor.lower():
+                return machine_name
+    # If the actor is a manifest alias or roster key, return it
+    for machine_name, cfg in _servers(path).items():
+        if machine_name.lower() == actor.lower():
+            return machine_name
+        manifest_alias = cfg.get("manifest_machine")
+        if manifest_alias and str(manifest_alias).lower() == actor.lower():
+            return machine_name
+    return None
+
+
+def ssh_hosts(path: Path | None = None) -> list[str]:
+    """Every roster machine ssh can reach, by ssh alias, in roster order."""
+    return [a for a in (_reachable_alias(c) for c in _servers(path).values()) if a]
+
+
+def fleet_names(path: Path | None = None) -> list[str]:
+    """Every name this install's own machines go by: roster keys, manifest
+    names and ssh aliases. What an allow-list of 'our hosts' is built from."""
+    out: list[str] = []
+    for name, cfg in _servers(path).items():
+        for n in (name, cfg.get("manifest_machine"), _reachable_alias(cfg)):
+            if n and str(n) not in out:
+                out.append(str(n))
+    return out
+
+
+def role_all(name: str, path: Path | None = None) -> list[str]:
+    """`roles.<name>` in the roster: which machine(s) or actor this install
+    gives a fleet-wide duty (always_on, sequencer, ...). Empty when unset."""
+    roles = _roster_doc(path).get("roles")
+    value = roles.get(name) if isinstance(roles, dict) else None
+    if value is None or value == "":
+        return []
+    return [str(v) for v in value] if isinstance(value, list) else [str(value)]
+
+
+def role(name: str, path: Path | None = None) -> str | None:
+    """The single machine or actor holding a roster role, or None."""
+    found = role_all(name, path)
+    return found[0] if found else None
+
+
+def _cli(argv: list[str]) -> int:
+    """For shell callers: `manifest.py ssh-alias MACHINE | ssh-hosts | role NAME
+    | role-ssh NAME`. Prints one value per line; prints nothing when unset."""
+    if argv[:1] == ["ssh-hosts"] and len(argv) == 1:
+        out = ssh_hosts()
+    elif argv[:1] == ["ssh-alias"] and len(argv) == 2:
+        out = [ssh_alias(argv[1]) or ""]
+    elif argv[:1] == ["role"] and len(argv) == 2:
+        out = role_all(argv[1])
+    elif argv[:1] == ["role-ssh"] and len(argv) == 2:
+        out = [a for a in (ssh_alias(m) for m in role_all(argv[1])) if a]
+    elif argv[:1] == ["jobs"] and len(argv) in (1, 2):
+        # The effective job list, one `name<TAB>machine<TAB>cmd` per line: what
+        # this install runs, tracked and local together.
+        doc = effective_doc(Path(argv[1]) if len(argv) == 2 else OWN_TRACKED)
+        out = [f"{j.get('name')}\t{j.get('machine')}\t{j.get('cmd')}"
+               for j in doc.get("jobs") or [] if isinstance(j, dict)]
+    else:
+        print("usage: manifest.py ssh-hosts | ssh-alias MACHINE | role NAME | role-ssh NAME | jobs [MANIFEST]")
+        return 2
+    print("\n".join(o for o in out if o))
+    return 0
+
+
+CHECKS =frozenset({"exists", "nonempty", "json_has_keys", "regex", "last_line_regex",
                     "min_bytes", "no_crash"})
-ON_FAILS = frozenset({"log", "telegram"})
+#: `command` pipes the alert to the install's own command (job_verify._alert_command):
+#: mail, a webhook, anything -- alerts need not go to Telegram (INS-5).
+ON_FAILS = frozenset({"log", "telegram", "command"})
+
+#: What makes a VISITOR's duty happen (DIP-0046 §14/§15). A visitor carries no
+#: clock: its duties run because a person opened the lid, so they are named by
+#: the session event that fires them, never by an hour.
+#:   wake      the join tick itself (visitor_join.py --tick notices a full wake)
+#:   join      after every converged join -- on arrival and every few waking hours
+#:   arrival   after the first converged join of a session only
+#:   awake     a daemon or stream that runs only while the machine is awake
+TRIGGERS = frozenset({"wake", "join", "arrival", "awake"})
+#: An artifact judged in session time: it must have been written at or after
+#: the last converged join (`join`) or the join that began this session
+#: (`arrival`), as recorded in the visitor's join.json.
+SINCE = frozenset({"join", "arrival"})
+#: An arrival duty that must not repeat every session (owner decision
+#: 2026-10-02). `every` is the period it runs at most once in; `after` the
+#: local hour before which its window has not opened. It runs at the first
+#: presence (join or tick) inside the window -- "the first arrival after its
+#: hour" -- and the verifier judges it by that window, not by the arrival.
+EVERY = frozenset({"day", "week", "month"})
+_HHMM = re.compile(r"([01]\d|2[0-3]):([0-5]\d)\Z")
+
+
+def gate_window(now: float, every: str, after: str | None) -> float | None:
+    """Start of the window `now` falls in (local time), or None when this
+    period's window has not opened yet (before its hour on its first day)."""
+    from datetime import datetime, timedelta
+    t = datetime.fromtimestamp(now)
+    h, m = (int(x) for x in (after or "00:00").split(":"))
+    start = t.replace(hour=h, minute=m, second=0, microsecond=0)
+    if every == "week":
+        start -= timedelta(days=t.weekday())
+    elif every == "month":
+        start = start.replace(day=1)
+    return start.timestamp() if now >= start.timestamp() else None
 
 # checks that must NOT carry an `arg`
 _NO_ARG_CHECKS = frozenset({"exists", "nonempty", "no_crash"})
@@ -115,6 +273,11 @@ class Artifact:
     check: str = "exists"
     max_age_hours: float | None = None
     arg: object = None
+    since: str | None = None
+    #: The owning job's gate (EVERY / `after`), copied here so a `since` check
+    #: can judge a gated duty by its window.
+    every: str | None = None
+    after: str | None = None
 
 
 @dataclass
@@ -127,10 +290,124 @@ class Job:
     required_env: list[str] = field(default_factory=list)
     on_fail: str = "log"
     require_synced_repos: list[str] = field(default_factory=list)
+    #: False: a failure of this job is never handed to an agent; the operator
+    #: hears directly. For the jobs that ARE the delegation machinery -- the
+    #: escalation report, the canary, the drill -- delegating their own repair
+    #: is circular: on 2026-09-22 box-autofix-escalation was delegated to
+    #: Miles, dead-lettered after three attempts, and then listed itself.
+    delegate: bool = True
+    #: "host": this job's failures are the machine's state (a detector whose
+    #: finding needs a person on the host), never code an agent can repair --
+    #: autofix escalates them to the owner once instead of filing repairs (W1).
+    repair: str = "agent"
+    #: A visitor's session trigger (TRIGGERS); None on a resident.
+    trigger: str | None = None
+    #: An arrival duty's gate (EVERY, local "HH:MM"); None when ungated.
+    every: str | None = None
+    after: str | None = None
+
+
+# ── the install's own jobs: manifest.local.yaml over the tracked list (INS-3) ──
+# The tracked manifest.yaml ships jobs any fleet member of this shape may run,
+# with no machine, agent, path or space of ours in them. The jobs that ARE ours
+# -- named after our agents, on a machine only we have, writing into one of our
+# spaces -- live in the gitignored manifest.local.yaml, which every reader sees
+# laid over the tracked list: a local job replaces the tracked job of the same
+# name, and a local-only job is added. One rule, applied here, so no reader can
+# see a different job list from another.
+
+LOCAL_NAME = "manifest.local.yaml"
+#: The tracked list that ships with this code. Only for THIS file does the
+#: install's local list also get looked up under the data root: a runner
+#: checkout (~/.datacore/v2-runner) carries tracked files only, while the
+#: install's own list sits in its data tree. A manifest anywhere else (a test's
+#: scratch file) is overlaid only by a local list beside it.
+OWN_TRACKED = Path(__file__).resolve().parent / "manifest.yaml"
+
+
+def local_for(tracked: Path) -> Path | None:
+    """The install's own job list that overlays `tracked`, or None."""
+    tracked = Path(tracked)
+    beside = tracked.with_name(LOCAL_NAME)
+    if beside.is_file():
+        return beside
+    try:
+        own = tracked.resolve() == OWN_TRACKED.resolve()
+    except OSError:
+        own = False
+    if own:
+        import os
+        root = os.environ.get("DATACORE_ROOT")
+        base = Path(root) if root else Path.home() / "Data"
+        cand = base / ".datacore" / "lib" / "jobs" / LOCAL_NAME
+        if cand.is_file():
+            return cand
+    return None
+
+
+def overlay(base: dict | None, local: dict | None) -> dict:
+    """`base` with `local`'s jobs laid over it: same name replaces, in place;
+    local-only jobs follow, in the local file's order."""
+    base = base if isinstance(base, dict) else {}
+    local = local if isinstance(local, dict) else {}
+    out = {**{k: v for k, v in local.items() if k != "jobs"}, **base}
+    mine = [j for j in (local.get("jobs") or []) if isinstance(j, dict)]
+    by_name = {j.get("name"): j for j in mine}
+    merged = []
+    for j in base.get("jobs") or []:
+        name = j.get("name") if isinstance(j, dict) else None
+        merged.append(by_name.pop(name) if name in by_name else j)
+    merged += [j for j in mine if j.get("name") in by_name]
+    out["jobs"] = merged
+    return out
+
+
+def lists_roster_machines(tracked: Path, path: Path | None = None) -> bool:
+    """Does this install's roster declare a machine the tracked list schedules?
+    Only then is the tracked list this install's to run (a stranger's install
+    gets its own list alone, never another fleet's)."""
+    try:
+        roster = known_machines(path)
+        if not roster:
+            return False
+        jobs = (yaml.safe_load(Path(tracked).read_text()) or {}).get("jobs") or []
+        return any(isinstance(j, dict) and j.get("machine") in roster for j in jobs)
+    except Exception:  # noqa: BLE001 - an unreadable roster or list is not membership
+        return False
+
+
+def _read(path: Path) -> dict:
+    try:
+        return yaml.safe_load(Path(path).read_text()) or {}
+    except yaml.YAMLError as error:
+        raise ManifestError(f"cannot parse {path}: {error}") from error
+
+
+def effective_doc(path: Path) -> dict:
+    """The parsed job list at `path` as this install runs it.
+
+    `path` is the tracked list: the install's manifest.local.yaml (beside it, or
+    under the data root for the code's own list) is laid over it.
+    `path` is a manifest.local.yaml: the tracked list beside it goes underneath,
+    when this install's roster declares a machine it schedules.
+    OSError from reading `path` itself propagates, as it always did.
+    """
+    path = Path(path)
+    doc = _read(path)
+    if path.name == LOCAL_NAME:
+        tracked = path.with_name("manifest.yaml")
+        if tracked.is_file() and lists_roster_machines(tracked):
+            return overlay(_read(tracked), doc)
+        return doc
+    local = local_for(path)
+    return overlay(doc, _read(local)) if local else doc
 
 
 def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
     """Load and validate a job manifest, returning its jobs.
+
+    The document validated is `effective_doc(path)`: the install's own
+    manifest.local.yaml laid over the tracked list.
 
     Raises `ManifestError` (carrying every problem found, one per line) if
     the manifest is missing required fields, uses an unrecognized
@@ -138,7 +415,7 @@ def load_manifest(path: Path, *, roster_path: Path | None = None) -> list[Job]:
     declares two jobs with the same name. Unknown top-level or per-job
     keys are ignored.
     """
-    return validate_manifest(yaml.safe_load(Path(path).read_text()), roster_path=roster_path)
+    return validate_manifest(effective_doc(Path(path)), roster_path=roster_path)
 
 
 def validate_manifest(data, *, roster_path: Path | None = None) -> list[Job]:
@@ -250,8 +527,34 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
             f"(got {require_synced_repos!r})"
         )
 
+    delegate = raw.get("delegate", True)
+    if not isinstance(delegate, bool):
+        errors.append(f"{ref}: field 'delegate' must be true or false (got {delegate!r})")
+
+    repair = raw.get("repair", "agent")
+    if repair not in ("agent", "host"):
+        errors.append(f"{ref}: field 'repair' must be agent or host (got {repair!r})")
+
+    trigger = raw.get("trigger")
+    if trigger is not None and trigger not in TRIGGERS:
+        errors.append(f"{ref}: unknown trigger {trigger!r} "
+                      f"(expected one of: {', '.join(sorted(TRIGGERS))})")
+
+    every, after = raw.get("every"), raw.get("after")
+    if after is not None and every is None:
+        every = "day"
+    if every is not None:
+        if every not in EVERY:
+            errors.append(f"{ref}: unknown every {every!r} (expected one of: {', '.join(sorted(EVERY))})")
+        if trigger != "arrival":
+            errors.append(f"{ref}: every/after gate an arrival duty only (trigger is {trigger!r})")
+    if after is not None and not (isinstance(after, str) and _HHMM.match(after)):
+        errors.append(f"{ref}: field 'after' must be a local time \"HH:MM\" (got {after!r})")
+
     if len(errors) != start:
         return None
+    for a in artifacts or []:
+        a.every, a.after = every, after
 
     return Job(
         name=name,
@@ -262,6 +565,11 @@ def _build_job(raw: object, index: int, errors: list[str], seen_names: set[str],
         required_env=list(required_env),
         on_fail=on_fail,
         require_synced_repos=list(require_synced_repos),
+        delegate=delegate,
+        repair=repair,
+        trigger=trigger,
+        every=every,
+        after=after,
     )
 
 
@@ -322,7 +630,16 @@ def _build_artifact(raw: object, job_ref: str, index: int, errors: list[str]) ->
         if not isinstance(arg, str):
             errors.append(f"{ref}: check {check!r} requires a string 'arg' (got {arg!r})")
 
+    since = raw.get("since")
+    if since is not None and since not in SINCE:
+        errors.append(f"{ref}: unknown since {since!r} (expected one of: {', '.join(sorted(SINCE))})")
+
     if len(errors) != start:
         return None
 
-    return Artifact(path=path, check=check, max_age_hours=max_age_hours, arg=arg)
+    return Artifact(path=path, check=check, max_age_hours=max_age_hours, arg=arg, since=since)
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_cli(sys.argv[1:]))

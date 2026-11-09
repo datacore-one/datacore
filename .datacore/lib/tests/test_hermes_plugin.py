@@ -267,8 +267,40 @@ def test_registration_wires_both_hooks_and_the_tool(as_tris):
         def register_tool(self, **kw): calls["tools"].append(kw["name"])
 
     hp.register(Ctx())
-    assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "on_session_start"]
-    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 4
+    assert [n for n, _ in calls["hooks"]] == ["pre_tool_call", "pre_llm_call", "on_session_start"]
+    assert calls["tools"][0] == "datacore_whoami" and len(calls["tools"]) == 6
+
+
+def test_registered_tools_accept_the_hermes_calling_convention(as_tris, monkeypatch):
+    """Hermes calls a tool as handler(args_dict, **kwargs)
+    (hermes-agent tools/registry.py dispatch). Until 2026-10-04 every tool here
+    took keywords only, so on the box each call failed with "whoami_handler()
+    takes 0 positional arguments but 1 was given", or bound the whole args dict
+    to `id` / `space`. The tests above call the handlers by keyword and so never
+    saw it; this one calls them the way the runtime does."""
+    import json
+    tools = {}
+
+    class Ctx:
+        def register_hook(self, name, cb): pass
+        def register_tool(self, **kw): tools[kw["name"]] = kw["handler"]
+
+    hp.register(Ctx())
+    monkeypatch.setattr(hp, "_cos_questions", lambda: None)
+
+    def call(name, args):
+        return tools[name](args, task_id="t1")   # exactly as registry.dispatch does
+
+    d = json.loads(call("datacore_whoami", {}))
+    assert d["in_force"] is True and d["actor"] == "tris"
+    assert "not available on this host" in call("datacore_approvals_pending", {})
+    monkeypatch.setattr(hp, "_cos_questions", lambda: Path("/nonexistent"))
+    assert "authenticated human approval interface" in call(
+        "datacore_approval_decide", {"id": "a1", "decision": "approve"})
+    assert "must be 'approve' or 'dismiss'" in call(
+        "datacore_approval_decide", {"id": "a1", "decision": "maybe"})
+    assert "not a declared event type" in call(
+        "datacore_ledger_append", {"space": "2-plur", "type": "nope", "payload": {"id": "x"}})
 
 
 def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
@@ -279,7 +311,7 @@ def test_registration_survives_a_runtime_that_rejects_the_tool(as_tris):
 
     c = Ctx()
     hp.register(c)                      # must not raise: the hooks are the point
-    assert c.hooks == ["pre_tool_call", "on_session_start"]
+    assert c.hooks == ["pre_tool_call", "pre_llm_call", "on_session_start"]
 
 
 # ── finding the fleet lib ───────────────────────────────────────────────────
@@ -463,7 +495,7 @@ def test_approval_tools_say_so_on_a_host_without_the_script(as_tris, monkeypatch
     assert "not available on this host" in hp.approval_decide_handler(id="a1", decision="approve")
 
 
-def test_all_four_tools_register(as_tris):
+def test_all_six_tools_register(as_tris):
     names = []
 
     class Ctx:
@@ -472,7 +504,8 @@ def test_all_four_tools_register(as_tris):
 
     hp.register(Ctx())
     assert names == ["datacore_whoami", "datacore_approvals_pending",
-                     "datacore_approval_decide", "datacore_ledger_append"]
+                     "datacore_approval_decide", "datacore_ledger_append",
+                     "datacore_delegate", "datacore_who_has_what"]
 
 
 
@@ -495,3 +528,454 @@ def test_ledger_tool_refuses_symlink_escape(as_tris, tmp_path, monkeypatch):
 def test_missing_policy_lib_refuses_call(as_tris, monkeypatch):
     monkeypatch.setattr(hp, '_lib', lambda: False)
     assert hp.pre_tool_call('terminal', {'command': 'echo hello'})['action'] == 'block'
+
+
+def test_the_ledger_tool_refuses_a_delegation_where_the_agent_does_not_listen(as_tris, tmp_path, monkeypatch):
+    """Winston path step 4 (2026-11-05): Winston files only where the agent listens."""
+    import types
+    (tmp_path / "8-firm" / ".datacore").mkdir(parents=True)
+    (tmp_path / "8-firm" / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    wrote = []
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=lambda **k: None))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: wrote.append(payload)))
+    monkeypatch.setitem(sys.modules, "delegation_watch", types.SimpleNamespace(
+        listening_problem=lambda space_dir, payload: "data does not listen in the-firm-space"))
+    out = hp.ledger_append_handler(space="8-firm", type="item.create",
+                                   payload={"id": "p1", "title": "post", "assignee": "data"})
+    assert out.startswith("Refused:") and "does not listen" in out and not wrote
+
+
+def test_who_has_what_is_a_read_tool_over_every_space(as_tris, monkeypatch):
+    """Winston path step 3 (2026-11-05): asked "what is Data doing?", Winston reads
+    the ledger across spaces instead of answering from memory. It writes nothing."""
+    import types
+    seen = {}
+    fake = types.SimpleNamespace(
+        states=lambda root: (seen.setdefault("root", root), ({"2-datacore": "S"}, {}))[1],
+        who_has_what=lambda folded, now_ms: [{"assignee": "data", "folded": folded}],
+        pauses=lambda root: {},
+        who_text=lambda rows, errors, pauses=None: f"data: {len(rows)} open")
+    monkeypatch.setitem(sys.modules, "delegation_watch", fake)
+    monkeypatch.setattr(hp, "_lib", lambda: True)
+    assert hp.who_has_what_handler() == "data: 1 open"
+    assert seen["root"] == hp._root()
+
+
+def test_filing_for_a_paused_agent_files_it_and_says_they_cannot_start(as_tris, tmp_path, monkeypatch):
+    """Issue #296: Winston told the owner "Tris has it" while Tris's claiming was
+    paused for lack of credit. The item is still filed; the reply says so."""
+    import types
+    space = tmp_path / "2-plur" / ".datacore"
+    space.mkdir(parents=True)
+    (space.parent / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            pass
+        def append(self, etype, payload):
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
+    import delegation_watch as dw
+    monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
+    monkeypatch.setattr(dw, "pauses", lambda root, **kw: {
+        "tris": {"since_ms": 1_800_000_000_000, "retry_ms": 1_800_021_600_000, "why": "out of model credit"}})
+
+    out = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                   payload={"id": "r1", "title": "x", "assignee": "tris"})
+    assert out.startswith("appended item.create"), out
+    assert "cannot take work" in out and "out of model credit" in out
+    assert "do not say" in out.lower()
+
+    other = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                     payload={"id": "r2", "title": "x", "assignee": "miles"})
+    assert "cannot take work" not in other
+
+
+def test_an_owner_request_with_a_weak_check_is_refused_before_anything_is_written(as_tris, tmp_path, monkeypatch):
+    """Issue #298: the check filed on 2026-11-06 passed for any note on the topic."""
+    import types
+    space = tmp_path / "2-plur" / ".datacore"
+    space.mkdir(parents=True)
+    (space.parent / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    written = []
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            pass
+        def append(self, etype, payload):
+            written.append(payload)
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
+    import delegation_watch as dw
+    monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
+    monkeypatch.setattr(dw, "pauses", lambda root, **kw: {})
+
+    base = {"id": "r1", "title": "Compare how Tris and Data log tasks", "assignee": "tris",
+            "asked_by": "gregor"}
+    out = hp.ledger_append_handler(space="2-plur", type="item.create",
+                                   payload={**base, "check": "test -s f.md && grep -qi tris f.md"})
+    assert out.startswith("Refused:") and not written, out
+
+    ok = hp.ledger_append_handler(space="2-plur", type="item.create", payload={
+        **base, "check": "test -s f.md &amp;&amp; grep -qi journal f.md &amp;&amp; grep -qi 'item.complete' f.md"})
+    assert ok.startswith("appended item.create") and len(written) == 1, ok
+    assert "&amp;" not in written[0]["check"] and "&& grep" in written[0]["check"]
+
+
+# ── Issue #300: Winston files the owner's request before anything else ──────
+
+@pytest.fixture()
+def as_winston(monkeypatch):
+    w = {**TRIS, "actor": "winston", "principal": "winston", "display": "Winston",
+         "role": "chief of staff"}
+    monkeypatch.setattr(hp, "_IDENTITY", w)
+    monkeypatch.setattr(hp, "_lib", lambda: True)
+    monkeypatch.setattr(hp, "policy_block", lambda tool_name, args: None)
+    monkeypatch.setattr(hp, "_ROUTING", {})
+    return w
+
+
+def test_an_owner_message_on_telegram_gets_the_filing_frame(as_winston):
+    out = hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram",
+                          user_message="we need an incident note")
+    ctx = out["context"] if isinstance(out, dict) else out
+    assert "datacore_delegate" in ctx and "yourself" in ctx
+
+
+def test_no_frame_off_telegram(as_winston):
+    assert not hp.pre_llm_call(session_id="s1", turn_id="t1", platform="cron", user_message="x")
+
+
+def test_no_frame_for_another_principal(as_tris):
+    assert not hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram", user_message="x")
+
+
+def _turn(n_calls, tool="skill_view", sid="s1", turn="t1"):
+    hp.pre_llm_call(session_id=sid, turn_id=turn, platform="telegram", user_message="do x")
+    return [hp.pre_tool_call(tool, {}, session_id=sid, turn_id=turn) for _ in range(n_calls)]
+
+
+def test_the_fifth_lookup_without_filing_is_blocked_and_says_file_it(as_winston):
+    res = _turn(5)
+    assert res[:4] == [None] * 4
+    assert res[4] and res[4]["action"] == "block" and "datacore_delegate" in res[4]["message"]
+
+
+def test_datacore_tools_are_never_blocked(as_winston):
+    _turn(6)
+    assert hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {}},
+                            session_id="s1", turn_id="t1") is None
+
+
+def test_after_filing_nothing_is_blocked(as_winston):
+    _turn(2)
+    hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {}},
+                     session_id="s1", turn_id="t1")
+    assert all(r is None for r in [hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1")
+                                   for _ in range(6)])
+
+
+def test_a_status_question_answered_with_who_has_what_is_not_blocked(as_winston):
+    _turn(1)
+    hp.pre_tool_call("datacore_who_has_what", {}, session_id="s1", turn_id="t1")
+    assert all(hp.pre_tool_call("session_search", {}, session_id="s1", turn_id="t1") is None
+               for _ in range(6))
+
+
+def test_a_new_turn_resets_the_count(as_winston):
+    _turn(4)
+    assert all(r is None for r in _turn(4, turn="t2"))
+
+
+def test_cron_turns_are_never_counted(as_winston):
+    hp.pre_llm_call(session_id="c1", turn_id="t1", platform="cron", user_message="x")
+    assert all(hp.pre_tool_call("skill_view", {}, session_id="c1", turn_id="t1") is None for _ in range(8))
+
+
+def test_an_idle_guard_says_why_in_the_log(as_winston, caplog):
+    """2026-11-07: the guard stayed silent on a live turn; the log must show which id did not match."""
+    hp.pre_llm_call(session_id="s1", turn_id="t1", platform="telegram", user_message="x")
+    with caplog.at_level("INFO"):
+        hp.pre_tool_call("skill_view", {}, session_id="s2", turn_id="t9")
+    assert "stall guard idle for skill_view" in caplog.text and "s2" in caplog.text
+
+
+# ── 2026-11-07: what Hermes loads is what was deployed ───────────────────────
+
+def _registered(monkeypatch):
+    hooks, tools = [], []
+    ctx = type("Ctx", (), {"register_hook": lambda s, n, cb: hooks.append(n),
+                           "register_tool": lambda s, **kw: tools.append(kw["name"])})()
+    monkeypatch.setattr(hp, "install_press_forwarder", lambda: False)
+    hp.register(ctx)
+    return hooks, tools
+
+
+def test_the_manifest_declares_every_hook_and_tool_register_adds(monkeypatch):
+    """pre_llm_call was registered but missing from plugin.yaml, so the manifest misdescribed the plugin."""
+    import yaml
+    m = yaml.safe_load((Path(hp.__file__).parent / "plugin.yaml").read_text())
+    hooks, tools = _registered(monkeypatch)
+    assert sorted(m["hooks"]) == sorted(m["provides_hooks"]) == sorted(hooks)
+    assert sorted(m["provides_tools"]) == sorted(tools)
+
+
+def test_the_load_check_fails_on_a_second_copy_and_a_missing_hook(tmp_path):
+    """A backup folder inside ~/.hermes/plugins/ loaded instead of the deployed copy (2026-11-07)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("vl", Path(hp.__file__).parent / "verify_loaded.py")
+    vl = importlib.util.module_from_spec(spec); spec.loader.exec_module(vl)
+    plugins = tmp_path / "plugins"
+    for d in ("datacore", "datacore.bak"):
+        (plugins / d).mkdir(parents=True)
+        (plugins / d / "plugin.yaml").write_text("name: datacore\n")
+    good = str(plugins / "datacore" / "__init__.py")
+    want = ["pre_tool_call", "pre_llm_call", "on_session_start"]
+    problems = vl.problems(plugins, good, {h: 1 for h in want}, want)
+    assert any("datacore.bak" in p for p in problems)
+    (plugins / "datacore.bak" / "plugin.yaml").unlink()
+    assert vl.problems(plugins, good, {h: 1 for h in want}, want) == []
+    assert any("pre_llm_call" in p for p in vl.problems(plugins, good, {"pre_tool_call": 1}, want))
+    assert any("loaded from" in p for p in vl.problems(plugins, str(tmp_path / "x.py"), {h: 1 for h in want}, want))
+
+
+# ── 2026-11-07 dry runs: Winston's filing shapes ─────────────────────────────
+
+@pytest.fixture()
+def filing(as_tris, tmp_path, monkeypatch):
+    import types
+    space = tmp_path / "2-datacore" / ".datacore"
+    space.mkdir(parents=True)
+    (space.parent / "org").mkdir()
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    written = []
+
+    class FakeLog:
+        def __init__(self, space_dir, actor):
+            pass
+        def append(self, etype, payload):
+            written.append((etype, payload))
+            return types.SimpleNamespace(seq=7, hash="abc123def456")
+
+    monkeypatch.setitem(sys.modules, "ledger.events",
+                        types.SimpleNamespace(EVENT_TYPES=frozenset({"item.create", "item.update"})))
+    monkeypatch.setitem(sys.modules, "ledger.log", types.SimpleNamespace(EventLog=FakeLog))
+    monkeypatch.setitem(sys.modules, "ledger.policy", types.SimpleNamespace(
+        guarded_append=lambda log, kind, payload: log.append(kind, payload)))
+    import delegation_watch as dw
+    monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
+    monkeypatch.setattr(dw, "pauses", lambda root, **kw: {})
+    monkeypatch.setattr(hp, "_publish_soon", lambda space_dir: None)  # no real converge in tests
+    return written
+
+
+GOOD = {"title": "Incident note: agents' server disk outage", "assignee": "miles",
+        "asked_by": "gregor", "route": "do",
+        "done_when": "note at 1-tracks/ops/2026-11-07-disk-outage.md",
+        "check": "f=1-tracks/ops/2026-11-07-disk-outage.md; test -s $f && [ $(grep -c '^## ' $f) -ge 3 ] "
+                 "&& grep -qiE '[0-9]+ *(min|hour)' $f"}
+
+
+def test_fields_given_at_the_top_level_are_filed_as_the_payload(filing):
+    """Dry run 1: every field beside `type` and `space`, no `payload` -> 'payload must be a non-empty object'."""
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create", **GOOD)
+    assert out.startswith("appended item.create"), out
+    assert filing[0][1]["assignee"] == "miles" and filing[0][1]["check"].startswith("f=")
+
+
+def test_type_and_space_inside_the_payload_are_lifted_out(filing):
+    """Dry runs 1 and 2: the retry nested type and space inside payload."""
+    out = hp.ledger_append_handler(payload={"type": "item.create", "space": "2-datacore", **GOOD})
+    assert out.startswith("appended item.create"), out
+    etype, p = filing[0]
+    assert etype == "item.create" and "type" not in p and "space" not in p
+
+
+def test_a_filing_without_an_id_gets_one_and_the_reply_names_it(filing):
+    """An item.create without id is skipped by the fold: filed, and nobody would ever see it."""
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload=dict(GOOD))
+    p = filing[0][1]
+    assert p["id"].startswith("incident-note-agents-server-disk-outage-") and p["id"] in out
+
+
+def test_a_given_id_is_kept(filing):
+    hp.ledger_append_handler(space="2-datacore", type="item.create", payload={**GOOD, "id": "mine-1"})
+    assert filing[0][1]["id"] == "mine-1"
+
+
+def test_a_nested_item_create_counts_as_filed_for_the_guard(as_winston):
+    _turn(2)
+    hp.pre_tool_call("datacore_ledger_append", {"payload": {"type": "item.create", "title": "x"}},
+                     session_id="s1", turn_id="t1")
+    assert all(hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1") is None for _ in range(6))
+
+
+# 2026-11-08 dry runs: Winston spun through 11 refusals and finally filed an item
+# whose real fields sat inside {"events": [...]}: no title or assignee at the top,
+# so no dispatcher would ever pick it up.
+
+def test_a_single_event_wrapped_in_an_events_list_is_unwrapped(filing):
+    out = hp.ledger_append_handler(payload={"events": [{"type": "item.create", "space": "2-datacore",
+                                                         "payload": dict(GOOD)}]})
+    assert out.startswith("appended item.create"), out
+    assert filing[0][1]["assignee"] == "miles" and "events" not in filing[0][1]
+
+
+def test_an_events_list_inside_an_item_create_payload_is_unwrapped(filing):
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload={"events": [dict(GOOD)]})
+    assert out.startswith("appended item.create"), out
+    assert filing[0][1]["title"] == GOOD["title"]
+
+
+def test_several_events_in_one_call_are_refused_with_how_to_file(filing):
+    out = hp.ledger_append_handler(space="2-datacore", type="item.create",
+                                   payload={"events": [dict(GOOD), dict(GOOD)]})
+    assert out.startswith("Refused") and "one" in out and not filing
+
+
+def test_a_missing_type_on_a_task_shaped_payload_means_item_create(filing):
+    out = hp.ledger_append_handler(space="2-datacore", payload=dict(GOOD))
+    assert out.startswith("appended item.create"), out
+
+
+def test_a_space_written_as_a_path_is_refused_with_the_form_to_use(filing):
+    for given in ("2-datacore/", "./2-datacore", "2-datacore/1-tracks/ops"):
+        out = hp.ledger_append_handler(space=given, type="item.create", payload=dict(GOOD))
+        assert out.startswith("Refused") and '"space": "2-datacore"' in out, (given, out)
+    assert not filing
+
+
+def test_a_missing_space_is_taken_from_done_when_when_it_names_one(filing):
+    out = hp.ledger_append_handler(type="item.create",
+                                   payload={**GOOD, "done_when": "note at 2-datacore/1-tracks/ops/x.md"})
+    assert out.startswith("appended item.create to 2-datacore"), out
+
+
+def test_a_missing_space_with_no_hint_is_refused_with_an_example(filing):
+    out = hp.ledger_append_handler(type="item.create", payload=dict(GOOD))
+    assert out.startswith("Refused") and "2-datacore" in out and not filing
+
+
+def test_an_item_create_without_title_or_assignee_is_refused(filing):
+    for missing in ("title", "assignee"):
+        p = {k: v for k, v in GOOD.items() if k != missing}
+        out = hp.ledger_append_handler(space="2-datacore", type="item.create", payload=p)
+        assert out.startswith("Refused") and missing in out, (missing, out)
+    assert not filing
+
+
+def test_a_filed_request_is_published_at_once_and_a_refused_one_is_not(filing, monkeypatch):
+    """2026-11-08: Winston's filing waited for his next scheduled converge to leave the pod."""
+    sent = []
+    monkeypatch.setattr(hp, "_publish_soon", lambda space_dir: sent.append(Path(space_dir).name))
+    hp.ledger_append_handler(space="2-datacore", type="item.create", payload={**GOOD, "check": "true"})
+    assert sent == []
+    hp.ledger_append_handler(space="2-datacore", type="item.create", payload=dict(GOOD))
+    assert sent == ["2-datacore"]
+
+
+# 2026-11-08 late dry run: ten calls in a row refused "'' is not a declared event
+# type" and nothing was filed; the model repeated the same shape every time.
+
+def test_a_delegation_shaped_payload_without_a_type_is_an_item_create(filing):
+    for extra in ({}, {"route": "do"}):
+        p = {k: v for k, v in GOOD.items() if k != "title"} | {"title": "T"} | extra
+        out = hp.ledger_append_handler(payload={**p, "space": "2-datacore"})
+        assert out.startswith("appended item.create"), out
+
+
+def test_the_type_under_another_common_name_is_used(filing):
+    for key in ("event_type", "event", "kind"):
+        out = hp.ledger_append_handler(space="2-datacore", payload={**GOOD, key: "item.create"})
+        assert out.startswith("appended item.create"), (key, out)
+        assert key not in filing[-1][1]
+
+
+def test_a_typeless_payload_without_a_title_says_the_title_is_missing(filing):
+    p = {k: v for k, v in GOOD.items() if k != "title"}
+    out = hp.ledger_append_handler(space="2-datacore", payload=p)
+    assert out.startswith("Refused") and "has no title" in out and not filing
+
+
+def test_the_frame_says_earlier_sessions_do_not_mean_filing_fails_now():
+    assert "earlier session" in hp._ROUTING_FRAME.lower()
+
+
+# 2026-11-09 dry run: five calls arrived as {} -- Hermes replaces tool-call JSON
+# that does not parse (a backslash such as \d or \s, or a raw newline, inside
+# check) with "{}" -- and each got "'' is not a declared event type", so the
+# model resent the same broken call.
+
+def test_an_empty_call_says_its_json_did_not_parse_and_how_to_fix_it(filing):
+    out = hp.ledger_append_handler()
+    assert out.startswith("Refused") and "did not parse" in out and "backslash" in out
+    assert "[0-9]" in out and not filing
+
+
+def test_the_schema_asks_for_a_one_line_check_without_backslashes():
+    desc = hp.LEDGER_APPEND_SCHEMA["function"]["parameters"]["properties"]["payload"]["description"]
+    assert "backslash" in desc and "one line" in desc
+
+
+# 2026-11-09 dry runs: in two of five runs every filing call (13 and 16 of them)
+# arrived as {}, though the model's reasoning held a correct call. A check full
+# of double quotes nested inside a payload object is the hardest JSON a model
+# writes; one unescaped quote and Hermes drops the whole call. One flat tool,
+# every field a plain string, is the filing path.
+
+def test_the_delegate_tool_is_flat_strings_only():
+    props = hp.DELEGATE_SCHEMA["function"]["parameters"]["properties"]
+    assert set(hp.DELEGATE_SCHEMA["function"]["parameters"]["required"]) == {
+        "space", "title", "assignee", "done_when", "check"}
+    assert all(p["type"] == "string" for p in props.values())
+    assert "single quote" in props["check"]["description"]
+
+
+def test_delegate_files_an_item_create_for_the_owner(filing):
+    out = hp.delegate_handler(space="2-datacore", title=GOOD["title"], assignee="miles",
+                              done_when=GOOD["done_when"], check=GOOD["check"])
+    assert out.startswith("appended item.create"), out
+    etype, p = filing[0]
+    assert etype == "item.create" and p["asked_by"] == "gregor" and p["route"] == "do"
+    assert p["assignee"] == "miles" and p["check"] == GOOD["check"]
+
+
+def test_delegate_goes_through_every_filing_check(filing):
+    out = hp.delegate_handler(space="2-datacore", title="x", assignee="miles", done_when="d", check="true")
+    assert out.startswith("Refused") and not filing
+
+
+def test_an_empty_delegate_call_says_why(filing):
+    out = hp.delegate_handler()
+    assert out.startswith("Refused") and "did not parse" in out and not filing
+
+
+def test_a_delegate_call_counts_as_filed_for_the_stall_guard(as_winston):
+    _turn(2)
+    hp.pre_tool_call("datacore_delegate", {"title": "x"}, session_id="s1", turn_id="t1")
+    assert all(hp.pre_tool_call("skill_view", {}, session_id="s1", turn_id="t1") is None for _ in range(6))
+
+
+def test_the_frame_and_the_stop_name_the_delegate_tool():
+    assert "datacore_delegate" in hp._ROUTING_FRAME
+
+
+def test_the_weak_check_example_has_no_double_quote():
+    import delegation_watch as dw
+    assert '"' not in dw._CHECK_EXAMPLE

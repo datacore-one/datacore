@@ -19,7 +19,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-IDEAS = REPO / "5-plur/1-tracks/product/feature-ideas.md"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+#: The idea queue lives in the product space (install.yaml roles.product).
+IDEAS = REPO / space_for("product", REPO, "0-personal") / "1-tracks/product/feature-ideas.md"
 STALE_DEFAULT = 21
 
 

@@ -42,9 +42,15 @@ provides:
       description: "Aggregate effort estimates by focus area and state"
       handler: tools/index.js
 
+  # skills/inbox-triage/SKILL.md never existed; declarations now match the
+  # files actually shipped (2026-10-16).
   skills:
-    - name: inbox-triage
-      file: skills/inbox-triage/SKILL.md
+    - name: gtd
+      file: SKILL.md
+    - name: intent-routing
+      file: skills/intent-routing.md
+    - name: project-canvas
+      file: skills/project-canvas.md
 
   agents:
     - name: gtd-inbox-processor

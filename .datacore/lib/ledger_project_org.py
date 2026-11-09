@@ -84,7 +84,8 @@ def rendered(space: Path, *, as_of: float, state=None, remember: bool = False) -
     `remember` is the header's flip-time side effect; only the writer sets it.
     """
     if state is None:
-        state = fold(read_events(space))
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        state = authoritative_state(space)
     text = project(state, space=space.name, as_of=as_of).text
     return _with_org_header(space, space / ORG, text, remember=remember)
 
@@ -120,6 +121,15 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
             elif line.strip() and not line.startswith("#"):
                 break
     copy = space / HEADER_COPY
+    if header and remember:
+        # WATCH BEFORE THE EXISTENCE CHECK (owner decision G7, 2026-09-23).
+        # `write_org_text` on a path the transaction has never seen reads it at
+        # write time and compares the file with itself, so a writer that
+        # created the copy after `exists()` would be silently overwritten.
+        # Watching first records "absent"; such a writer then makes the write
+        # refuse as a stale overwrite. `project_space` already watches it; this
+        # makes the function safe for any serialized caller.
+        watch_file(copy)
     if header and not copy.exists() and remember:
         # WRITE ONCE. The copy is tracked; rewriting it on every cycle made
         # every host a writer of the same file and the transport conflicted
@@ -134,6 +144,9 @@ def _with_org_header(space: Path, target: Path, text: str, *, remember: bool = T
     # Remove only our generated prefix. Comments in task bodies are data.
     body = text.removeprefix(GENERATED_HEADER).splitlines()
     note = "# Generated from the ledger (Phase 1, DIP-0046). Edits here are ingested hourly; the ledger is the record."
+    import org_readonly
+    if org_readonly.enabled(space):
+        note = org_readonly.NOTE
     return "\n".join(header + [note] + body) + "\n"
 
 
@@ -210,9 +223,29 @@ def project_space(space: Path, force: bool = False, adopt_org: bool = False) -> 
         guard_projection(space, before, text)
     except ProjectionConflict as exc:
         return f"REFUSED — {exc}"
-    write_org_text(target, text)
+    import org_readonly
+    with org_readonly.regenerating():
+        write_org_text(target, text)
     write_org_text(space / STATE, base_document(text))
+    if org_readonly.enabled(space):
+        org_readonly.lock(target)  # phase F: the list is a read-only view
     return f"generated {ORG} ({text.count(chr(10))} lines)"
+
+
+def _refusal_reason(line: str) -> str:
+    """The part of a refusal automation may carry: what to reconcile, not what it says.
+
+    A refusal line can quote task titles (headings the ledger has not seen) or
+    an exception's text. The reason keeps the ledger path of a concurrent edit
+    (ids only, the same rule nightshift applies to EditConflict) and the fixed
+    wording of the guards, and drops everything a title could hide in.
+    """
+    reason = line.split("—", 1)[-1].strip()
+    if " heading(s) in " in reason:
+        return reason.split(";", 1)[0] + "; ingest first, then project"
+    if reason.startswith("cannot verify against the ledger"):
+        return "cannot verify against the ledger"
+    return reason.split("(", 1)[0].strip()[:200]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -255,7 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         status = ('refused' if line.startswith('REFUSED') else
                   'generated' if line.startswith('generated ') else 'authored')
         relative = s.relative_to(root).as_posix()
-        results.append({'space': relative, 'status': status})
+        results.append({'space': relative, 'status': status,
+                        **({'reason': _refusal_reason(line)} if status == 'refused' else {})})
         if not a.json:
             print(f"  {relative:14} {line}")
     if a.json:

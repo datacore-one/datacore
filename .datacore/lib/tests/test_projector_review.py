@@ -34,7 +34,7 @@ def test_verified_and_dismissed_still_close(tmp_path):
     log.append("item.create", {"id": "a", "title": "A", "state": "TODO"})
     log.append("item.claim", {"id": "a", "executor": "mac"})
     log.append("item.complete", {"id": "a"})
-    log.append("item.verify", {"id": "a"})
+    EventLog(sd, "pi").append("item.verify", {"id": "a"})  # verifier != completer
     log.append("item.create", {"id": "b", "title": "B", "state": "TODO"})
     log.append("item.dismiss", {"id": "b", "reason": "no longer needed", "kind": "dropped"})
     from ledger.log import read_events

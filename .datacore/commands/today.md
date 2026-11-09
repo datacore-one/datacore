@@ -40,6 +40,27 @@ The briefing tells a story in three acts:
 - **Capacity-aware** — every recommendation adjusted to Oura readiness
 - **Future-extensible** — family, personal finance, health goals will plug in naturally
 
+### One generator
+
+The `## Daily Briefing` section has ONE generator: datacore-app's
+`cos_reasoning.generate()`. The box runs it every morning (cos_morning ->
+cos_generate, origin `box`); the app runs the same function as its fallback
+when no box briefing exists (origin `app-fallback`). chief-of-staff's
+`cos_journal.py` renders that artifact into the journal. /today never composes,
+edits or appends to the section.
+
+Why: two of the briefing's rules are code inside `generate()`, and a briefing a
+model writes from this file passes neither. A decision scheduled weeks ago, or
+one naming a release older than the shipped one, is stale and is never today's
+decision (it is listed under "Stale: close or reschedule"). A count of PRs to
+merge or review must equal the count in today's GitHub triage report, or the
+sentence is dropped. On 2026-10-01 a composed briefing asked the owner to
+decide a release that had already shipped and to merge "12 green PRs" when the
+triage named one.
+
+Steps 3-14 gather context for the conversation, the standup and the post-hooks;
+what they find does not go into the `## Daily Briefing` section.
+
 ### Quick Reference
 
 | Question | Answer |
@@ -47,7 +68,7 @@ The briefing tells a story in three acts:
 | Output location? | Personal space journal: `0-personal/notes/journals/YYYY-MM-DD.md` |
 | Nightshift outputs? | `*/0-inbox/nightshift-*.md` |
 | Calendar source? | Google Calendar — multiple accounts (from `settings.local.yaml`) |
-| Market phase? | Pre-computed by nightshift cron at 05:30 UTC |
+| Market phase? | Pre-computed by a timer on the executor host → `[N]-trading/0-inbox/reports/market-phase/market-phase-YYYY-MM-DD.md` (the trading space named in the registry); filed to `1-tracks/trading/reports/` after the briefing |
 | What DIPs govern this? | DIP-0009 (GTD), DIP-0011 (Nightshift) |
 
 ### Cron Schedule (nightshift server, UTC)
@@ -55,60 +76,50 @@ The briefing tells a story in three acts:
 | Time | CEST | Job |
 |------|------|-----|
 | 05:30 | 07:30 | `/analyze-market-phase` — trading signals for briefing |
-| 06:00 | 08:00 | `/today` — morning briefing generation |
+| — | — | `/today` on nightshift: timer disabled since 2026-09-07; the box generates the briefing (see One generator) |
 
 ---
 
 ## Step 1: Create Tracked Checklist
 
-**Before doing anything else**, create a tracked task list for each step.
+**Before doing anything else**, start the run's checklist with the Datacore step
+tracker. It works the same in every harness (Claude Code with or without its own
+task tools, any MCP client, Hermes/OpenClaw agents, unattended runs), because the
+checklist lives in today's personal journal, not in the harness.
 
-Use `TaskCreate` to create one task per step:
+```bash
+python3 .datacore/lib/command_steps.py resume today     # an unfinished run from earlier today? continue it
+python3 .datacore/lib/command_steps.py start today      # otherwise: writes every "## Step N" below as "- [ ]"
+python3 .datacore/lib/command_steps.py tick <run_id> 1  # this step is done
+```
 
-```
-1. "Check for existing briefing"
-2. "Sync repositories"
-3. "Fetch Oura vitals"
-4. "Fetch calendar events"
-5. "Scan email"
-6. "Scan GitHub"
-7. "Collect nightshift results"
-7b. "Check overnight learning sweep"
-8. "Compute GTD health"
-9. "Fetch news headlines"
-10. "Gather trading data"
-11. "Gather venture data"
-12. "Check research outputs"
-13. "Execute inline module hooks"
-14. "Generate briefing"
-15. "Write to journal"
-16. "Generate standup drafts"
-17. "Execute post-hooks (audio + notifications)"
-18. "Verify completion"
-```
+(Over MCP: `datacore_command_steps` with `op: resume | start | tick | status`.)
+
+- `start` prints JSON with the `run_id`, the journal path and every step. Keep the
+  `run_id`; if `previous_unfinished` is not empty, say so and ask whether to resume it.
+- **Tick each step the moment it completes**: `tick <run_id> <step>` (for example
+  `tick <run_id> 8b`). A step that did not run is still ticked, with the reason:
+  `tick <run_id> 11 --note "not-applicable (no open positions)"`. Never tick ahead.
+- `status <run_id>` shows what is done and pending. Unticked lines in the journal are
+  the visible trace of an unfinished run; `resume today` picks it up.
+- **Optional mirror:** if your harness has a checklist tool (Claude Code's
+  TaskCreate/TaskUpdate), you may mirror the steps there for the on-screen view. The
+  journal checklist stays the record; never let the mirror replace a `tick`.
 
 ---
 
 ## Step 2: Check for Existing Briefing
 
-Check if today's briefing already exists:
+Check if today's briefing already exists, and whether it is a real one:
 
 ```bash
-python3 -c "
-from pathlib import Path
-from datetime import date
-today = date.today().isoformat()
-journal = Path.home() / 'Data' / '0-personal' / 'notes' / 'journals' / f'{today}.md'
-if journal.exists():
-    content = journal.read_text()
-    if '## Daily Briefing' in content:
-        print('EXISTS')
-    else:
-        print('NO_BRIEFING')
-else:
-    print('NO_FILE')
-"
+python3 .datacore/lib/briefing_state.py      # NO_FILE | NO_BRIEFING | STUB | EXISTS
 ```
+
+`STUB` is a `## Daily Briefing` without its narrative sections (Good Morning,
+The World), e.g. the chief-of-staff agent's fallback when its writer's draft was
+withheld (only a raw "Facts" list). Checking for the heading alone called that
+EXISTS and would have skipped the briefing entirely.
 
 **If EXISTS (incremental mode):**
 1. Pull repos (quick sync only — step 3)
@@ -118,8 +129,12 @@ else:
 5. Skip to step 16 (standup generation) — this is always interactive
 6. Start interactive session
 
-**If NO_BRIEFING or NO_FILE:**
-Proceed with full briefing generation (step 3 onward).
+**If STUB, NO_BRIEFING or NO_FILE:**
+Run Step 16 now: it puts the one generator's briefing into the journal (and
+generates it with `cos_reasoning.generate()` when today has none). Then continue
+with step 3 to gather context for the conversation. A STUB is the generator's
+own plain-facts fallback; Step 16 replaces it only with a newer artifact from
+the same generator, never with text composed here.
 
 ---
 
@@ -134,8 +149,8 @@ python3 .datacore/lib/ledger_transport.py converge --space . # root repo
 
 **NEVER use `git stash`, `git pull --rebase`, or `--autostash`.** When an
 autostash pop conflicts, the stash is silently kept and the work is stranded
-invisibly — 10 orphaned stashes accumulated May–Jun 2026 (ENG-2026-0729-009)
-and 29 more blocked briefing delivery for three days (2026-08-03). This step
+invisibly — orphaned stashes have accumulated for weeks and blocked briefing
+delivery for days. This step
 itself used to say `pull --rebase --autostash` two lines under that warning.
 
 One transport does every repo (DIP-0046). It commits local work first —
@@ -281,15 +296,82 @@ gh pr list --author @me --json title,url,state 2>/dev/null
 gh api notifications --jq '.[] | select(.unread)' 2>/dev/null
 ```
 
+Then check sprint files against their PRs, for every space that has sprints:
+
+```bash
+python3 .datacore/lib/sprint_files.py health --space <space>   # each space with sprints
+```
+
+**The nightly GitHub triage board.** The executor agent runs the `github-triage`
+skill overnight: public repos and private repos in separate runs. It commits
+`0-personal/content/reports/github-triage/<date>-<scope>.{md,board.json}`. For each board
+file dated today, render it locally and open it:
+
+```bash
+python3 .datacore/skills/github-triage/triage_board.py render 0-personal/content/reports/github-triage/<date>-<scope>.board.json
+open <printed path>
+```
+
+In the briefing, give one line per scope: the report's first "do first" item,
+the number of decisions, and the board path. If no board for today exists, say
+the nightly triage did not deliver and name the log
+(`~/.datacore/state/github-triage/<date>-<scope>.log` on the nightshift host).
+Never publish the board anywhere.
+
+**Never quote a sprint item's `state` as fact without this.** A briefing once
+named sprint items as open blockers "in review" whose PRs had merged months
+earlier. `sprint_files` reads each repo's integration
+branch (not whatever is checked out), and names expired-but-active sprints,
+in-flight items in closed sprints, and in-flight items whose PR merged. An item
+it calls stale is finished work: say the sprint file is behind, not that the
+work is blocked.
+
 ---
 
 ## Step 8: Collect Nightshift Results
 
-Check all spaces for overnight execution:
+Overnight agent work comes out through **three channels**, and the briefing reports
+all three. Reading only the first once called the night "Nothing to do" and
+missed an agent's sprint PR, a teammate's rejection of it with follow-up issues,
+and the agent's CI diagnosis on dependency PRs.
+
+**1. The `:AI:` task queue** (the overnight runner):
 - DONE tasks with :NIGHTSHIFT_COMPLETED: property in past 24h
 - REVIEW tasks needing attention
 - Output files: `*/0-inbox/nightshift-*.md`
 - Summarize with quality scores
+
+**2. Venture cadences** (the agents' scheduled jobs from each space's
+`venture.yaml`, e.g. pr-review, sprint-claim, sprint-rollover, blog-post). They
+never touch the `:AI:` queue. Each writes a run record:
+
+```bash
+ls */1-tracks/*/cadence-reports/*-$(date +%F).md */1-tracks/*/cadence-reports/*-$(date -v-1d +%F).md 2>/dev/null
+```
+
+Read each record's first section. Report what it did and anything it published
+or opened. A run that drafted, published or queued a decision is news; a clean
+skip is one word.
+
+**3. GitHub activity by agent accounts** (PRs opened, reviews, comments), and the
+humans' replies to it:
+
+```bash
+SINCE=$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+# <agent-account>: each agent GitHub account listed in registry/principals.yaml
+gh search prs --author <agent-account> --updated ">=$SINCE" --json repository,number,title,state,url
+gh search prs --commenter <agent-account> --updated ">=$SINCE" --json repository,number,title,url
+```
+
+For each agent PR, read its reviews (`gh pr view N -R repo --json reviews,comments`).
+A teammate's CHANGES_REQUESTED or a new issue filed against the agent's work leads
+the nightshift section: it means the agent's output was wrong, and that matters
+more than anything the agent says about itself.
+
+In the briefing, the Nightshift section has three lines in this order: what went
+wrong (rejected or reverted agent work), what agents shipped (PRs, posts, reports),
+and the task queue. "Nothing to do" from the runner is never the summary of the
+night unless channels 2 and 3 are empty too.
 
 ### Bot & Automated Commit Activity
 
@@ -297,7 +379,7 @@ Show what bots and automated processes committed across all spaces in the past 2
 This gives the user visibility into what changed while they weren't looking.
 
 ```bash
-# For each space directory (root, 0-personal, 1-* through 8-*):
+# For each space directory (root and every [0-9]-* space):
 git -C [space] log --since="24 hours ago" --oneline --all 2>/dev/null
 ```
 
@@ -305,8 +387,8 @@ Group commits by actor (nightshift, plur, bots) and by space. Present as a compa
 summary in the Spaces section, e.g.:
 
 ```
-**Overnight commits**: nightshift: 12 (0-personal: 6, 6-meridian: 4, 3-fds: 2) ·
-plur: 3 (5-plur: 2, 2-datacore: 1) · miles: 1 (8-firm)
+**Overnight commits**: nightshift: 12 (0-personal: 6, 3-trading: 4, 2-team: 2) ·
+bot: 3 (4-venture: 2, 2-team: 1) · executor: 1 (5-agents)
 ```
 
 Show the commit messages (abbreviated) so the user knows WHAT changed, not just counts.
@@ -380,15 +462,33 @@ Monday's assumptions after Tuesday invalidated them.
 
 Use `org_workspace_adapter.py` — never grep raw .org files.
 
+**Evidence before "overdue".** A passed date only makes a task a candidate. For
+each one, look in the journals from its date onward (and sent mail for an email
+task) for a record that it was done. Record found → list it as done, naming the
+record, and suggest closing it in org. No record → it stays overdue with "not
+recorded" written on its own line in the briefing — never "not sent" or "not done".
+
 ---
 
 ## Step 10: Fetch News Headlines
 
 ```bash
-python3 .datacore/modules/news/lib/feed_fetcher.py  # if >4h stale
+python3 .datacore/modules/news/lib/feed_fetcher.py     # always: nothing else refreshes the Mac's copy
+python3 .datacore/modules/news/lib/news_briefing.py --json   # scored items from the last 24 h, by tier
 ```
 
-Read from `.datacore/modules/news/data/headlines.json`.
+Always fetch. No job on the Mac refreshes headlines, and each host keeps its own
+copy that never syncs (`.datacore/module-data/news/` is gitignored), so the
+file is as old as the last /today run. The fetch scores every item as it stores
+it (about 20 s in all).
+
+Read the news through `news_briefing.py`, not the raw file. Its tiers hold only
+scored items from the last 24 hours. Each item's score is in `relevance_score`
+and its tier in `tier`. There are no `score` or `ai_score` keys, and reading them
+returns None for every item. If `summary.unscored` is above 0 after the fetch,
+say the scoring pass failed and quote the fetcher's "Scored this run" line.
+The store itself is `0-personal/.datacore/module-data/news/data/headlines.json`
+(`python3 .datacore/modules/news/lib/news_paths.py` prints the folder).
 
 ---
 
@@ -400,9 +500,45 @@ If trading module installed:
 python3 ~/.datacore/modules/trading/lib/gateio/today_summary.py --remote
 ```
 
-Also read market phase analysis output (pre-computed by nightshift cron at 05:30 UTC).
-Check `0-personal/0-inbox/` for market phase report. Integrate signals and
-suggestions into the briefing's trading section.
+Also read the reports waiting in the trading space's inbox. Trading reports
+arrive in `[N]-trading/0-inbox/reports/`, are included in this briefing, and are
+then filed (owner decision 2026-10-18):
+
+```bash
+python3 .datacore/lib/inbox_reports.py list --space [N]-trading
+```
+
+The market phase analysis is one of them. The `nightshift-market-phase` timer on
+the executor host computes it early each morning and publishes it to the trading
+space repo: `[N]-trading/0-inbox/reports/market-phase/market-phase-YYYY-MM-DD.md`
+(today's date). It reaches the Mac with the normal repo sync; if it is not
+there, run `git -C [N]-trading pull --ff-only` once and look again. The timer is
+its own job and does not wait for the nightshift task queue, so a paused queue
+is not a reason for it to be missing. Integrate signals and suggestions into
+the briefing's trading section, and give every other listed report a line in
+that section: what it is and what it says.
+
+Once the briefing is written to the journal, file exactly the reports you
+listed (a report that arrived meanwhile waits for tomorrow):
+
+```bash
+python3 .datacore/lib/inbox_reports.py file --space [N]-trading --to 1-tracks/trading/reports <each listed path>
+```
+
+**Learning-loop wake reports.** An agent with a nightly learning loop writes a wake
+report: what the night replayed, what it changed and why. The agents and their report
+paths are listed under `wake_reports` in `.datacore/settings.local.yaml` (private;
+`{date}` is today). Reference each in its `section` with one line: the path, and how
+many changes were applied (or "skipped" and why). Never paste a report; for a
+`local_only` entry give the path and the count only. A missing file gets the entry's
+`missing` line, or no line when that is null.
+
+If there is still no report for today, write that in the trading section:
+"No market-phase report for today yet." Add the reason when you can find it:
+`ssh nightshift journalctl -u nightshift-market-phase.service --since today`
+(read-only). A line starting `NO REPORT:` or `RETAINED:` gives it. If you cannot
+check, write "reason not verified". Never leave the market phase out without
+saying so.
 
 **IMPORTANT — Educational tone for trading data:**
 The user is learning trading. Raw monitoring jargon is NOT helpful. When presenting
@@ -481,11 +617,18 @@ three — assuming a string raises `OSError: File name too long` on the third.
 
 ## Step 15: Generate Briefing
 
-Compose the briefing sections in this order. **Every section is adjusted to the
-capacity level from Oura.** The tone is a chief of staff speaking to their
-principal — direct, personal, occasionally coaching.
+Do not write the briefing here. The one generator (`cos_reasoning.generate()`,
+see One generator) already wrote it; Step 16 puts it in the journal. This step
+reads it back: open today's `## Daily Briefing`, and use what steps 3-14
+gathered to talk the owner through it. Where they disagree (a meeting the
+briefing lacks, a count that moved since it was generated), say so in the
+conversation and add it under `## Updates since briefing`; never edit the
+briefing section.
 
 ### Briefing Structure
+
+What the generator produces, for reading it. Its prompt lives in datacore-app
+`daemon/datacored/adapters/cos_reasoning.py`; change the structure there.
 
 The goal is **inbox zero across all inboxes** (email, GitHub, GTD org).
 Data processes everything proactively — archive noise, route to org/research,
@@ -502,32 +645,32 @@ There is NO dedicated "What Data Did" section. The work is visible throughout.
 ```markdown
 ## Daily Briefing
 
-## Good Morning
+### Good Morning
 [Coach-like opening. Reference vitals, yesterday, what was handled overnight.]
 
-## The World
+### The World
 [News synthesis + market prices + trading signals. Research outputs/podcasts.]
 
-## Your Agenda
+### Your Agenda
 [What needs YOU today. Meetings + tasks + actionable emails + GitHub items.
 Everything else already handled. Capacity-adjusted.]
 
-## Spaces
+### Spaces
 [Per-space: work done + GitHub triage + priorities + venture status.]
 
-## Decisions Due
+### Decisions Due
 [Formal decisions + email decisions needing human input.]
 
-## Horizon
+### Horizon
 [This week + strategic priorities.]
 
-## Proactive Suggestions
+### Proactive Suggestions
 [Things Data can do tonight with approval. External comms = draft only.]
 
-### Metacognition
+#### Metacognition
 [Knowledge base pulse from inline hook. File counts, stubs, suggested command.]
 
-## Data's Observation
+### Data's Observation
 [Always last. Pattern analysis in Data's voice.]
 ```
 
@@ -589,11 +732,38 @@ Pattern sources: productivity, habit streaks, task trends, readiness correlation
 
 **Output location:** `0-personal/notes/journals/YYYY-MM-DD.md`
 
+The section comes from the one generator, rendered by chief-of-staff:
+
+```bash
+python3 .datacore/modules/chief-of-staff/server/lib/cos_journal.py
+```
+
+It renders today's artifact (`~/.datacore/cos/briefings/YYYY-MM-DD/app-briefing.json`,
+written by `cos_reasoning.generate()` on the box and synced, or by the app's
+fallback) into the journal, replacing the section in place. When it says there
+is no artifact for today, generate one with the same function, then run it again:
+
+```bash
+(cd 2-datacore/2-projects/datacore-app/daemon && .venv/bin/python -c "import asyncio, pathlib; from datacored.adapters import cos_reasoning as r; print(asyncio.run(r.generate(pathlib.Path.home() / 'Data'))['status'])")
+```
+
+If that does not print `ready`, the journal gets no briefing today: say so to
+the owner and name the error. Never write the section by hand.
+
 **The Daily Briefing ALWAYS goes at the top** (after frontmatter).
 
-**If file doesn't exist:** Create with frontmatter + briefing.
-**If file exists but no `## Daily Briefing`:** Insert after frontmatter.
-**If `## Daily Briefing` exists:** Replace in-place with fresh content.
+It is ONE section: `## Daily Briefing` is the only H2 the briefing writes, and every
+part of it (Good Morning, The World, Your Agenda, Spaces, Decisions Due, Horizon,
+Proactive Suggestions, Data's Observation) is an H3 inside it, as in the Briefing
+Structure above. A part written as its own H2 is a second briefing beside the first
+(MEM-45). No other H2 goes above it — not `## Daily Summary`, not an update.
+
+`cos_journal.py` does the placement: it creates the page when it is missing,
+inserts the section after the frontmatter, or replaces the existing section
+with the artifact's current content.
+
+The `## Command steps: /today (run …)` block that step 1 wrote is not part of the
+briefing: leave it where it is and never rewrite it by hand (only `tick` changes it).
 
 **After writing:** `open <journal_path>` to launch in default editor.
 
@@ -631,7 +801,7 @@ For each module with `slot: post`:
 
 | Module | What it does |
 |--------|-------------|
-| voice-terminal | Write `_spoken.txt` → Kokoro TTS → Telegram voice message |
+| voice-terminal | Write `_spoken.txt` only — **no audio send**; the chief-of-staff agent is the sole audio sender |
 | whatsapp | Push briefing notification to mobile |
 
 **Voice-terminal instructions:**
@@ -659,16 +829,20 @@ happens. Read the prompt and follow it.
      real pattern from today's report, concrete, never a generic aphorism); close.
    - Numbers as spoken words: "seventy-two", not "72".
    - End with "Your full report is on your desk" or variant.
-2. Generate audio and send:
-   ```bash
-   python3 .datacore/modules/voice-terminal/lib/speak_brief.py {date} --telegram
-   ```
+2. **Do NOT send audio.** The chief-of-staff agent's morning pipeline is the only
+   sender of the audio briefing (`voice-terminal/module.yaml`:
+   `telegram_delivery: false`). On the workstation, `speak_brief.py --telegram`
+   sends through another agent's bot, so running it here produces a second,
+   wrong-sender briefing. If the chief-of-staff audio did not arrive, say so in the
+   briefing as a problem to fix; never cover for it with a workstation send.
 
 ---
 
 ## Step 19: Verify Completion
 
-Check all steps completed. Print console summary of top 3 priorities.
+Run `python3 .datacore/lib/command_steps.py status <run_id>`. Every step except
+this one must be in `done`; go back and finish any that is `pending`, then
+`tick <run_id> 19`. Print console summary of top 3 priorities.
 
 ---
 
@@ -747,7 +921,7 @@ today:
 
 ## Output
 
-- Content written directly to journal (no user confirmation needed)
+- The one generator's briefing in the journal via `cos_journal.py` (no user confirmation needed)
 - Journal opened in default editor for review
 - Brief console summary of top 3 priorities
 - Audio briefing sent to Telegram

@@ -42,8 +42,14 @@ import sys
 # <2026-08-27 Thu ...>  or  [2026-08-27 Thu ...]
 STAMP = re.compile(r"([<\[])(\d{4})-(\d{2})-(\d{2})[ \t]+([A-Za-z]{3,9})\b")
 
-FM_DATE = re.compile(r"^date:\s*(\d{4})-(\d{2})-(\d{2})\s*$", re.M)
-FM_DAY = re.compile(r"^(day:\s*)([A-Za-z]{3,9})\s*$", re.M)
+# Frontmatter keys are searched ONLY inside the leading `---` block (see
+# frontmatter_span). Run over the whole file they paired a body line
+# "date: ..." with any later "day: ..." -- a YAML example in a code fence, say --
+# and the pre-commit gate refused the commit and `--fix` rewrote the body.
+# [ \t]* rather than \s*: \s* ran over the newline and --fix deleted it.
+FM_DATE = re.compile(r"^date:[ \t]*(\d{4})-(\d{2})-(\d{2})[ \t]*$", re.M)
+FM_DAY = re.compile(r"^(day:[ \t]*)([A-Za-z]{3,9})[ \t]*$", re.M)
+FM_CLOSE = re.compile(r"^(?:---|\.\.\.)[ \t]*$", re.M)
 
 ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -53,6 +59,22 @@ def correct_names(y: int, m: int, d: int) -> tuple[str, str]:
     """Return (abbrev, full) day names for a date, or raise ValueError."""
     idx = datetime.date(y, m, d).weekday()
     return ABBR[idx], FULL[idx]
+
+
+def frontmatter_span(text: str) -> tuple[int, int]:
+    """(start, end) of the YAML frontmatter body, or (0, 0) if there is none.
+
+    Frontmatter is a first line `---` and everything up to the next line that
+    is `---` or `...`. An unclosed block is not frontmatter.
+    """
+    first, nl, _ = text.partition("\n")
+    if not nl or first.rstrip() != "---":
+        return 0, 0
+    start = len(first) + 1
+    close = FM_CLOSE.search(text, start)
+    if not close:
+        return 0, 0
+    return start, close.start()
 
 
 def check_text(text: str, path: str) -> tuple[list[str], str]:
@@ -86,14 +108,15 @@ def check_text(text: str, path: str) -> tuple[list[str], str]:
     fixed = STAMP.sub(fix_stamp, text)
 
     # --- markdown frontmatter (date: / day:) ------------------------------
-    fm = FM_DATE.search(fixed)
+    fm_start, fm_end = frontmatter_span(fixed)
+    fm = FM_DATE.search(fixed, fm_start, fm_end) if fm_end else None
     if fm:
         try:
             abbr, full = correct_names(*(int(g) for g in fm.groups()))
         except ValueError:
             abbr = full = None
         if abbr:
-            dm = FM_DAY.search(fixed)
+            dm = FM_DAY.search(fixed, fm_start, fm_end)
             if dm and dm.group(2) not in (abbr, full):
                 if dm.group(2) in ABBR or dm.group(2) in FULL:
                     problems.append(
@@ -151,6 +174,35 @@ def staged_files() -> list[pathlib.Path]:
     ]
 
 
+def _fix_file(p: pathlib.Path):
+    """((problems, fixed), wrote) for one file under --fix, or None if unreadable.
+
+    The read and the rewrite happen under the org lock (owner decision Q12,
+    2026-09-23): `watch_file` before the read, `write_org_text` (atomic,
+    journalled) for the write, one short transaction per file. A plain
+    `write_text` here overwrote any adapter commit that landed between the
+    read and the write. Imported lazily so the pre-commit check (no --fix)
+    never needs org_transaction or org_workspace.
+    """
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import org_transaction
+
+    @org_transaction.serialized
+    def run():
+        org_transaction.watch_file(p)
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        problems, fixed = check_text(text, str(p))
+        wrote = bool(problems) and fixed != text
+        if wrote:
+            org_transaction.write_org_text(p, fixed)
+        return (problems, fixed), wrote
+
+    return run()
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     fix = "--fix" in argv
@@ -166,16 +218,19 @@ def main(argv: list[str]) -> int:
     all_problems: list[str] = []
     repaired: list[str] = []
     for p in targets:
-        try:
-            text = p.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        if fix:
+            result = _fix_file(p)
+        else:
+            try:
+                result = check_text(p.read_text(encoding="utf-8"), str(p)), False
+            except (OSError, UnicodeDecodeError):
+                result = None
+        if result is None:
             continue  # binary or unreadable — not our business
-        problems, fixed = check_text(text, str(p))
-        if problems:
-            all_problems.extend(problems)
-            if fix and fixed != text:
-                p.write_text(fixed, encoding="utf-8")
-                repaired.append(str(p))
+        (problems, _), wrote = result
+        all_problems.extend(problems)
+        if wrote:
+            repaired.append(str(p))
 
     if not all_problems:
         return 0

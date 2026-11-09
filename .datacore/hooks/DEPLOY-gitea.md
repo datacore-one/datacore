@@ -1,7 +1,7 @@
 # Deploying the Gitea pre-receive hook (DIP-0046 D5)
 
-Status: **DEPLOYED 2026-08-12, report-only**, on 0-personal, 4-forge,
-6-meridian, 7-megaphone. Three things below were WRONG in the first version of
+Status: **DEPLOYED 2026-08-12, report-only**, on the personal space and three
+team space repos. Three things below were WRONG in the first version of
 this document and were only found by deploying and proving the hook fires. The
 shell hook passes all eight cases in
 `.datacore/lib/tests/test_gitea_pre_receive.py`.
@@ -38,7 +38,7 @@ suite now targets. A hook needing an absent interpreter installs cleanly and is
 inert — the same check-strength failure as hazard 1, from another direction.
 
 **4. Gitea reports the ACCOUNT, not the actor.** `GITEA_PUSHER_NAME` is
-`gregor` for every machine, while `members.yaml` lists machine actors. The
+the one Gitea account every machine pushes as, while `members.yaml` lists machine actors. The
 server therefore cannot attribute a push to a machine, so per-actor log
 ownership is enforced CLIENT-side by
 `.datacore/lib/hooks/log_ownership_guard.py`; the server checks only that the
@@ -48,14 +48,15 @@ client hook plus config_drift watching `core.hooksPath`.
 ## Install (report-only)
 
 Gitea runs in Docker here; repositories live on the host under
-`/mnt/ssd/gitea/data/git/repositories/<owner>/<repo>.git`, owned by `gregor`.
+`/mnt/ssd/gitea/data/git/repositories/<owner>/<repo>.git`, owned by `<owner>`.
 
     scp .datacore/hooks/gitea-pre-receive.sh <gitea-host>:/tmp/
-    ssh <gitea-host> 'B=/mnt/ssd/gitea/data/git/repositories/gregor; \
-      for r in 0-personal 4-forge 6-meridian 7-megaphone; do \
+    ssh <gitea-host> 'B=/mnt/ssd/gitea/data/git/repositories/<owner>; \
+      for r in <space-repo> ...; do \
         d=$B/$r.git/hooks/pre-receive.d; \
         sudo mkdir -p $d && sudo cp /tmp/gitea-pre-receive.sh $d/50-datacore && \
-        sudo chown gregor:gregor $d/50-datacore && sudo chmod 755 $d/50-datacore; \
+        echo <account> | sudo tee $d/50-datacore.accounts >/dev/null && \
+        sudo chown <owner>:<owner> $d/50-datacore $d/50-datacore.accounts && sudo chmod 755 $d/50-datacore; \
       done'
 
 **Do not set `DATACORE_ENFORCE` yet.** Report-only writes `datacore/warn:` and
@@ -83,7 +84,7 @@ repo at a time, starting with a space that is not `0-personal`.
 ## History
 
 Deployment was blocked for a day by what looked like Gitea rejecting the Mac's
-SSH key. It was not a key problem: blackpi's USB SSD had dropped off the bus,
+SSH key. It was not a key problem: the self-hosted git server's USB SSD had dropped off the bus,
 Gitea could not read its own database, and the symptom surfaced at the client as
 `Permission denied (publickey)`. A USB controller re-bind
 (`xhci_hcd` unbind/bind) brought the disk back, `fsck -n` passed clean, and the

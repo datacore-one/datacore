@@ -21,14 +21,25 @@ MODULES_GLOB = os.path.join(DATACORE_ROOT, ".datacore", "modules", "*", "module.
 OUTPUT_PATH = os.path.join(DATACORE_ROOT, ".claude", "settings.json")
 
 
-def load_registry():
-    """Load core hooks from registry/hooks.yaml."""
+def load_registry(scope="project"):
+    """Load core hooks of one scope from registry/hooks.yaml.
+
+    scope "project" (the default; an entry without `scope`) is what this
+    composer writes into .claude/settings.json. scope "user" records hooks an
+    installer wires into ~/.claude/settings.json (installed_by names it); they
+    are listed so the registry is complete, and are never composed here.
+    """
     if not os.path.exists(REGISTRY_PATH):
         print(f"Warning: registry not found at {REGISTRY_PATH}", file=sys.stderr)
         return {}
     with open(REGISTRY_PATH) as f:
         data = yaml.safe_load(f) or {}
-    return data.get("claude_code", {})
+    selected = {}
+    for event, hooks in (data.get("claude_code") or {}).items():
+        chosen = [h for h in hooks or [] if h.get("scope", "project") == scope]
+        if chosen:
+            selected[event] = chosen
+    return selected
 
 
 def load_module_hooks():
@@ -113,6 +124,8 @@ def compose_claude_settings(merged):
                     hook_def["prompt"] = hook["prompt"]
                 if hook.get("timeout"):
                     hook_def["timeout"] = hook["timeout"]
+                if hook.get("async"):
+                    hook_def["async"] = True
                 entry["hooks"].append(hook_def)
             event_entries.append(entry)
 
@@ -140,7 +153,12 @@ def validate(merged):
                         script = part
                         break
                 if script:
-                    full_path = os.path.join(DATACORE_ROOT, script)
+                    # Portable forms ("${CLAUDE_PROJECT_DIR:-...}"/.datacore/x.py,
+                    # ~/Data/.datacore/x.py) resolve from their .datacore/ part.
+                    script = script.strip('"\'')
+                    if "/.datacore/" in script:
+                        script = script[script.index("/.datacore/") + 1:]
+                    full_path = os.path.join(DATACORE_ROOT, os.path.expanduser(script))
                     if not os.path.exists(full_path):
                         errors.append(f"[{event}] Script not found: {full_path} (declared by {hook.get('declared_by', '?')})")
 

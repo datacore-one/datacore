@@ -787,3 +787,61 @@ When creating or auditing modules, reference these as examples:
 - Follow the spec patterns exactly
 - Show the audit report before making changes
 - Reference the trading module as the gold standard
+
+---
+
+## Publishing a module — the scrub is mandatory, not advisory
+
+A module written inside a working installation absorbs its author. Not secrets —
+those the pre-push scanner already catches — but **identity**: the addresses in a
+classification rule, the colleague handles in an actor map, a real snippet left
+in a test fixture, a persona string naming the founder, a vendor domain in a
+tagging rule. None of it trips a secret scan. All of it says who wrote this.
+
+Measured on 2026-09-21, preparing five modules for release: **100 real email
+addresses**, a Stripe account id, a lawyer's domain, four colleagues by name, a
+genuine email snippet in a fixture, and a one-shot script named after a
+customer. The denylist scanner reported all five modules clean.
+
+The subtlest case is the one to internalise. A list of newsletter senders
+contains no secret and is a **behavioural fingerprint** — it says who the author
+reads. Service addresses identify just as surely as personal ones, so the rule
+is stricter than the denylist: **every address that is not already synthetic is
+replaced, service senders included.**
+
+### Before any module is made public
+
+```bash
+python3 .datacore/lib/module_publish_scrub.py <module>            # dry run: review the mapping
+python3 .datacore/lib/module_publish_scrub.py <module> --apply
+```
+
+It rewrites **tracked files only** — which is what publishes. Scanning the
+working tree instead reports files that are already gitignored and misses the
+point in both directions.
+
+Replacements preserve shape, so a newsletter rule still reads as a newsletter
+rule at `newsletter.example.com`. Sender lists ship as **examples the installing
+user replaces with their own** — a module ships code, never the author's data
+(ENG-2026-09-07-023).
+
+### Then, before pushing
+
+1. **Delete, do not scrub, anything that is user work product.** A one-shot
+   script named after a person is not module code; no amount of renaming makes
+   it so.
+2. **Flatten the history.** A clean HEAD means nothing if the data is three
+   commits back, and `git log -p` is the first thing a curious reader runs.
+3. **Re-audit the COMMIT, not the working tree.** `git show HEAD:<file>` is what
+   the world will read.
+4. **Check the repo is publishable at all**: a `LICENSE` file matching the
+   `license:` in `module.yaml`, and an install section in the README. A module
+   declaring MIT with no LICENSE file is not licensed.
+5. **Never bypass a pre-commit hook to get there.** Two of the five modules were
+   blocked on the first attempt — one by committed git conflict markers in its
+   README, one by wrong weekday names. Both were real defects that predated the
+   release work. `--no-verify` would have published both.
+
+**YOU CANNOT** flip a repository's visibility or force-push a flattened history.
+Both are irreversible and outward-facing; prepare the branch, report what the
+audit found, and let the owner trigger the publish.

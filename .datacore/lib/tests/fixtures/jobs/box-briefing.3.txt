@@ -1,0 +1,1 @@
+{"date": "2026-10-03", "mode": "llm-native", "chars": 2455, "est_seconds": 141, "reason": null}

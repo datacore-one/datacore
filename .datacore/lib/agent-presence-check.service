@@ -1,0 +1,21 @@
+# Winston's 6-hourly check: which agent has stopped checking in?
+# TEMPLATE ONLY -- nothing installs this. See agent_presence_check.py.
+#
+# Install as a user unit on Winston's host, after the space has a hub and the
+# agents' heartbeat timers call `python3 -m ledger.checkin`. The environment
+# file names the hub and the broker id of its token (DATACORE_HUB_URL,
+# DATACORE_HUB_TOKEN_ID); it holds no credential value. Alerts take this host's
+# own route (~/.datacore/alerts.yaml `command:`).
+#
+# On a cron host the same line, every 6 hours:
+#   17 */6 * * * cd $HOME/Data && python3 .datacore/lib/agent_presence_check.py check --space $HOME/Data/<space> --agents miles,tris,data,winston
+
+[Unit]
+Description=Name any agent that stopped checking in through the ledger hub
+Documentation=file:.datacore/lib/agent_presence_check.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Data
+EnvironmentFile=-%h/.config/datacore/agent-presence.env
+ExecStart=/usr/bin/python3 %h/Data/.datacore/lib/agent_presence_check.py check --space %h/Data/<space> --agents miles,tris,data,winston

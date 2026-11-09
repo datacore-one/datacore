@@ -1,0 +1,8 @@
+# fixture for box-ledger-seal-age artifact[0]
+# producer artifact: ~/.datacore/state/ledger-seal-age.log on box
+# harvested: 2026-11-01 (the producer run on dayshift over a scratch hub space; the job is not yet installed on box)
+# regex under test: ^OK \d+ hub space
+# represents: SUCCESS
+# ---
+  ok   2-datacore     sealed 0 min ago by hubd, verifies
+OK 1 hub space(s): newest seal under 60 min, by the grantor, verifies

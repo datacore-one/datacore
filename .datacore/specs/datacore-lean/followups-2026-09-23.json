@@ -1,0 +1,107 @@
+{
+  "board": "core-followups",
+  "build": "08e4dca8adc675f33c9b095d0ad1b57154e8705525cd4c19015b5591227320fc",
+  "savedAt": "2026-09-23T13:12:22.630Z",
+  "decisions": {
+    "A1": {
+      "choice": "go",
+      "note": ""
+    },
+    "A2": {
+      "choice": "go",
+      "note": ""
+    },
+    "A3": {
+      "choice": "go",
+      "note": ""
+    },
+    "A4": {
+      "choice": "go",
+      "note": ""
+    },
+    "A5": {
+      "choice": "go",
+      "note": ""
+    },
+    "A6": {
+      "choice": "after",
+      "note": ""
+    },
+    "A7": {
+      "choice": "go",
+      "note": ""
+    },
+    "A8": {
+      "choice": "edit",
+      "note": ""
+    },
+    "A9": {
+      "choice": "release",
+      "note": ""
+    },
+    "X1": {
+      "choice": "untrack",
+      "note": ""
+    },
+    "Q1": {
+      "choice": "page",
+      "note": ""
+    },
+    "Q2": {
+      "choice": "move",
+      "note": ""
+    },
+    "Q3": {
+      "choice": "strict",
+      "note": ""
+    },
+    "Q4": {
+      "choice": "exclude",
+      "note": ""
+    },
+    "Q5": {
+      "choice": "accept",
+      "note": ""
+    },
+    "Q6": {
+      "choice": "lock",
+      "note": ""
+    },
+    "Q7": {
+      "choice": "red",
+      "note": ""
+    },
+    "Q8": {
+      "choice": "fetch",
+      "note": ""
+    },
+    "Q9": {
+      "choice": "lookup",
+      "note": ""
+    },
+    "Q10": {
+      "choice": "emit",
+      "note": ""
+    },
+    "Q11": {
+      "choice": "defer",
+      "note": ""
+    },
+    "Q12": {
+      "choice": "now",
+      "note": ""
+    },
+    "Q13": {
+      "choice": "keep",
+      "note": ""
+    },
+    "Q14": {
+      "choice": "create",
+      "note": ""
+    },
+    "Q15": {
+      "choice": "fix",
+      "note": ""
+    }
+  }
+}

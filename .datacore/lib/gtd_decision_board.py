@@ -65,6 +65,9 @@ SECTIONS = [
     ("waiting", "T", "Waiting on others", "What you are waiting on, and for how long."),
     ("review", "R", "Waiting for your review",
      "Marked REVIEW: agent output or work waiting for your sign-off."),
+    ("autopass", "A", "Passes by your review rules",
+     "Your review rules let these pass: tests are green and a second model family agreed. "
+     "They are pre-set to Accept; change any you want to see again."),
     ("projects", "P", "Projects", "Open items in your projects file."),
     ("backlog", "B", "Old backlog", "TODO items open more than 30 days and never started."),
 ]
@@ -142,7 +145,7 @@ def _option(section, key, nxt, when):
         return f"Check again on {_fmt(when)}", f"Stays WAITING, with a check date of {_fmt(when)}."
     if section == "waiting" and key == "done":
         return "Got it", "Marked DONE: what you waited for arrived."
-    if section == "review" and key == "next":
+    if section in ("review", "autopass") and key == "next":
         return "Rework it", "Back to NEXT on your own list."
     table = {
         "next": ("Do next", "Marked NEXT in its current file; its old scheduled date is cleared."),
@@ -296,7 +299,8 @@ def _authority(inputs, *, require_projection=False):
         mode = phase(space) if space is not None else 0
         current = {'space': str(space) if space else None, 'phase': mode}
         if mode == 1 and path == (space / ORG).resolve():
-            state = fold(read_events(space))
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            state = authoritative_state(space)
             if require_projection and any(item.edit_conflicts for item in state.items.values()):
                 raise ValueError('unresolved ledger conflicts must be reconciled before review')
             if require_projection:
@@ -360,8 +364,10 @@ def build(args):
                 continue
             open_count += 1
             # A decision made on a board in the last week is not asked again.
+            # A REVIEW task still waits for the owner whatever was decided on
+            # it before, so it is always on the board (MEM-41).
             reviewed = _date(props.get("LAST_REVIEWED"))
-            if reviewed and (today - reviewed).days < 7:
+            if d["state"] != "REVIEW" and reviewed and (today - reviewed).days < 7:
                 quiet += 1
                 continue
             c = classify(it, today, nxt, later, is_project, is_inbox)
@@ -371,13 +377,16 @@ def build(args):
             section, ctx, keys, rec, when = c
             oid = d["id"]
             ov = overrides.get(oid or "", {})
+            # A caller may move a REVIEW row into the rule-passed section only.
+            if section == "review" and ov.get("section") == "autopass":
+                section = "autopass"
             keys = list(ov.get("options") or keys)
             rec = ov.get("rec", rec)
             if rec not in keys:
                 keys = keys[:3] + [rec]
             # Work often gets done without the task being closed; every task
-            # row can say so. (REVIEW rows already have Accept.)
-            if section != "review" and "done" not in keys:
+            # row can say so, REVIEW rows included (MEM-41).
+            if "done" not in keys:
                 keys.append("done")
             when = _date(ov.get("defer")) or when
             from ledger_project_org import phase, ORG
@@ -396,7 +405,9 @@ def build(args):
             meta += [f"{it['age']} days old" if it["age"] is not None else "age unknown"]
             if oid:
                 meta.append(oid)
-            raw[section].append({
+            meta += [red(str(m)) for m in (ov.get("meta") or [])]
+            extra = {"links": [{"text": red(str(l["text"])), "url": str(l["url"])} for l in ov["links"]]} if ov.get("links") else {}
+            raw[section].append({**extra,
                 "area": red(_area(node, path.stem)),
                 "title": red(d["heading"]),
                 "context": red(ov["why"] + " " + ctx if ov.get("why") else ctx),
@@ -721,7 +732,7 @@ def main():
     b.add_argument("--slug", required=True)
     b.add_argument("--title", required=True)
     b.add_argument("--week", help="JSON with sections that sit above the task list")
-    b.add_argument("--overrides", help="JSON {org-id: {rec, options, why, labels, consequences, defer}}")
+    b.add_argument("--overrides", help="JSON {org-id: {rec, options, why, labels, consequences, defer, meta, links, section}}; section may only move a REVIEW row to 'autopass'")
     b.add_argument("--redact", action="append", help="term replaced with 'the customer' (repeatable)")
     b.add_argument("--prefill", help="a saved <slug>.decisions.json, to revise a board")
     b.add_argument("--states", nargs="+", help="only these org states (e.g. WAITING)")

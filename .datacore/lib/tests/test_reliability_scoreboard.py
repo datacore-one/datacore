@@ -5,6 +5,10 @@ LIB = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("rs", LIB / "reliability_scoreboard.py")
 M = importlib.util.module_from_spec(spec); spec.loader.exec_module(M)
 M._unit_show = lambda unit: {}  # no systemd in the test box; each test says what the unit reports
+# Nor the host's journal: R2 reads `journalctl` before the failed-unit list, so
+# on a machine with systemd (a CI runner) the tests met that machine's own
+# failed units (podman-restart.service). A test that needs a journal sets one.
+M._journal = lambda args: ""
 
 
 def _good_box(tmp_path, day):
@@ -61,7 +65,8 @@ def test_r5_is_measured_from_the_probers_hits_when_no_probe_log_is_here(tmp_path
     day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
     (state / "cos-uptime.log").unlink()
     now = dt.datetime.fromisoformat(day).timestamp() + 8 * 3600          # 08:00 -> 32 probes expected
-    hits = "\n".join(f"Sep 05 0{i//4}:{(i%4)*15:02d}:01 bridge python[1]: INFO:     100.101.159.42:5 - \"GET /health HTTP/1.1\" 200 OK" for i in range(32))
+    hits = "\n".join(f"Sep 05 0{i//4}:{(i%4)*15:02d}:01 bridge python[1]: INFO:     100.64.0.20:5 - \"GET /health HTTP/1.1\" 200 OK" for i in range(32))
+    monkeypatch.setattr(M, "PROBER_IP", "100.64.0.20")
     monkeypatch.setattr(M, "_journal", lambda args: hits if "-u" in args else "")
     monkeypatch.setattr(M, "_failed_units", lambda: set())
     r = M.compute(day, state, cos, now=now)
@@ -126,3 +131,12 @@ def test_r6_ignores_an_ok_line_that_quotes_a_fail(tmp_path):
     (cos / "verify-daily.log").write_text(f"{day} [cos-setup] FAIL heartbeat cron scheduled\n")
     assert not M.compute(day, state, cos)["checks"]["R6"]["ok"]
 
+
+def test_r5_without_a_configured_prober_says_so_rather_than_passing(tmp_path, monkeypatch):
+    day = "2026-09-05"; state, cos = _good_box(tmp_path, day)
+    (state / "cos-uptime.log").unlink()
+    monkeypatch.setattr(M, "PROBER_IP", "")
+    monkeypatch.setattr(M, "_journal", lambda args: "anything GET /health" if "-u" in args else "")
+    monkeypatch.setattr(M, "_failed_units", lambda: set())
+    r = M.compute(day, state, cos, now=dt.datetime.fromisoformat(day).timestamp() + 8 * 3600)
+    assert not r["checks"]["R5"]["ok"] and "COS_PROBER_IP" in r["checks"]["R5"]["note"]

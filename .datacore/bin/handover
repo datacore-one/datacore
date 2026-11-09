@@ -1,0 +1,3 @@
+#!/bin/sh
+# Owner half of /handover: move a finished-up Mac session to dayshift. See lib/handover.py.
+exec python3 "$HOME/Data/.datacore/lib/handover.py" go "$@"

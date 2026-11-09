@@ -30,7 +30,9 @@
 set -uo pipefail
 
 DATA=${DATACORE_HOME:-${1:-$HOME/Data}}
-DAEMON=$DATA/2-datacore/2-projects/datacore-app/daemon
+# The app daemon lives in the install's system space (install.yaml roles.system).
+SYSTEM=${DATACORE_SYSTEM_SPACE:-$(python3 "$DATA/.datacore/lib/spaces.py" role system --root "$DATA" 2>/dev/null | head -1)}
+DAEMON=$DATA/${SYSTEM:-0-personal}/2-projects/datacore-app/daemon
 TR=$DAEMON/ops/token-refresh
 UNIT=cos-token-refresh.timer
 LOGDIR=$HOME/.datacore/cos
@@ -38,6 +40,9 @@ LOG=$LOGDIR/reconcile.log
 
 mkdir -p "$LOGDIR"
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+# Every run stamps its exit code: reconcile.log is written only on drift, so it
+# cannot show that the job runs at all (job contract box-reconcile-timers).
+trap 'printf "%s rc=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$?" > "$LOGDIR/reconcile.last-run"' EXIT
 
 # Healthy: unit file present, enabled, timer armed. Nothing to do.
 if [ -e "/etc/systemd/system/$UNIT" ] \

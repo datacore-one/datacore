@@ -1,0 +1,13 @@
+# fixture for box-knowledge-lint artifact[0]
+# producer artifact: ~/.datacore/cos/knowledge-lint.log on box
+# harvested: 2026-09-27 (local run of knowledge_lint.py --state on the mac, second run, two spaces; the box has not run the job yet -- re-harvest after its first Sunday)
+# regex under test: knowledge-lint: \d+ broken links \(0 new
+# represents: SUCCESS
+# ---
+knowledge-lint: 4-forge: 0 broken links, 4 orphans, 8 incomplete, 0 stale
+  [orphan] 3-knowledge/zettel/competitor-journalswithdragons-2026-07-17.md: Zettel 'competitor-journalswithdragons-2026-07-17' has no inbound wiki-links
+  [orphan] 3-knowledge/zettel/competitor-madeforfunction-2026-07-10.md: Zettel 'competitor-madeforfunction-2026-07-10' has no inbound wiki-links
+  [orphan] 3-knowledge/zettel/competitor-medical-advocate-subniche-2026-06-26.md: Zettel 'competitor-medical-advocate-subniche-2026-06-26' has no inbound wiki-links
+  [orphan] ... and 1 more
+knowledge-lint: 9-practice: 0 broken links, 0 orphans, 0 incomplete, 0 stale
+2026-09-27T10:53:45 knowledge-lint: 0 broken links (0 new), 4 orphans in 2 space(s)

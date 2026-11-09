@@ -52,8 +52,25 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 
 # A claimer that is an agent. Everything else is a person, and a person's item
-# is NOT projected into the agent queue however well specified it is.
-AGENT_CLAIMER = re.compile(r"nightshift|miles|tris|agent|winston", re.I)
+# is NOT projected into the agent queue however well specified it is. Which
+# claimer strings are this install's agents is the install's own business: the
+# pattern is `sprint_sync.agent_claimer` in principals.yaml, so no agent of ours
+# is named here (INS-3). Without it, only a claimer that says it is an agent
+# (or the overnight queue) counts.
+DEFAULT_AGENT_CLAIMER = r"nightshift|agent"
+
+
+def _agent_claimer() -> re.Pattern:
+    import sys
+    lib = str(Path(__file__).resolve().parent)
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import roster
+    pattern = roster.section("sprint_sync").get("agent_claimer") or DEFAULT_AGENT_CLAIMER
+    return re.compile(str(pattern), re.I)
+
+
+AGENT_CLAIMER = _agent_claimer()
 
 PRIORITY = {"must": "A", "should": "B", "could": "C"}
 
@@ -159,7 +176,10 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
         pr = n.properties or {}
         nid = pr.get("ID") or ""
         if pr.get("SOURCE_ID") and pr.get("SPRINT") and nid.endswith("-q"):
-            have[nid] = n
+            # Keep plain values, not the NodeView: every write below bumps the
+            # file's generation and makes a held view stale (StaleNodeError
+            # on 2026-10-16, when one run both added and removed an entry).
+            have[nid] = (pr.get("SPRINT"), n.heading)
 
     added, removed, skipped_foreign = [], [], []
     for qid, w in want_by_qid.items():
@@ -180,7 +200,7 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
                 ASSIGNEE=w["assignee"],
                 SURFACE=w["surface"],
             )
-    for qid, node in have.items():
+    for qid, (owner, heading) in have.items():
         if qid in want_by_qid:
             continue
         # ONLY remove an entry whose owning sprint we actually discovered.
@@ -191,13 +211,12 @@ def sync_queue(ws, space: str, wanted: list[dict], apply: bool,
         # any sprint I found" as "not in any sprint", which would have deleted
         # 22 live queue entries on the 20:04 run. A checkout that cannot see a
         # sprint has no standing to judge its work.
-        owner = (node.properties or {}).get("SPRINT")
         if seen_sprints is not None and owner and owner not in seen_sprints:
-            skipped_foreign.append((qid, node.heading[:52], owner))
+            skipped_foreign.append((qid, heading[:52], owner))
             continue
-        removed.append((qid, node.heading[:58]))
+        removed.append((qid, heading[:58]))
         if apply:
-            ws.remove_node(node)
+            ws.remove_node(ws.find_by_id(qid))
     return added, removed, skipped_foreign
 
 
@@ -223,38 +242,32 @@ def _age_days(props: dict) -> float | None:
     return (datetime.now(timezone.utc) - newest).total_seconds() / 86400
 
 
-def discover(space: str) -> list[Path]:
-    """Every sprint.yaml under the space, ONE per sprint_id.
+def discover(space: str) -> list:
+    """Every sprint in the space, one per sprint_id — see sprint_files.discover.
 
-    Worktrees duplicate the whole tree, so `2-projects/*/sprints/*` finds the
-    same sprint once per checkout — `enterprise` and `enterprise-wt-ci-gate`
-    both matched, and every sprint appeared twice. Projecting a sprint twice is
-    harmless only by luck; deduplicate on the directory name, which is the
-    sprint id, and prefer the non-worktree path.
+    Discovery used to live here with its own glob, which saw only
+    `sprints/<id>/sprint.yaml`: the flat `sprints/2026-W27-sprint.yaml` was
+    invisible, so the 2026-09-04 retroactive close skipped it. It also read the
+    working tree, so a checkout on a feature branch hid every sprint change
+    merged to development. Both are fixed once, in sprint_files, for every
+    reader (#1577 follow-up, 2026-09-25).
     """
-    found = sorted((REPO / space).glob("2-projects/*/sprints/*/sprint.yaml"))
-    # Track-level sprints too. Work that is not in one code repo — ops, hub
-    # submissions, bizdev, statutory — has no 2-projects/ home, and filing it
-    # under a code repo's sprints/ would be a lie about where it lives.
-    # It goes under `1-tracks/<track>/sprints/` rather than a bare `sprints/`
-    # at the space root: DIP-0015 fixes the allowed root directories and the
-    # structure hook refuses a new one, correctly.
-    found += sorted((REPO / space).glob("1-tracks/*/sprints/*/sprint.yaml"))
-    best: dict[str, Path] = {}
-    for p in found:
-        key = p.parent.name
-        prev = best.get(key)
-        if prev is None or ("-wt-" in str(prev) and "-wt-" not in str(p)):
-            best[key] = p
-    return sorted(best.values())
+    import sprint_files
+
+    disc = sprint_files.discover(space)
+    for w in disc.warnings:
+        print(f"warning: {w}")
+    return disc
 
 
-def pick(space: str, want: str | None, active: bool) -> list[Path]:
-    found = discover(space)
+def pick(space: str, want: str | None, active: bool) -> list:
+    import sprint_files
+
+    disc = discover(space)
     if want:
-        hit = [p for p in found if want in str(p)]
+        hit = [s for s in disc.sprints if want in s.sprint_id or want in s.where]
         if not hit:
-            sys.exit(f"no sprint matching {want!r} under {space}/2-projects/*/sprints/")
+            sys.exit(f"no sprint matching {want!r} under {space}/")
         return hit
     if active:
         # `status: active` alone is not enough. Ten sprints from W23 to W31
@@ -262,32 +275,16 @@ def pick(space: str, want: str | None, active: bool) -> list[Path]:
         # and --active --apply would have projected every one of them into
         # tonight's queue. A sprint whose end date has passed is over whatever
         # its status field says; the field is a claim, the date is a fact.
-        from datetime import date
-
-        today = date.today()
-        out, expired = [], []
-        for p in found:
-            d = yaml.safe_load(p.read_text()) or {}
-            if d.get("status") != "active":
-                continue
-            end = (d.get("dates") or {}).get("end")
-            if isinstance(end, str):
-                try:
-                    end = date.fromisoformat(end)
-                except ValueError:
-                    end = None
-            if end and end < today:
-                expired.append((p.parent.name, end))
-                continue
-            out.append(p)
+        running, expired = sprint_files.active(disc)
         if expired:
             print(f"IGNORING {len(expired)} sprint(s) still marked active whose "
-                  f"end date has passed — close them:")
-            for name, end in sorted(expired, key=lambda x: str(x[1])):
-                print(f"   {name} ended {end} ({(today - end).days} days ago)")
+                  f"end date has passed — close them (the briefing reports these "
+                  f"via sprint_files.py health):")
+            for sf in expired:
+                print(f"   {sf.sprint_id} ended {sprint_files._end_date(sf)}")
             print()
-        return out
-    return found
+        return running
+    return disc.sprints
 
 
 def items_of(sprint: dict, include_stretch: bool) -> list[dict]:
@@ -322,10 +319,77 @@ def agent_items(sprint: dict, include_stretch: bool) -> tuple[list[dict], list[s
 
 from org_transaction import serialized
 
+#: Queue entries in these states would run; a closed entry is history, not queue.
+OPEN_ENTRY_STATES = {"TODO", "NEXT", "WAITING"}
+_ID_LINE = re.compile(r"^\s*:ID:\s*(\S+)\s*$", re.M)
+
+
+def _existing_task_ids(root: Path) -> set[str] | None:
+    """Every :ID: in every space's org files, archives included, queues excluded.
+
+    None when a space's own task file cannot be read: a missing projection is
+    not proof that every task is gone, and pruning on it would empty the queue.
+    """
+    ids: set[str] = set()
+    for org in sorted(Path(root).glob("[0-9]-*/org")):
+        for f in org.rglob("*.org"):
+            if f.name == "nightshift.org" or any(p.startswith(".") for p in f.relative_to(org).parts):
+                continue
+            try:
+                ids.update(_ID_LINE.findall(f.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                return None
+    return ids
+
+
+@serialized
+def prune_dead_entries(space: str, apply: bool, root: Path | None = None,
+                       limit: int | None = None) -> list[tuple[str, str, str]]:
+    """Remove open queue entries whose SOURCE_ID names a task that exists nowhere.
+
+    The runner refuses such an entry ("resolves to no task") and keeps refusing
+    it every run, because nothing else removes it once its sprint is over: on
+    2026-10-01 eleven 5-plur entries were refused on every run since their
+    tasks were completed. Removing it here says so once, in this output, and
+    the entry is gone. Only the queue ENTRY goes; no task is touched. An entry
+    whose task exists anywhere (another space, an archive) is left alone.
+    Returns [(entry id, source id, heading)] pruned (or, dry run, to prune).
+    """
+    root = Path(root or REPO)
+    qfile = root / space / "org" / "nightshift.org"
+    own = root / space / "org" / "next_actions.org"
+    if not qfile.exists() or not own.is_file() or not _ID_LINE.search(
+            own.read_text(encoding="utf-8", errors="replace")):
+        return []
+    existing = _existing_task_ids(root)
+    if existing is None:
+        return []
+    from org_transaction import SafeOrgWorkspace
+    ws = SafeOrgWorkspace()
+    ws.load(qfile)
+    dead = []
+    for n in ws.all_nodes():
+        pr = n.properties or {}
+        source = str(pr.get("SOURCE_ID") or "").strip()
+        if not source or n.todo not in OPEN_ENTRY_STATES or source in existing:
+            continue
+        dead.append((n, str(pr.get("ID") or ""), source))
+        if limit is not None and len(dead) >= limit:
+            break
+    if apply:
+        # One save per entry: each removal is a small edit the shrink guard
+        # (a quarter of the file) accepts; eleven at once would not be.
+        for n, _, _ in dead:
+            ws.remove_node(n)
+            ws.save(qfile)
+    return [(qid, source, n.heading[:60]) for n, qid, source in dead]
+
+
 @serialized
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--space", default="5-plur")
+    from spaces import space_for  # the product space: install.yaml roles.product
+    ap.add_argument("--space", default=space_for("product", REPO, "0-personal"))
     ap.add_argument("--sprint", help="sprint id or path fragment")
     ap.add_argument("--active", action="store_true",
                     help="every sprint whose status is 'active'")
@@ -334,14 +398,29 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="write; default is a dry run")
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero if any sprint item is underspecified")
+    ap.add_argument("--prune-limit", type=int, default=None,
+                    help="prune at most N dead queue entries (try one first)")
     args = ap.parse_args()
+
+    # Dead entries go whether or not a sprint is active: the sprint that queued
+    # them is usually over, which is exactly why nothing else removes them.
+    pruned = prune_dead_entries(args.space, args.apply, limit=args.prune_limit)
+    if pruned:
+        verb = "pruned" if args.apply else "would prune"
+        print(f"nightshift.org: {verb} {len(pruned)} queue entr{'y' if len(pruned) == 1 else 'ies'} "
+              f"whose source task no longer exists (the tasks are untouched)")
+        for qid, source, heading in pruned:
+            print(f"   x {qid} -> {source}  {heading}")
 
     paths = pick(args.space, args.sprint, args.active)
     if not paths:
-        print("no sprint selected — pass --sprint <id> or mark one status: active")
+        # run.py hides output containing "no sprint selected"; a prune must show.
+        print("no active sprint — nothing else to sync" if pruned else
+              "no sprint selected — pass --sprint <id> or mark one status: active")
         return 0
 
     from org_transaction import SafeOrgWorkspace as OrgWorkspace
+    import sprint_files
 
     org_dir = REPO / args.space / "org"
     org_files = [p for p in (org_dir / "next_actions.org", org_dir / "inbox.org",
@@ -357,13 +436,21 @@ def main() -> int:
     seen_sprints: set[str] = set()
 
     for sp in paths:
-        sprint = yaml.safe_load(sp.read_text()) or {}
-        sid = sprint.get("sprint_id") or sp.parent.name
+        sprint = sp.data
+        sid = sp.sprint_id
         seen_sprints.add(sid)
         mine, probs = agent_items(sprint, args.stretch)
         problems += [f"{sid}: {p}" for p in probs]
 
         for it in mine:
+            # An item that says someone is on it but whose PR has merged is
+            # finished work with a stale sprint file. Projecting it would queue
+            # an agent to redo it; name it instead (2026-09-25: W23 B1/B2).
+            if it.get("state") in sprint_files.IN_FLIGHT and sprint_files.pr_is_merged(it):
+                problems.append(
+                    f"{sid}: {it['id']} says {it['state']!r} but its PR ({it.get('pr')}) "
+                    f"has merged — not projected; mark the item done in the sprint file")
+                continue
             # ADOPT vs CREATE. `org: <task-id>` means the task ALREADY EXISTS —
             # someone wrote it, with its own ROADMAP/SURFACE/DONE_WHEN — and the
             # sprint is claiming it, not re-describing it. Without this the only
@@ -516,7 +603,7 @@ def main() -> int:
 
     mode = "APPLIED" if args.apply else "DRY RUN — nothing written"
     print(f"sprint_sync — {mode}")
-    print(f"sprints: {', '.join(p.parent.name for p in paths)}\n")
+    print(f"sprints: {', '.join(p.sprint_id for p in paths)}\n")
     print(f"queued (created)   {len(created)}")
     for tid, title in created[:12]:
         print(f"   + {title[:70]}")

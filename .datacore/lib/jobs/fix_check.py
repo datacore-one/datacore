@@ -22,13 +22,16 @@ check, one that a repair can satisfy by editing the thing that judges it.
 
     fix_check.py --job mac-seq-gap --machine mac --contract-sha <sha256>
 
-Exit 0 only if the contract is unchanged AND the job verifies.
+Exit 0 only if the contract is unchanged AND the job verifies. Stage "merged"
+exits WAITING_ON_OWNER (3) while the repair's pull request is open: done by the
+repairer, waiting for the owner's merge -- neither fixed nor failed.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,7 +52,8 @@ def contract_sha(job_name: str, manifest: Path) -> str | None:
     import yaml
 
     try:
-        data = yaml.safe_load(manifest.read_text()) or {}
+        from jobs.manifest import effective_doc
+        data = effective_doc(manifest) or {}
     except Exception:  # noqa: BLE001 -- an unreadable manifest is not a hash
         return None
     for job in data.get("jobs", []):
@@ -59,6 +63,56 @@ def contract_sha(job_name: str, manifest: Path) -> str | None:
     return None
 
 
+#: The judge of a repair: the contracts, and the code that reads them (AGT-6).
+#: A PR that edits any of these changed the check, not the producer.
+MANIFEST_PATHS = ("jobs/manifest.yaml", "jobs/fix_check.py", "lib/job_verify.py")
+
+#: Exit status of stage "merged" when the repairer's part is done -- a pull
+#: request names the item and is OPEN -- and only the owner's merge is missing.
+#: Not 1: ledger_claim counts a failing check as a failed attempt, and three of
+#: those dead-lettered finished repairs as "miles gave up" (NS-9, 2026-09-26).
+#: ledger_claim reads this code as "waiting for you": no attempt, no re-run.
+WAITING_ON_OWNER = 3
+
+
+def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list[str]]:
+    """The merged pull request that names `item_id`, and the files it touched.
+
+    Stage "merged" is how a repair is judged when the repairer cannot verify on
+    the failing machine: Miles runs on nightshift, fixes the producer in the
+    repository, and merges. What proves the stage is a MERGED pull request
+    whose title or body carries the item id -- not a branch, not a claim in
+    prose. The files matter for the boundary: a merge that touched the jobs
+    manifest may have repaired the check instead of the producer, and only a
+    person may decide that.
+    """
+    # OPEN is found too (owner, 2026-09-25: an agent opens the pull request and stops; the
+    # owner merges) -- found, not passed: main() decides what the pull request means.
+    q = subprocess.run([*gh, "pr", "list", "--repo", repo, "--state", "all", "--search", item_id,
+                        "--json", "number,title,body,mergedAt,url,state", "--limit", "10"],
+                       capture_output=True, text=True, timeout=60)
+    if q.returncode != 0:
+        raise RuntimeError(f"gh pr list failed: {(q.stderr or q.stdout).strip()[:200]}")
+    prs = [p for p in json.loads(q.stdout or "[]")
+           if p.get("state") in ("OPEN", "MERGED") and item_id in (p.get("title", "") + p.get("body", ""))]
+    if not prs:
+        return None, []
+    pr = sorted(prs, key=lambda p: p["number"])[-1]
+    v = subprocess.run([*gh, "pr", "view", str(pr["number"]), "--repo", repo, "--json", "files"],
+                       capture_output=True, text=True, timeout=60)
+    files = [x.get("path", "") for x in (json.loads(v.stdout or "{}").get("files") or [])] if v.returncode == 0 else []
+    return pr, files
+
+
+def _hlc_ms(iso: str | None) -> str | None:
+    """A GitHub timestamp as the HLC-shaped string recovered_since compares against."""
+    from datetime import datetime
+    try:
+        return f"{int(datetime.fromisoformat(str(iso).replace('Z', '+00:00')).timestamp() * 1000)}.0000.gh"
+    except (TypeError, ValueError):
+        return None  # undateable: recovered_since answers "not recovered"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--job", required=True)
@@ -66,7 +120,49 @@ def main() -> int:
     ap.add_argument("--contract-sha", required=True,
                     help="the job's contract hash at the moment the repair was delegated")
     ap.add_argument("--manifest", default=str(LIB / "jobs" / "manifest.yaml"))
+    ap.add_argument("--stage", choices=("verify", "merged"), default="verify",
+                    help="verify: the job passes on --machine (default); merged: a PR naming --item "
+                         "in --repo, which did not touch the jobs manifest, is merged AND the job "
+                         "has verified since (an open PR is 'waiting for you', never done)")
+    ap.add_argument("--item", help="stage merged: the repair item id the PR must name")
+    ap.add_argument("--repo", help="stage merged: OWNER/REPO the producer lives in")
     a = ap.parse_args()
+
+    if a.stage == "merged":
+        if not (a.item and a.repo):
+            print("REFUSED: --stage merged needs --item and --repo", file=sys.stderr)
+            return 2
+        try:
+            pr, files = merged_pr(a.item, a.repo)
+        except (RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(f"not yet: could not ask GitHub ({exc})", file=sys.stderr)
+            return 1
+        if pr is None:
+            print(f"not yet: no pull request in {a.repo} names {a.item}", file=sys.stderr)
+            return 1
+        touched = [p for p in files if any(p.endswith(m) for m in MANIFEST_PATHS)]
+        if touched:
+            print(f"REFUSED: {pr['url']} touched the check that judges it ({', '.join(touched)}). A "
+                  f"repair fixes the producer, not the check that caught it; changing a contract needs a "
+                  f"human.", file=sys.stderr)
+            return 1
+        # A PULL REQUEST IS NOT A REPAIR (NS-10, owner 2026-09-26). This returned 0 on an
+        # OPEN or MERGED pull request alone (the 2026-09-25 reading), so a repair whose job
+        # still failed was closed as done. The PR advances the item to "waiting for you";
+        # only the failing job's own check passing again -- job_verify's ledger record,
+        # written by the host that runs the job -- makes it fixed.
+        if pr.get("state") != "MERGED":
+            print(f"waiting for you: {pr['url']} names {a.item}; the owner merges. Not fixed until "
+                  f"{a.job} verifies again on {a.machine}.", file=sys.stderr)
+            return WAITING_ON_OWNER
+        from jobs.autofix import recovered_since
+        root = Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+        if not recovered_since(root, a.job, _hlc_ms(pr.get("mergedAt"))):
+            print(f"not yet: {pr['url']} is merged, but {a.job} has not verified on {a.machine} since. "
+                  f"A merged pull request alone is not a repair.", file=sys.stderr)
+            return 1
+        print(f"repaired: {pr['url']} merged and {a.job} has verified since, with the jobs manifest untouched")
+        return 0
 
     manifest = Path(a.manifest)
     now = contract_sha(a.job, manifest)

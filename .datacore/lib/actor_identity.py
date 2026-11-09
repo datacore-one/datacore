@@ -48,8 +48,8 @@ def _registry_dir(*, root: str | None = None, home: Path | None = None,
     directories away, and a config probe on 2026-09-19 found the same on
     nightshift and hermes. It is one defect, not three hosts' worth.
 
-    Candidates in order, first one that HAS the file:
-      1. $DATACORE_ROOT -- an explicit answer always wins.
+    An explicit $DATACORE_ROOT always wins, including an empty installation.
+    Without one, candidates are tried in order, first one that HAS the file:
       2. beside the code, for a single-tree install where they coincide.
       3. ~/Data, the documented default data root.
     Falling through to the first candidate keeps the old behaviour (and the
@@ -58,8 +58,13 @@ def _registry_dir(*, root: str | None = None, home: Path | None = None,
     """
     candidates = []
     declared = root if root is not None else os.environ.get("DATACORE_ROOT")
-    if declared:
-        candidates.append(Path(declared))
+    if declared is not None:
+        # An explicit installation is authoritative even before its first
+        # registry exists. Falling through here would read/write the developer
+        # installation's principals while bootstrapping an empty replica.
+        if not declared:
+            raise ValueError('DATACORE_ROOT must not be empty')
+        return Path(declared) / '.datacore/registry'
     candidates.append(code_root if code_root is not None else LIB.parent.parent)
     candidates.append((home or Path.home()) / "Data")
     for candidate in candidates:
@@ -84,7 +89,11 @@ class UndeclaredActor(RuntimeError):
 def _parse_env_file(p: Path) -> dict:
     out: dict[str, str] = {}
     try:
-        text = p.read_text(encoding="utf-8")
+        # errors="replace": identity is read on every attestation, and one
+        # stray non-UTF-8 byte used to raise UnicodeDecodeError out of
+        # this_actor() -- taking attestation down machine-wide
+        # (tests/test_ledger_attest.py::test_undecodable_identity_file_never_raises).
+        text = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return out
     for raw in text.splitlines():
@@ -292,6 +301,69 @@ def addressed_to(actor: str, assignee: str | None, path: Path | None = None) -> 
         return True
     mine = principal_of(actor, path)[0]
     return mine is not None and principal_of(assignee, path)[0] == mine
+
+
+def _writer_names(entry: dict, name: str) -> set[str]:
+    """The writer names a principal declares; a principal with no `writes_as` writes as itself."""
+    return {base_writer(w) for w in (entry.get("writes_as") or []) if isinstance(w, str) and w} or {name}
+
+
+def dispatch_ambiguity(assignee: str | None, path: Path | None = None) -> str | None:
+    """Why no dispatcher may claim work addressed to `assignee`, or None.
+
+    Non-None exactly when `assignee` names a principal that is not itself a
+    declared writer and that principal declares more than one writer: no single
+    writer is named, so none may take it (decision L4). The delegator must
+    address the exact writer instead.
+    """
+    if not assignee:
+        return None
+    a = base_writer(assignee)
+    ps = principals(path)
+    if a not in ps or any(a in _writer_names(e, n) for n, e in ps.items()):
+        return None
+    ws = sorted(_writer_names(ps[a], a))
+    if len(ws) == 1:
+        return None
+    return (f"addressed to principal {a}, which writes as {', '.join(ws)}; "
+            f"address one exact writer")
+
+
+def dispatchable_by(actor: str, assignee: str | None, path: Path | None = None) -> bool:
+    """May the DISPATCHER running as `actor` claim work addressed to `assignee`?
+
+    Stricter than `addressed_to`, on purpose (owner decision L4, 2026-09-23).
+    `addressed_to` accepts any writer of the assignee's principal, and the
+    policy lock is per host, so two hosts running two writers of one principal
+    (`miles` and `nightshift`) could both claim one item on their own copies of
+    the log and both run it; after convergence one completion is a no-op
+    (Lean: DatacoreSpec.LedgerPolicy.Dispatch.cross_host_race). Dispatch now
+    requires the EXACT writer named:
+
+      * no assignee                      -> True (the dispatcher refuses these
+                                            separately as addressed to nobody);
+      * the assignee is a declared writer -> only that writer (`base_writer`
+                                            equality, so a run-branch log is the
+                                            same writer);
+      * the assignee names a principal that is not itself a writer (`owner`,
+                                            who writes as `mac`) -> today's rule,
+                                            only when that principal has exactly
+                                            one writer; otherwise nobody, and
+                                            `dispatch_ambiguity` says why;
+      * an unregistered name             -> string equality, as before.
+
+    Two distinct writers therefore never both pass for one assignee
+    (Lean: `Dispatch.exact_no_race`). The gate (`ledger/policy.py`) still uses
+    `addressed_to`; this narrows only who the dispatcher OFFERS work to.
+    """
+    if not assignee:
+        return True
+    a, me = base_writer(assignee), base_writer(actor)
+    ps = principals(path)
+    if any(a in _writer_names(e, n) for n, e in ps.items()) or a not in ps:
+        return me == a
+    ws = _writer_names(ps[a], a)
+    return len(ws) == 1 and me in ws
 
 
 if __name__ == "__main__":

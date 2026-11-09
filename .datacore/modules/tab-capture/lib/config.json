@@ -5,6 +5,8 @@
     "chrome://",
     "about:",
     "chrome-extension://",
-    "devtools://"
+    "devtools://",
+    "chrome-untrusted://",
+    "view-source:"
   ]
 }

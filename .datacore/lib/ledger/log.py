@@ -59,17 +59,55 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import time
 import warnings
 from pathlib import Path
 
 from .events import EVENT_TYPES, Event, body_dict, canonical_bytes, compute_hash, from_line, to_line
-from .hlc import tick
+from .hlc import parse as parse_hlc, tick
 from .keys import ensure_keypair, sign
 from file_utils import atomic_write_text, fsync_directory
 
 
 #: An actor name becomes a filename; anything else can escape events/.
 _VALID_ACTOR = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+
+class HubSigningRequired(RuntimeError):
+    """An unsigned append in a space served by a hub; nothing was written."""
+
+
+class NotReversible(ValueError):
+    """A reversal naming a control record (owner, round 7): never written."""
+
+
+def _held_target(space_dir: Path, payload) -> "Event | None":
+    """The event a `ledger.void` names (log, seq, hash), if this space holds exactly it."""
+    if not isinstance(payload, dict) or type(payload.get("seq")) is not int or not isinstance(payload.get("log"), str):
+        return None
+    from .voids import log_stem
+    stem = log_stem(payload["log"])
+    root = Path(space_dir) / ".datacore"
+    # A telemetry log reads as "<writer>.telemetry" but lives in
+    # telemetry/<writer>.jsonl (round-7 re-check D5).
+    paths = [root / "events" / f"{stem}.jsonl"]
+    if stem.endswith(TELEMETRY_SUFFIX):
+        paths.append(root / "telemetry" / f"{stem[:-len(TELEMETRY_SUFFIX)]}.jsonl")
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = from_line(line.strip())
+            except Exception:  # noqa: BLE001 -- a damaged line is not the target
+                continue
+            # The log is the FILE's (round-7 re-check N3): a stored line does
+            # not carry its log name, and a writer may keep several logs.
+            if e.seq == payload["seq"] and e.hash == payload.get("hash"):
+                return e
+    return None
 
 
 class StaleLogError(RuntimeError):
@@ -79,6 +117,181 @@ class StaleLogError(RuntimeError):
     fact that this machine's log disagrees with the fleet's, which is exactly
     the condition an operator has to know about.
     """
+
+
+#: How far ahead of this machine's clock an HLC may be before it is treated as
+#: a wrong clock rather than a causal floor (LED-7, audit D7). One event dated
+#: 2100 used to become every writer's floor and overflow their HLC counters
+#: after nine appends.
+FUTURE_TOLERANCE_MS = 10 * 60 * 1000
+
+# ROUTINE MEASUREMENTS LIVE IN THEIR OWN LOG (LED-8, owner decision 2026-09-26).
+# 71-97% of the events in the item logs were telemetry (LS-14; 6-meridian held
+# 21k trade attests in its task log), and every task append re-read all of it
+# for its tail and causal floor. `EventLog.append` writes these types to
+# `<space>/.datacore/telemetry/<log>.jsonl` -- its own chain, own witness -- and
+# `read_events` folds them back in. Nothing already written moves: history in
+# the task logs stays where it is.
+#
+# A signed cadence record (cadence.registration / cadence.run) is NOT a routine
+# measurement: it is the evidence a duty ran (CAD-3/CAD-4), read and checked
+# per writer log, so it stays in the task log beside the work it vouches for.
+# agent.checkin (ledger.presence) is one too: 48 a day per agent.
+TELEMETRY_TYPES = frozenset({"metric.attest", "artifact.attest", "agent.checkin"})
+DUTY_METRICS = frozenset({"cadence.registration", "cadence.run"})
+
+
+def is_telemetry(type: str, payload) -> bool:
+    """Does an event of `type` with `payload` belong in the telemetry log?"""
+    if type not in TELEMETRY_TYPES:
+        return False
+    return not (type == "metric.attest" and isinstance(payload, dict)
+                and payload.get("metric") in DUTY_METRICS)
+TELEMETRY_DIR = "telemetry"
+#: The `log` a reader sees for a telemetry chain: "<stem>.telemetry", so a
+#: telemetry chain never shares a key with the same writer's task chain.
+TELEMETRY_SUFFIX = ".telemetry"
+
+
+def log_paths(space_dir: Path, name: str) -> list[Path]:
+    """Every file one writer log name may hold events in: task log, then telemetry."""
+    base = Path(space_dir) / ".datacore"
+    return [base / "events" / f"{name}.jsonl", base / TELEMETRY_DIR / f"{name}.jsonl"]
+
+
+def witness_path(log_path: Path) -> Path:
+    """The seq high-water mark of one log file (`.hash` beside it for the hash).
+
+    Task logs: `.datacore/state/seq-hwm/<log>.seq`; telemetry logs:
+    `.datacore/state/seq-hwm/telemetry/<log>.seq`, so the two chains of one
+    writer never share a witness.
+    """
+    log_path = Path(log_path)
+    hwm = log_path.parent.parent / "state" / "seq-hwm"
+    if log_path.parent.name == TELEMETRY_DIR:
+        hwm = hwm / TELEMETRY_DIR
+    return hwm / f"{log_path.stem}.seq"
+
+
+#: Where the owner's repair moves a witness and its stop record: beside
+#: seq-hwm/, outside every glob that reads it, never deleted.
+RETIRED_DIR = "seq-hwm-retired"
+#: The runbook every StaleLogError points at.
+RECOVERY_DOC = ".datacore/docs/recovery.md#stale-log-stalelogerror-the-log-was-rewound"
+
+
+def stop_path(log_path: Path) -> Path:
+    """The stop record of one log: `<witness>.stopped`, beside the witness.
+
+    Written by `append` the moment it refuses a rewound log, and it keeps
+    refusing until the log has caught up with the seq it records, or the owner
+    moves it aside (recovery.md). It exists because the witness alone was a
+    guard one `rm` could lift: on 2026-09-27 an unattended job did exactly that.
+    """
+    return witness_path(log_path).with_suffix(".stopped")
+
+
+def read_stop(log_path: Path) -> dict | None:
+    """The stop record of `log_path`, or None. An unreadable record binds at
+    an unknown seq (hwm None): only the owner's repair clears it."""
+    import json
+    p = stop_path(log_path)
+    try:
+        data = json.loads(p.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"hwm": None, "unreadable": str(p)}
+    if not isinstance(data, dict):
+        return {"hwm": None, "unreadable": str(p)}
+    try:
+        data["hwm"] = int(data.get("hwm"))
+    except (TypeError, ValueError):
+        data["hwm"] = None
+    return data
+
+
+def stale_message(path: Path, tail_seq: int, hwm: int | None, since: str = "") -> str:
+    """What a refused writer is told: the situation, and that it stops here."""
+    wrote = f"seq {hwm}" if hwm is not None else "further (its stop record is unreadable)"
+    return (f"{path.name} ends at seq {tail_seq} but this machine already wrote {wrote}"
+            f"{' (appends stopped since ' + since + ')' if since else ''}. The log was rewound "
+            f"(a bad merge, checkout or rebase) or the fleet's copies have forked; appending "
+            f"now would reuse a seq and fork the history.\n"
+            f"  STOP this job here. Do not work around it, do not touch "
+            f"{witness_path(path).parent}, and do not append again.\n"
+            f"  Record it and alert The Firm (the owner). Only the owner repairs a stale "
+            f"log, by the documented procedure: {RECOVERY_DOC}")
+
+
+def check_not_stopped(path: Path, tail_seq: int) -> Path:
+    """The rewind guard of one log file, before anything is appended to it.
+
+    Refuses (StaleLogError) while its stop record binds, or when the file's
+    tail is behind the seq this machine already wrote there (recording the
+    stop). Returns the witness path, advanced by `advance_witness` once the
+    event is on disk. Shared by EventLog.append and the hub's append (round-3
+    verdict, ignored_stop_witness): nobody appends past a stopped log."""
+    hwm_path = witness_path(path)
+    hwm = -1
+    try:
+        hwm = int(hwm_path.read_text().strip())
+        if hwm < 0:
+            raise ValueError("negative high-water mark")
+    except FileNotFoundError:
+        pass
+    except ValueError as exc:
+        # No flag reopens this (owner decision 2026-09-28): a
+        # witness that cannot be read cannot say whether history
+        # was rewound, and only the owner decides that.
+        raise CorruptLogError("invalid sequence witness; stop, alert the owner, and "
+                              f"leave it for the owner's repair ({RECOVERY_DOC})") from exc
+    # THE STOP RECORD. Nobody goes past the ledger (owner decision
+    # 2026-09-28). On 2026-09-27 an unattended job met this refusal,
+    # deleted the witness, set the then-existing override flag, and
+    # forked Winston's log -- following the exits this very message
+    # used to name. So the refusal writes a record beside the
+    # witness that keeps refusing whatever happens to the witness,
+    # and there is no flag. It lifts itself only when the log has
+    # genuinely caught up (a converge brought the events back);
+    # otherwise the owner moves it aside by recovery.md.
+    stop = read_stop(path)
+    if stop is not None:
+        bound = stop["hwm"]
+        if bound is None or tail_seq < bound:
+            raise StaleLogError(stale_message(path, tail_seq, bound, str(stop.get("at", ""))))
+        try:
+            stop_path(path).unlink()
+        except OSError:
+            pass
+    if tail_seq < hwm:
+        _record_stop(path, tail_seq, hwm)
+        raise StaleLogError(stale_message(path, tail_seq, hwm))
+    return hwm_path
+
+
+def advance_witness(hwm_path: Path, seq: int, event_hash: str) -> None:
+    """Record the seq (and hash) just written to a log, AFTER it is on disk."""
+    try:
+        hwm_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(hwm_path, str(seq))
+        # WITNESS THE HASH, NOT ONLY THE SEQ (LED-2). A seq mark
+        # catches a cut tail; it cannot see an old event edited
+        # and every later hash recomputed (audit A#2), because
+        # that forged chain is exactly as long. The hash this
+        # machine wrote at `seq` can: `check_not_rewound` compares
+        # it with the log's event at that seq. "<seq> <hash>", so
+        # a crash between the two writes leaves a witness that is
+        # still true about its own seq.
+        atomic_write_text(hwm_path.with_suffix(".hash"), f"{seq} {event_hash}")
+    except OSError as exc:
+        # The event is already durable. Report degraded rewind
+        # detection without pretending the event itself failed.
+        warnings.warn(f"event committed but sequence witness update failed ({exc.__class__.__name__})", RuntimeWarning)
+
+
+class CorruptLogWarning(UserWarning):
+    """One writer's log is damaged; its events from the bad line on are withheld."""
 
 
 class CorruptLogError(ValueError):
@@ -111,6 +324,96 @@ def _identity_file_value(key: str) -> str | None:
         pass
     return None
 
+def _record_stop(path: Path, tail_seq: int, hwm: int) -> None:
+    """Write the stop record of a refused log. Best effort: the refusal stands
+    whether or not the record could be written."""
+    import json
+    import sys as _sys
+    rec = stop_path(path)
+    if rec.exists():
+        return
+    try:
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(rec, json.dumps({
+            "log": path.name, "tail": tail_seq, "hwm": hwm,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pid": os.getpid(), "argv": " ".join(_sys.argv)[:300],
+        }, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _require_finite(value) -> None:
+    """Raise ValueError if `value` holds a NaN or an infinite float anywhere."""
+    import json
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError:
+        raise ValueError("event payload contains NaN or Infinity, which is not JSON; "
+                         "refused before stamping (encode it as null or a string)") from None
+
+
+def _require_declared(actor: str) -> None:
+    """Refuse the hostname fallback on an undeclared host (DIP-0044, L10)."""
+    import actor_identity
+    if actor == actor_identity.short_hostname():
+        # Raises UndeclaredActor, naming identity.env and the registry, when
+        # nothing declares this machine's actor; returns when something does.
+        actor_identity.this_actor(strict=True)
+
+
+#: Logs that belong to a shared role rather than to one principal
+#: (hooks/log_ownership_guard.py keeps the same set).
+SHARED_ROLE_LOGS = {"genesis"}
+
+
+#: The installation this library belongs to (<root>/.datacore/lib/ledger/log.py).
+#: Not DATACORE_ROOT: a drill points that at its scratch fleet.
+_INSTALL_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _drill_scratch(space_dir: Path) -> bool:
+    """A declared drill (DATACORE_LEDGER_DRILL=1) writing a throwaway tree
+    OUTSIDE the installation: the fleet simulations (delegation_drill,
+    phase1_drill) play every principal in a scratch space on an agent host.
+    A real space is never exempt, whatever the environment says."""
+    if os.environ.get("DATACORE_LEDGER_DRILL") != "1":
+        return False
+    try:
+        Path(space_dir).resolve().relative_to(_INSTALL_ROOT)
+        return False
+    except ValueError:
+        return True
+
+
+def _require_own_log(actor: str, space_dir: Path | None = None) -> None:
+    """Refuse a process whose DECLARED actor is an agent writing another
+    principal's log (AGT-10: only an agent's own log holds its records).
+
+    Until 2026-09-26 a script on tris's host could call
+    `EventLog(space, "miles").append(...)` and the record was written; only the
+    push guard noticed, later. Same rule as the Hermes plugin's
+    foreign_actor_write: refused only when the named writer belongs to a
+    DIFFERENT declared principal. An unknown writer name, an undeclared host
+    and a human's host (the owner's tools, migrations, tests) are left to the
+    commit/push gates; so is a declared drill's scratch tree (_drill_scratch)."""
+    import actor_identity
+    declared, _ = actor_identity.resolve()
+    if not declared or actor_identity.base_writer(actor) in SHARED_ROLE_LOGS:
+        return
+    if space_dir is not None and _drill_scratch(space_dir):
+        return
+    mine, entry = actor_identity.principal_of(declared)
+    if not mine or (entry or {}).get("kind") != "agent":
+        return
+    owner, _ = actor_identity.principal_of(actor)
+    if owner and owner != mine:
+        raise PermissionError(
+            f"refused: this process is {declared!r} (principal {mine!r}) and may not append to "
+            f"{actor!r}, which belongs to principal {owner!r}. Only an agent's own log holds its "
+            f"records (AGT-10); write as {declared!r}, or ask {owner} to record it.")
+
+
 class EventLog:
     """Append-only event log for one actor within one space.
 
@@ -141,19 +444,34 @@ class EventLog:
         registry_path: Path | None = None,
         sign: bool | None = None,
         log_name: str | None = None,
+        hub: str | None = None,
     ) -> None:
         self.space_dir = Path(space_dir)
+        # THE HUB (DIP-0034 October 2026 amendment, D and E). `None` reads the
+        # space's opt-in (ledger.hub.load_config): a hub space stamps its hub id
+        # on every event and refuses to write unsigned. A space that has not
+        # opted in is untouched: no hub field, signing as before.
+        from .hub import load_config
+        cfg = load_config(self.space_dir)
+        self.hub_required = cfg is not None
+        self.hub = (cfg.hub_id if cfg is not None else "") if hub is None else hub
+        # The signing domain (audit finding 6): in a hub space every event names
+        # its space, hub and log inside the signed body. Outside one, none.
+        self._space_id = cfg.space_id if cfg is not None and self.hub == cfg.hub_id else ""
         self.actor = actor
         self.keys_dir = keys_dir
         self.registry_path = registry_path
         # The switch lives with the identity (DIP-0044 §6): a cron or a unit
         # rarely exports it, and on 2026-09-06 three hosts had declared signing
         # in identity.env while every event they appended stayed unsigned.
+        # Signing is always on (owner, 2026-10-31; DIP-0034 amendment): only an
+        # explicit "0", in the environment or identity.env, turns it off, and a
+        # hub space refuses an unsigned writer regardless (append, below).
         if sign is None:
             env = os.environ.get("DATACORE_LEDGER_SIGN")
             if env is None:
                 env = _identity_file_value("DATACORE_LEDGER_SIGN")
-            sign = env == "1"
+            sign = env != "0"
         self.sign = sign
         # VALIDATE THE ACTOR NAME. It becomes a filename, so "../x" writes
         # <space>/x.jsonl — inside the space, but OUTSIDE events/, where
@@ -192,34 +510,129 @@ class EventLog:
                 f"digits, '-' or '_' (it becomes the log filename)"
             )
         self.log_name = name
-        self.path = self.space_dir / ".datacore" / "events" / f"{name}.jsonl"
+        self.path, self.telemetry_path = log_paths(self.space_dir, name)
         if self.sign:
             # Acceptable to do at init (keeps callers/tests hermetic): idempotent,
             # reuses an existing key rather than regenerating.
             ensure_keypair(actor, keys_dir=keys_dir, registry_path=registry_path)
 
-    def append(self, type: str, payload: dict) -> Event:
+    def path_for(self, type: str, payload=None) -> Path:
+        """The file an event is appended to (LED-8: telemetry apart)."""
+        return self.telemetry_path if is_telemetry(type, payload) else self.path
+
+    def domain_for(self, type: str, payload=None) -> str:
+        """The signing domain an event of `type` gets here ("" outside a hub space)."""
+        if not self._space_id:
+            return ""
+        from .hub_admission import signing_domain
+        chain = self.log_name + (TELEMETRY_SUFFIX if is_telemetry(type, payload) else "")
+        return signing_domain(self._space_id, self.hub, chain)
+
+    def append(self, type: str, payload: dict, after: str | None = None) -> Event:
         """Append a new event of `type` with `payload`, chained to this
-        writer's last event. Raises `ValueError` for an unknown event type.
+        writer's last event.
+
+        Refuses, before stamping and without writing anything:
+          * an unknown event type (`ValueError`);
+          * a payload holding NaN or +-Infinity (`ValueError`, decision L8);
+          * this host's short hostname as the actor when the host declares no
+            actor (`actor_identity.UndeclaredActor`, decision L10);
+          * an agent host writing as, or into the log of, another principal
+            (`PermissionError`, AGT-10; see `_require_own_log`);
+          * a conditional edit (`_merge`) the space's
+            `.datacore/ledger-edit-protocol` does not enable (`EditConflict`).
+            Where it says `2`, the edit is written as type-strict version 2
+            (decision L7; see `ledger.edits`). The caller's dict is not mutated.
+          * an unsigned event in a space served by a hub (`HubSigningRequired`).
+          * a new `ledger.void` (`ledger.voids.VoidRetired`, DIP-0034 amendment
+            of 2026-10-31: no voids; the message names the forward correction).
+
+        `after`: an HLC this event must sort after, beyond the causal floor read
+        from disk -- a writer passes the stamp of a hub lease it was granted but
+        has not yet pulled, so its completion can never fold before the lease.
         """
+        if self.hub_required and not self.sign:
+            raise HubSigningRequired(
+                f"{self.space_dir} is served by a hub: every writer signs (DIP-0034 amendment D). "
+                f"Turn signing on for {self.actor!r} (DATACORE_LEDGER_SIGN=1) before writing here.")
+        if self.hub_required and not (self.space_dir / ".datacore" / "ledger-hub.json").exists():
+            # A writer made while the config existed (round-7 re-check D7):
+            # its config has since been lost; it writes nothing more.
+            raise HubSigningRequired(f"{self.space_dir}: the hub config has gone missing since this writer "
+                                     "was opened; restore it before writing")
+        if not self.hub_required:
+            # The config is a cache of the owner's record (round-7 audit): a
+            # space whose logs record the move to a hub but whose config is
+            # lost is still a hub space. Nothing is written into it -- not
+            # unsigned, and not signed either, since without the config an
+            # event can name neither its hub nor its signing domain. One
+            # shared rule decides what counts (`ledger.hub.records_a_hub`).
+            from .hub import records_a_hub
+            if records_a_hub(self.space_dir, self.registry_path):
+                raise HubSigningRequired(
+                    f"{self.space_dir}: the ledger records the owner's hub.enable but the hub config is "
+                    "missing; restore it before writing (every event of a hub space is signed and names its hub)")
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown event type: {type!r} (expected one of {sorted(EVENT_TYPES)})")
+        # NO NEW VOIDS (DIP-0034 amendment of 2026-10-31, plan phase B): every
+        # correction is a new forward event. `ledger.void` stays a known type
+        # so the voids already in the history still read and fold. Looked up
+        # on the module at call time (one rule, one place).
+        from . import voids as _voids
+        _voids.refuse_new_void(type)
+        if type == "ledger.void" and self.hub_required:
+            # CONTROL RECORDS ARE NEVER REVERSIBLE (owner, round 7): no writer
+            # of a hub space signs a reversal of one into its log when it holds
+            # the target. A space without a hub keeps the old rule exactly
+            # (owner, 2026-10-23) until its activation.
+            from .finality import reversible
+            target = _held_target(self.space_dir, payload)
+            if target is not None and not reversible(target.type):
+                raise NotReversible(f"{target.type} is a control record and is never reversible; correct it "
+                                    "with a new forward record; nothing was written")
+        # NO NaN, NO INFINITY (owner decision L8). json writes them as the
+        # non-JSON tokens NaN/Infinity, and NaN != NaN breaks every equality
+        # the fold relies on: merge_values(NaN, NaN, x) raised "concurrent
+        # edit", so an item with a NaN field could never be dismissed cleanly.
+        # Refused here, before stamping, so nothing is written; events already
+        # on disk are untouched and hash exactly as before.
+        _require_finite(payload)
+        # WHO IS WRITING (owner decision L10). An actor equal to this host's
+        # short hostname, on a host that declares no actor, is the
+        # `this_actor()` fallback: a guess, and two undeclared hosts that share
+        # a hostname would append to one log and fork it. Refuse, naming how
+        # to declare one. A name the caller chose (a registry writer, --actor)
+        # is not a guess and is unaffected.
+        _require_declared(self.actor)
+        for name in {self.actor, self.log_name}:
+            _require_own_log(name, self.space_dir)
         if type in ('item.update', 'item.dismiss') and isinstance(payload, dict) and '_merge' in payload:
-            from .edits import require_edit_protocol
-            require_edit_protocol(self.space_dir)
+            from .edits import EditConflict, condition_version, require_edit_protocol
+            enabled = require_edit_protocol(self.space_dir)
+            # The space's protocol decides the version NEW edits carry (L7):
+            # `2` stamps the type-strict version on every conditional edit,
+            # `1` keeps version 1 and refuses a version-2 edit, which readers
+            # of this space are not yet declared able to fold.
+            version = condition_version(payload['_merge'])
+            if version == 2 and enabled < 2:
+                raise EditConflict('type-strict conditional edits require ledger-edit-protocol=2 '
+                                   'after all active readers are upgraded')
+            if version == 1 and enabled == 2:
+                payload = {**payload, '_merge': {**payload['_merge'], 'version': 2}}
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        path = self.path_for(type, payload)
+        path.parent.mkdir(parents=True, exist_ok=True)
         # "a+b": creates the file if absent, allows both read (for the tail)
         # and append-write. Concurrent O_CREAT opens of the same path are
         # safe on their own; the actual hazard -- two processes reading the
         # same "last event" and computing the same next seq/prev -- is what
         # the flock below prevents.
-        with open(self.path, "a+b") as f:
+        with open(path, "a+b") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
                 f.seek(0)
                 raw = f.read()
-                events, valid_len = _parse_log_bytes(raw, self.path)
+                events, valid_len = _parse_log_bytes(raw, path)
                 if valid_len < len(raw):
                     # Torn final line from a crash/in-flight write: the write
                     # never completed, so drop it and restore the invariant
@@ -258,48 +671,8 @@ class EventLog:
                 # been rewound?", and a branch-scoped log is a different file
                 # with its own seq run starting at 1 — under an actor-keyed
                 # mark its first append looks like a rewind of the shared log.
-                hwm_path = (self.path.parent.parent / "state" / "seq-hwm"
-                            / f"{self.log_name}.seq")
-                hwm = -1
-                try:
-                    hwm = int(hwm_path.read_text().strip())
-                    if hwm < 0:
-                        raise ValueError("negative high-water mark")
-                except FileNotFoundError:
-                    pass
-                except ValueError as exc:
-                    if os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
-                        raise CorruptLogError("invalid sequence witness; preserve it and verify history before explicit recovery") from exc
-                    hwm = -1
                 tail_seq = last.seq if last is not None else -1
-                if tail_seq < hwm and os.environ.get("DATACORE_HWM_OVERRIDE") != "1":
-                    # NAME THE RECOVERY, or the guard becomes a brick.
-                    #
-                    # This refuses appends whenever the file is behind the mark.
-                    # That is right for a rewind — but if the mark itself is
-                    # wrong (corrupted, or restored from another machine's
-                    # backup) the actor can never append again, and the first
-                    # version of this guard said only "converge first", which
-                    # does nothing when the log is ALREADY current. A safety
-                    # net that can silently become a permanent outage is worse
-                    # than the fork it prevents, because at least a fork is
-                    # repairable.
-                    #
-                    # So: state the file, the two numbers, and both exits. The
-                    # override is deliberately an env var rather than automatic
-                    # healing — clearing it is a decision about whether this
-                    # machine's log is trustworthy, and that is the operator's
-                    # call, not a heuristic's.
-                    raise StaleLogError(
-                        f"{self.path.name} ends at seq {tail_seq} but this "
-                        f"machine already wrote seq {hwm}. The log was rewound "
-                        f"(bad merge/checkout); appending now would reuse a seq "
-                        f"and fork it.\n"
-                        f"  If the log is genuinely behind: converge, then retry.\n"
-                        f"  If the mark is wrong (restored/corrupted state): "
-                        f"rm {hwm_path}\n"
-                        f"  To append once anyway: DATACORE_HWM_OVERRIDE=1"
-                    )
+                hwm_path = check_not_stopped(path, tail_seq)
 
                 if last is None:
                     seq, prev = 0, "GENESIS"
@@ -316,8 +689,8 @@ class EventLog:
                 # correct here (only the trailing actor name can differ
                 # among ties, and tick()/parse() below ignore that field).
                 floor = last.hlc if last is not None else None
-                for sibling_path in self.path.parent.glob("*.jsonl"):
-                    if sibling_path.name == self.path.name:
+                for sibling_path in path.parent.glob("*.jsonl"):
+                    if sibling_path.name == path.name:
                         continue
                     # NOTE: reads each sibling's ENTIRE file just to get its
                     # tail -- acceptable while files are small; a tail-seek
@@ -339,11 +712,24 @@ class EventLog:
                         continue
                     if sibling_events:
                         sibling_last_hlc = sibling_events[-1].hlc
+                        try:
+                            ahead = parse_hlc(sibling_last_hlc)[0] - int(time.time() * 1000)
+                        except (TypeError, ValueError, AttributeError):
+                            continue
+                        if ahead > FUTURE_TOLERANCE_MS:
+                            # A wrong clock, not causality: taking it as the
+                            # floor stalls this writer (LED-7). verify flags it.
+                            warnings.warn(f"ignoring {sibling_path.name}'s HLC {sibling_last_hlc}: "
+                                          f"{ahead // 60000} min ahead of this clock", RuntimeWarning)
+                            continue
                         if floor is None or sibling_last_hlc > floor:
                             floor = sibling_last_hlc
+                if after and (floor is None or after > floor):
+                    floor = after
                 hlc_stamp = tick(self.actor, floor)
 
-                body = body_dict(seq, hlc_stamp, self.actor, type, payload, prev)
+                body = body_dict(seq, hlc_stamp, self.actor, type, payload, prev, hub=self.hub,
+                                 domain=self.domain_for(type, payload))
                 # Signing contract: sign the BODY, never the serialized line.
                 # Opt-in (Task 1.4b): unsigned events get sig="" and never
                 # touch key material.
@@ -354,19 +740,13 @@ class EventLog:
                 f.write((to_line(event) + "\n").encode("utf-8"))
                 f.flush()
                 os.fsync(f.fileno())
-                fsync_directory(self.path.parent)
+                fsync_directory(path.parent)
                 # Record the mark only AFTER the event is on disk, so a crash
                 # between the two leaves the guard permissive rather than
                 # blocking a legitimate retry. Failure to write it is never
                 # fatal: the guard is a safety net, and losing the net must not
                 # stop the work.
-                try:
-                    hwm_path.parent.mkdir(parents=True, exist_ok=True)
-                    atomic_write_text(hwm_path, str(seq))
-                except OSError as exc:
-                    # The event is already durable. Report degraded rewind
-                    # detection without pretending the event itself failed.
-                    warnings.warn(f"event committed but sequence witness update failed ({exc.__class__.__name__})", RuntimeWarning)
+                advance_witness(hwm_path, seq, event_hash)
                 return event
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
@@ -414,21 +794,72 @@ def _parse_log_bytes(raw: bytes, path: Path) -> tuple[list[Event], int]:
     return events, valid_len
 
 
+def _parse_prefix(raw: bytes) -> list[Event]:
+    """The events before the first malformed line of a damaged log."""
+    events: list[Event] = []
+    for raw_line in raw.split(b"\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            events.append(from_line(line.decode("utf-8")))
+        except Exception:  # noqa: BLE001 -- the first bad line ends the prefix
+            break
+    return events
+
+
+def read_task_events(space_dir: Path) -> list[Event]:
+    """`read_events` without the telemetry logs: what the task fold reads.
+
+    `fold()` ignores telemetry types, so the state is identical; the reader
+    just stops parsing them (plan phase C, owner 2026-10-31: 155k telemetry
+    lines against 26k task lines in one space). Readers that need telemetry
+    (job checker, presence, scoreboard) keep `read_events` (LED-8)."""
+    return _read_logs(space_dir, telemetry=False)
+
+
 def read_events(space_dir: Path) -> list[Event]:
     """Merge every writer's `*.jsonl` file under `space_dir` into one list,
     sorted by `hlc` (ascending). Returns `[]` if the events dir is missing
     or empty. Read-only: takes no lock, never mutates a file.
 
     A torn final line (a live writer mid-flush, or a crash) is skipped
-    silently. A malformed line anywhere else raises `CorruptLogError`.
+    silently. A malformed line anywhere else is flagged (`CorruptLogWarning`,
+    naming the file and line) and that log's events from the bad line on are
+    withheld; every other log is read in full. One damaged writer log used to
+    raise `CorruptLogError` here and stop fold, projection, checkpoint and
+    policy for the WHOLE space (LED-7, audit A#15). Nothing is repaired: the
+    damage stays for verify_chain to report and an operator to address.
     """
+    return _read_logs(space_dir, telemetry=True)
+
+
+def _read_logs(space_dir: Path, *, telemetry: bool) -> list[Event]:
+    # A hub space this host's code does not support is refused, never mis-read
+    # (DIP-0034 amendment I; audit finding 17).
+    from .hub_admission import check_space_protocol
+    check_space_protocol(space_dir)
     events_dir = Path(space_dir) / ".datacore" / "events"
+    telemetry_dir = Path(space_dir) / ".datacore" / TELEMETRY_DIR
     events: list[Event] = []
-    if not events_dir.exists():
-        return events
-    for path in sorted(events_dir.glob("*.jsonl")):
+    # Task logs, then the telemetry logs folded in at read time (LED-8).
+    paths = [*(sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []),
+             *(sorted(telemetry_dir.glob("*.jsonl")) if telemetry and telemetry_dir.is_dir() else [])]
+    for path in paths:
         raw = path.read_bytes()
-        file_events, _valid_len = _parse_log_bytes(raw, path)
+        try:
+            file_events, _valid_len = _parse_log_bytes(raw, path)
+        except CorruptLogError as exc:
+            file_events = _parse_prefix(raw)
+            note = (f"{exc}; {path.name}: {len(file_events)} event(s) before it are read, "
+                    "the rest of this log is withheld")
+            warnings.warn(note, CorruptLogWarning)
+            if file_events:
+                # Carried by the last event read, as a plain attribute (never a
+                # dataclass field, like `log`): verify_events reports a chain
+                # ending in it as incomplete, so a reader that trusts only a
+                # verified chain (job attestations) still fails closed.
+                file_events[-1].damaged_after = note
         for e in file_events:
             # Which chain this event came from. A writer may own MORE THAN ONE
             # log -- datacore#148 gave a run branch its own `<actor>-run-<date>`
@@ -444,7 +875,7 @@ def read_events(space_dir: Path) -> list[Event]:
             # attribute, never a dataclass field: `to_line` serializes via
             # `asdict`, so a declared field would enter the on-disk format and
             # the hash body with it.
-            e.log = path.stem
+            e.log = path.stem if path.parent == events_dir else path.stem + TELEMETRY_SUFFIX
         events.extend(file_events)
     events.sort(key=lambda e: e.hlc)
     return events

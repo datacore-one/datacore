@@ -2,10 +2,12 @@
 """Create org-mode tasks from GitHub scan results.
 
 Reads scan output from github_scanner, determines which items are actionable,
-creates tasks in the appropriate space's next_actions.org with :AI:github: tags.
+captures tasks into the appropriate space's inbox.org with a :github: tag. Not :AI: -- that tag is the overnight queue and needs a spec
+(SURFACE, DONE_WHEN); an inbox capture has none until it is clarified. The commit
+guard refuses it, which blocked every autosave of the space (2026-09-26).
 
 Usage:
-    python3 task_creator.py --scan-file data/scan_cache.json --data-dir ~/Data --repos-file data/repos.json
+    python3 task_creator.py --scan-file <data>/scan_cache.json --data-dir ~/Data --repos-file <data>/repos.json   (<data>: python3 lib/github_paths.py)
 
 Output: JSON summary of created tasks.
 """
@@ -33,10 +35,14 @@ def _space_for_repo(repo_full_name: str, org_to_spaces: dict[str, list[str]]) ->
 
 
 def _org_file_for_space(data_dir: Path, space: str) -> Path:
-    """Get the next_actions.org path for a space."""
+    """The space's inbox.org: new tasks enter through the GTD capture point.
+
+    The adapter refuses new tasks anywhere else (single capture point), which
+    failed every GitHub-triage task silently until 2026-09-25.
+    """
     if space == "root":
-        return data_dir / "0-personal" / "org" / "next_actions.org"
-    return data_dir / space / "org" / "next_actions.org"
+        return data_dir / "0-personal" / "org" / "inbox.org"
+    return data_dir / space / "org" / "inbox.org"
 
 
 def _make_task_id(repo: str, number: int) -> str:
@@ -107,7 +113,7 @@ def create_tasks_from_scan(
         result = create_triage_task(
             org_file=org_file,
             heading=heading,
-            tags=["AI", "github"],
+            tags=["github"],
             properties=properties,
             context_body=context,
             scheduled_date=date.today(),
@@ -156,7 +162,7 @@ def create_tasks_from_scan(
         result = create_triage_task(
             org_file=org_file,
             heading=heading,
-            tags=["AI", "github"],
+            tags=["github"],
             properties=properties,
             context_body=context,
             scheduled_date=date.today(),
@@ -166,6 +172,57 @@ def create_tasks_from_scan(
             skipped += 1
         elif result.get("success"):
             created.append({"id": task_id, "heading": heading, "space": space, "type": "authored"})
+        else:
+            errors.append(f"Failed to create task for {repo}#{number}: {result.get('error')}")
+
+    # AUD-1: each open audit finding assigned to the chief of operations is
+    # captured once, addressed to him, in the space its repository belongs to.
+    assignee = scan.get("audit_assignee") or ""
+    for item in scan.get("audit_findings", []):
+        repo = item.get("repo", "")
+        number = item.get("number", 0)
+        title = item.get("title", "")
+        url = item.get("url", "")
+        space = _space_for_repo(repo, org_to_spaces)
+
+        if not space or not number:
+            continue
+
+        task_id = _make_task_id(repo, number)
+        org_file = _org_file_for_space(data_dir, space)
+
+        if not org_file.exists():
+            errors.append(f"Org file not found: {org_file}")
+            continue
+
+        heading = f"Audit finding {repo}#{number} — {title[:70]}"
+        properties = {
+            "TRIAGE_ID": task_id,
+            "TRIAGE_DATE": today,
+            "GITHUB_URL": url,
+            "GITHUB_TYPE": "audit_finding",
+            "SPACE": space,
+            "COMPLEXITY": "unknown",
+            "CONFIDENCE": "0",
+        }
+        if assignee:
+            properties["ASSIGNEE"] = assignee
+        context = (f"Filed by the weekly cross-model audit and assigned to the chief of operations: "
+                   f"{repo}#{number}: {title}\nConfirm it with a failing test before fixing.\nURL: {url}")
+
+        result = create_triage_task(
+            org_file=org_file,
+            heading=heading,
+            tags=["github", "audit"],
+            properties=properties,
+            context_body=context,
+            scheduled_date=date.today(),
+        )
+
+        if result.get("skipped"):
+            skipped += 1
+        elif result.get("success"):
+            created.append({"id": task_id, "heading": heading, "space": space, "type": "audit_finding"})
         else:
             errors.append(f"Failed to create task for {repo}#{number}: {result.get('error')}")
 
@@ -198,6 +255,8 @@ def main():
             print(f"  [mention] {item['repo']}#{item['number']}: {item['title']}")
         for item in scan.get("authored", []):
             print(f"  [authored] {item['repo']}#{item['number']}: {item['title']}")
+        for item in scan.get("audit_findings", []):
+            print(f"  [audit finding] {item['repo']}#{item['number']}: {item['title']}")
         return
 
     result = create_tasks_from_scan(scan, data_dir, org_to_spaces)

@@ -201,6 +201,48 @@ def test_checkpoint_restores_saved_full_history_without_live_logs(tmp_path):
     assert restored.items['a'].payload['org']['properties'] == {'CUSTOM': 'valuable'}
 
 
+def _with_telemetry(space, log, n=3):
+    for i in range(n):
+        log.append('artifact.attest', {'kind': 'credential.read', 'ref': f'cred-{i}', 'detail': 'x'})
+    telemetry = space / '.datacore/telemetry/writer.jsonl'
+    assert telemetry.is_file(), 'fixture: attests go to the telemetry log'
+    return telemetry
+
+
+def test_checkpoint_leaves_telemetry_out_and_still_restores(tmp_path):
+    """1-datafund, 2026-10-21: 84 of the snapshot's 101 MB were credential-read
+    attests copied from .datacore/telemetry/, which git already tracks and the
+    fold ignores. The restore point carries the task chains only."""
+    import ledger_checkpoint as checkpoint
+    from ledger.fold import fold
+    from ledger.log import read_events
+    space, log = _checkpoint_space(tmp_path)
+    _with_telemetry(space, log)
+    expected = fold(read_events(space)).state_root()
+    checkpoint.write(space)
+    saved = json.loads((checkpoint.checkpoint_paths(space)[1]).read_text())
+    assert not [k for k in saved['chains'] if '.telemetry' in k], saved['chains'].keys()
+    assert checkpoint._restore(saved, space.name).state_root() == expected
+    assert checkpoint.verify(space)[0]
+
+
+def test_old_checkpoint_holding_telemetry_is_replaced_not_refused(tmp_path):
+    """A snapshot written before the fix holds the telemetry chains; dropping
+    them is not lost history, so the next write must replace it."""
+    import ledger_checkpoint as checkpoint
+    space, log = _checkpoint_space(tmp_path)
+    telemetry = _with_telemetry(space, log)
+    checkpoint.write(space)
+    path = checkpoint.checkpoint_paths(space)[1]
+    data = json.loads(path.read_text())
+    data['chains']['writer.telemetry.jsonl'] = telemetry.read_text()
+    path.write_text(json.dumps(data, sort_keys=True) + '\n')
+    log.append('item.update', {'id': 'a', 'title': 'work after the old checkpoint'})
+    checkpoint.write(space)
+    assert '.telemetry' not in ''.join(json.loads(path.read_text())['chains'])
+    assert checkpoint.verify(space)[0]
+
+
 def test_verification_reads_saved_checkpoint_and_detects_corruption(tmp_path):
     import ledger_checkpoint as checkpoint
     space, log = _checkpoint_space(tmp_path)
@@ -296,3 +338,31 @@ def test_two_backup_writers_use_disjoint_paths(tmp_path, monkeypatch):
     monkeypatch.setenv('DATACORE_ACTOR', 'host-a')
     ok, detail = checkpoint.verify(space)
     assert ok and 'older restore point' in detail
+
+
+def test_a_checkpoint_made_stale_by_new_fold_rules_is_superseded_not_lost(tmp_path):
+    """0-personal, 2026-09-23: the formal-verification fixes changed how some
+    events fold, so the 05:35 checkpoint's chains no longer reached the root it
+    recorded, and every later write refused to replace it -- no restore point
+    could ever be written again. A stale root is superseded (and kept); a
+    tampered chain or lost history still refuses."""
+    import ledger_checkpoint as checkpoint
+    space, log = _checkpoint_space(tmp_path)
+    checkpoint.write(space)
+    path = checkpoint.checkpoint_paths(space)[1]
+    data = json.loads(path.read_text())
+    data['state_root'] = '0' * 64          # what older fold code would have recorded
+    path.write_text(json.dumps(data, sort_keys=True) + '\n')
+    assert not checkpoint.verify(space)[0]
+    log.append('item.update', {'id': 'a', 'title': 'work after the old checkpoint'})
+    checkpoint.write(space)
+    assert checkpoint.verify(space)[0]
+    kept = path.with_name('superseded-' + '0' * 16 + '.json')
+    assert json.loads(kept.read_text())['state_root'] == '0' * 64, 'the old restore point is kept'
+
+    data = json.loads(path.read_text())
+    key = next(iter(data['chains']))
+    data['chains'][key] = data['chains'][key].replace('valuable', 'corrupt')
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        checkpoint.write(space)

@@ -34,6 +34,20 @@ def watch_file(path):
 
 
 def write_org_text(path, text):
+    """Write `text` to `path` inside the current serialized transaction.
+
+    CALLERS MUST WATCH BEFORE THEY OVERWRITE (owner decision G7, 2026-09-23).
+    The stale-overwrite check compares the file with what the transaction
+    recorded when it first saw the path. If this write is that first sight,
+    the file is read at write time and compared with itself, so the check
+    always passes: an external edit made after the caller read (or checked
+    the existence of) the file is silently lost. Call `watch_file(path)`
+    (or load through `SafeOrgWorkspace.load`) BEFORE reading the file or
+    deciding to write it; the write then raises `RecoveryRequired` instead.
+    A first write to a path nobody else can create needs no watch.
+    Lean: DatacoreSpec/OrgTransaction.lean `stale_check_vacuous_first_touch`
+    and `stale_check_detects_when_watched`.
+    """
     transaction = _current.get()
     if transaction is None:
         raise RuntimeError("Org writes require a serialized transaction")
@@ -150,6 +164,11 @@ class Transaction:
         return self.files[name]
 
     def write(self, path, content):
+        if Path(path).name == "next_actions.org":
+            # Phase F: in a space with read-only lists only the projector writes
+            # the list; everyone else is refused with the adapter command.
+            from org_readonly import check_write
+            check_write(path)
         try:
             entry = self.watch(path)
             if digest(read_text(path)) != entry["current"]:
@@ -189,10 +208,16 @@ class Transaction:
             except FileExistsError:
                 # Native NOREPLACE guarantees no mutation. A competing file
                 # is not ours to roll back; do not strand the global journal.
+                # Undo BOTH appends whether or not the destination was
+                # watched before: a watched-only destination left owning
+                # [None, content] makes every later recover() see a foreign
+                # hash and raise RecoveryRequired forever (the Lean model's
+                # race_shipped_strands; race_fixed_recovers proves this).
+                src["versions"].pop()
+                dst["versions"].pop()
                 if not destination_was_watched:
                     del self.files[destination_key]
-                    src["versions"].pop()
-                    self.persist()
+                self.persist()
                 raise
             src["current"], dst["current"] = None, digest(content)
         except BaseException:
@@ -226,13 +251,28 @@ class Transaction:
             fsync_directory(self.path.parent)
 
 
-def serialized(function):
+#: Seconds `serialized` waits for the org lock unless told otherwise.
+DEFAULT_LOCK_TIMEOUT = 30
+
+
+def serialized(function=None, *, timeout=DEFAULT_LOCK_TIMEOUT):
+    """Run `function` inside the one org transaction (lock, recover, journal).
+
+    Use as `@serialized`, `serialized(fn)`, or `@serialized(timeout=2)`.
+    `timeout` is how long to wait for the lock before `TimeoutError` (owner
+    decision Q12, 2026-09-23). The default keeps the batch behaviour; a live
+    hook passes a short one instead of patching `file_lock`. A nested call
+    joins the running transaction and never waits, whatever its timeout.
+    """
+    if function is None:
+        return lambda f: serialized(f, timeout=timeout)
+
     @wraps(function)
     def run(*args, **kwargs):
         if _current.get() is not None:
             return function(*args, **kwargs)
         path = journal_path()
-        with file_lock(path, timeout=30):
+        with file_lock(path, timeout=timeout):
             recover(path)
             transaction = Transaction(path)
             token = _current.set(transaction)
@@ -321,7 +361,10 @@ class SafeOrgWorkspace(OrgWorkspace):
                                  f'{Path(existing.path).name}')
         return super().load(path)
 
-    def _safe_write(self, path, content):
+    def _safe_write(self, path, content, *, expected_delta=0):
+        # expected_delta: lines the dependency removed on purpose (a refiled
+        # subtree, org-workspace >=0.7). The shrink floor is measured against
+        # what should remain, exactly as upstream does.
         path = Path(path).resolve()
         transaction = _current.get()
         if transaction is None:
@@ -330,7 +373,8 @@ class SafeOrgWorkspace(OrgWorkspace):
             previous = read_text(path)
             if previous is not None:
                 old_lines = previous.count("\n")
-                if old_lines > 20 and content.count("\n") < int(old_lines * (1 - self._MAX_SHRINK_FRACTION)):
+                remaining = max(0, old_lines - expected_delta)
+                if old_lines > 20 and content.count("\n") < int(remaining * (1 - self._MAX_SHRINK_FRACTION)):
                     raise CatastrophicShrinkError("serialized Org output exceeds the dependency's shrink guard")
             transaction.write(path, content)
         except BaseException:

@@ -1,15 +1,29 @@
 #!/bin/bash
 # Sync Claude Code conversation logs to Datacore traces
 # Runs daily via cron — rsync only copies new/changed files
+#
+# Recursive: Claude Code writes a subagent's transcript under
+# <project>/<session>/subagents/agent-*.jsonl, not beside the session's own
+# file. A top-level-only copy (`$dir*.jsonl`) left every subagent transcript
+# out of the mirror (MEM-67: 621 missing on the mac). Only *.jsonl travels;
+# the directories that hold them are recreated, empty ones are not.
 
-DEST="$HOME/Data/0-personal/traces/claude-code"
+# TRACES_DEST: where the copy goes. The workstation's lives in the personal
+# space; a server keeps its copy beside its own state (agent_host_setup.sh).
+DEST="${TRACES_DEST:-$HOME/Data/0-personal/traces/claude-code}"
 SRC="$HOME/.claude/projects"
 
 for dir in "$SRC"/*/; do
     dirname=$(basename "$dir")
-    # Only sync dirs that have .jsonl files
-    if compgen -G "$dir"*.jsonl > /dev/null 2>&1; then
+    # Only sync dirs that hold a transcript at any depth
+    if [ -n "$(find "$dir" -name '*.jsonl' -print -quit 2>/dev/null)" ]; then
         mkdir -p "$DEST/$dirname"
-        rsync -a "$dir"*.jsonl "$DEST/$dirname/"
+        rsync -a --prune-empty-dirs --include='*/' --include='*.jsonl' --exclude='*' \
+            "$dir" "$DEST/$dirname/"
     fi
 done
+# One line per run, so a scheduled copy leaves a fresh artifact to verify
+# (the job contract reads the stamp; the cron line may not redirect output).
+line="$(date -u +%FT%TZ) sync_traces: $(find "$DEST" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ') transcript(s) in $DEST"
+echo "$line"
+mkdir -p "$HOME/.datacore/state" && echo "$line" > "$HOME/.datacore/state/sync-traces.last"

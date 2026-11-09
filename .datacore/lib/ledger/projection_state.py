@@ -18,7 +18,7 @@ import tempfile
 import time
 
 from .genesis import body_text, task_payload
-from .edits import EditConflict, merge_values, conditional_payload
+from .edits import EditConflict, merge_values, conditional_payload, require_edit_protocol, strict_equal
 from .projector import GENERATED_HEADER, project
 
 STATE = Path('.datacore/state/projection/last-rendered.json')
@@ -83,8 +83,18 @@ def snapshot(text, space):
             # resolve that: one closed task stopped 0-personal's ingest on every
             # cycle (2026-09-16). A logbook with entries in it is data and is
             # compared as before.
-            from .projector import strip_empty_logbook
+            from .projector import _clean_title_and_tags, strip_empty_logbook
             payload['org']['body'] = strip_empty_logbook(body_text(node).rstrip())
+            # Read the heading as the projector will WRITE it. A tag block the
+            # parser cannot read (one hyphen voids it) stays inside the title
+            # with no tags; the projector splits it out and replaces the bad
+            # characters. Compared raw, the file and the ledger's rendering of
+            # an untouched item differ, and for an item the base has not seen
+            # yet the merge calls that a concurrent edit on every cycle.
+            title, tags = _clean_title_and_tags(payload['title'], payload['tags'])
+            if (title, tags) != (payload['title'], payload['tags']):
+                payload['effective_tags'] = sorted(set(payload['effective_tags']) | set(tags))
+                payload['title'], payload['tags'] = title, tags
             created = node.get_property('CREATED')
             if created:
                 created = re.sub(r'^\[(\d{4}-\d{2}-\d{2})(?: [A-Za-z]{3})?\]$', r'\1', str(created))
@@ -116,17 +126,90 @@ def base_document(text):
 _changes = merge_values
 
 
+def edit_strict(space):
+    """True iff the space runs ledger-edit-protocol 2 (owner follow-up Q3).
+
+    Under protocol 2 every comparison here that decides WHETHER a field
+    changed is type-strict -- canonical JSON bytes, the same test
+    `edits.merge_values(strict=True)` applies -- so an authored edit from 1 to
+    True is proposed rather than read as "unchanged" and lost before it ever
+    reaches `conditional_payload`. Under 1, or with no/an unknown protocol
+    file, Python `==` is kept and nothing changes.
+    """
+    try:
+        return require_edit_protocol(space) == 2
+    except EditConflict:
+        return False
+
+
+def _same(a, b, strict):
+    return strict_equal(a, b) if strict else a == b
+
+
+def changed_fields(fields, existing, *, strict=False):
+    """The entries of `fields` whose value differs from `existing`'s."""
+    return {key: value for key, value in fields.items() if not _same(value, existing.get(key), strict)}
+
+
 def reconcile(space, current_text, proposed_text):
+    strict = edit_strict(space)
     current, remote = snapshot(current_text, Path(space).name), snapshot(proposed_text, Path(space).name)
     base = load_base(space)
     if base is None:
         # Existing local fields must agree before a derived cache can establish
         # its first base. Extra remote items are safe additions.
         for identity, fields in current['items'].items():
-            if remote['items'].get(identity) != fields:
+            if not _same(remote['items'].get(identity), fields, strict):
                 raise ProjectionConflict('no projection base and Org/ledger differ; reconciliation required')
         return remote
-    return _changes(base, current, remote)
+    base = _repair_stale_base(space, base, current, remote, strict)
+    return _changes(base, current, remote, strict=strict)
+
+
+REPAIRS = Path('.datacore/state/projection/base-repairs.jsonl')
+
+
+def _repair_stale_base(space, base, current, remote, strict):
+    """Repair the ancestor for items the base cannot speak for; leave the rest alone.
+
+    Ingest admits a capture to the ledger without moving the base, so the base
+    can lack an item the file and the ledger both hold, or still hold one the
+    file has moved past. If the ledger's copy has since moved on, the merge
+    reads the difference as a concurrent edit and refuses it on every cycle
+    (0-personal, 578 failures 2026-10-02..26). Only for those items does the
+    ledger win:
+      - in file and ledger, not in base, copies differ: the file's copy becomes
+        the ancestor, so the ledger's newer rendering is taken;
+      - in base and ledger, not in file, ledger changed it since the base: it
+        leaves the ancestor, so it comes back as the ledger has it.
+    A capture (not in the ledger) stays a local addition and waits for ingest;
+    a deletion of an item the ledger did not change keeps its refusal. Adopting
+    the whole file as the base (Winston's pod fix 6fc982f8) erased captures and
+    resurrected deletions. Each repair is appended to base-repairs.jsonl so the
+    owner can see which items followed the ledger.
+    """
+    items = dict(base['items'])
+    repaired = []
+    for identity in current['items'].keys() & remote['items'].keys() - items.keys():
+        if not _same(current['items'][identity], remote['items'][identity], strict):
+            items[identity] = current['items'][identity]
+            repaired.append((identity, 'base lacked it; ledger copy taken'))
+    for identity in items.keys() & remote['items'].keys() - current['items'].keys():
+        if not _same(items[identity], remote['items'][identity], strict):
+            del items[identity]
+            repaired.append((identity, 'file lacked it; ledger copy restored'))
+    if not repaired:
+        return base
+    try:
+        path = Path(space) / REPAIRS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('a', encoding='utf-8') as stream:
+            at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            for identity, action in sorted(repaired):
+                stream.write(json.dumps({'at': at, 'id': identity, 'action': action}) + '\n')
+    except OSError:
+        pass  # the record is a courtesy; the merge must not fail on it
+    return {**base, 'items': items}
 
 
 def guard_projection(space, current_text, proposed_text):
@@ -136,19 +219,26 @@ def guard_projection(space, current_text, proposed_text):
         raise ProjectionConflict('projection would remove authored preamble content')
     merged = reconcile(space, current_text, proposed_text)
     proposed = snapshot(proposed_text, Path(space).name)
-    if merged != proposed:
+    if not _same(merged, proposed, edit_strict(space)):
         raise ProjectionConflict('authored changes are not represented in the ledger; ingest first')
 
 
-def sync_generated(space, state, actor, dry_run=False):
-    """Plan all changes before emitting; stale unchanged projection fields are inert."""
+def sync_generated(space, state, actor, dry_run=False, current_text=None):
+    """Plan all changes before emitting; stale unchanged projection fields are inert.
+
+    `current_text` is the list to reconcile; by default the file on disk. The
+    read-only lists of phase F (org_readonly) pass the ledger's own rendering
+    with one adapter edit applied, so a hand edit in the file never rides along.
+    """
     from .log import EventLog, read_events
     from .fold import fold
     expected = _reviewed.get()
     if expected is not None and expected.get(str(Path(space).resolve())) != state.state_root():
         raise ProjectionConflict('reviewed ledger state changed; rebuild the decision board')
     target = Path(space) / 'org/next_actions.org'
-    current_text = target.read_text(encoding='utf-8')
+    from_file = current_text is None
+    if from_file:
+        current_text = target.read_text(encoding='utf-8')
     proposed = project(state, space=Path(space).name, as_of=time.time()).text
     # Compare against what would actually be WRITTEN, not the intermediate.
     # project() emits no in-buffer settings; ledger_project_org._with_org_header
@@ -164,12 +254,13 @@ def sync_generated(space, state, actor, dry_run=False):
         pass
     merged = reconcile(space, current_text, proposed)
     live = snapshot(proposed, Path(space).name)
+    strict = edit_strict(space)
     updates, dismissals = [], []
     for identity, fields in merged['items'].items():
         if identity not in live['items']:
             raise ProjectionConflict('new heading is not admitted to the ledger; ingest first')
         existing = live['items'][identity]
-        changed = {key: value for key, value in fields.items() if value != existing.get(key)}
+        changed = changed_fields(fields, existing, strict=strict)
         if not changed:
             continue
         if 'created' in changed:
@@ -181,7 +272,7 @@ def sync_generated(space, state, actor, dry_run=False):
         if terminal:
             kind = 'done' if changed.pop('state') == 'DONE' else 'dropped'
         if changed:
-            updates.append(conditional_payload(item, changed))
+            updates.append(conditional_payload(item, changed, version=2 if strict else 1))
         if terminal:
             # The dismissal's precondition is READ after the update lands, not
             # predicted from it. A dismissal pins the item's ENTIRE payload, and
@@ -203,17 +294,23 @@ def sync_generated(space, state, actor, dry_run=False):
             event = log.append(kind, payload)
             appended.append((payload['id'], event.hash))
             if expected is not None:
-                item = fold(read_events(space)).items[payload['id']]
+                from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+                item = authoritative_state(space).items[payload['id']]
                 if event.hash in item.edit_conflicts:
                     raise ProjectionConflict('concurrent ledger edit refused the reviewed decision; reconcile its retained event')
 
         for payload in updates:
             _emit('item.update', payload)
         for identity, kind in dismissals:
-            current_item = fold(read_events(space)).items[identity]
+            from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            current_item = authoritative_state(space).items[identity]
             _emit('item.dismiss', conditional_payload(current_item, {
-                'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True))
-        if appended:
+                'kind': kind, 'reason': 'authored terminal transition in generated Org'}, terminal=True,
+                version=2 if strict else 1))
+        if appended and from_file:
+            # Only the file can become the common ancestor. A caller's text
+            # (org_readonly's scratch) is not on disk; the projection that
+            # follows moves the base when it writes.
             _advance_base(space, current_text, appended)
     return {'dismissed': len(dismissals), 'updated': len(updates)}
 
@@ -240,7 +337,8 @@ def _advance_base(space, current_text, appended):
     from .log import read_events
     if load_base(space) is None:
         return  # no base yet: its first adoption is the projector's decision, not this one's
-    items = fold(read_events(space)).items
+    from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    items = authoritative_state(space).items
     if any(event_hash in (items[identity].edit_conflicts or {}) for identity, event_hash in appended):
         return
     path = Path(space) / STATE

@@ -92,6 +92,24 @@ def run(args: list[str], timeout: int = 180) -> tuple[int, str]:
         return 126, str(exc)
 
 
+def unlooked(rc: int, out: str) -> str:
+    """Why a helper did NOT look, or "" when it did (OPS-2).
+
+    A timeout, a helper that is not there or cannot start, and a helper that
+    died on a Python traceback (an ImportError under this interpreter, most
+    often) have seen nothing: the row is "could not check" (n-a), never FAIL
+    (a false "broken") and never ok (a false "fine").
+    """
+    if rc == 124:
+        return out.strip()[:60] or "timed out"
+    if rc in (126, 127):
+        return out.strip()[:60] or "helper could not start"
+    if rc != 0 and "Traceback (most recent call last)" in out:
+        last = next((l for l in reversed(out.strip().splitlines()) if l.strip()), "")
+        return f"helper crashed: {last.strip()[:60]}"
+    return ""
+
+
 def spaces() -> list[Path]:
     return [s.path for s in discover_spaces(ROOT)
             if (s.path / ".datacore" / "events").is_dir()]
@@ -103,13 +121,23 @@ def check_ledger(rep: Report, quick: bool) -> None:
     if not sp:
         rep.add("0034", "hash chains", None, "no space carries an event log")
         return
-    bad = []
+    # A timeout is "could not tell", never "broken". 2-datacore's 20k events
+    # took 69 s on 2026-09-26 against a 60 s limit, and the check reported a
+    # chain that verified OK as broken -- a false FAIL the morning sweep then
+    # handed to Miles as a repair.
+    bad, slow = [], []
     for s in sp:
-        rc, _ = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 60)
-        if rc != 0:
+        rc, out = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 600)
+        # Exit 3: verify ran, but this machine cannot judge every event (a
+        # writer whose verify key it lacks) -- could not check, not broken (V5).
+        if unlooked(rc, out) or rc == 3:
+            slow.append(s.name)
+        elif rc != 0:
             bad.append(s.name)
-    rep.add("0034", "hash chains", not bad,
-            f"{len(sp) - len(bad)}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else ""))
+    ok = len(sp) - len(bad) - len(slow)
+    detail = f"{ok}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else "") \
+        + (f"; not checked (timeout/crash/no key here): {', '.join(slow)}" if slow else "")
+    rep.add("0034", "hash chains", False if bad else (None if slow else True), detail)
 
     # Per-actor nonces: seq must be dense and unique WITHIN each writer's file.
     # This is the invariant that makes a merge a union — two actors both at
@@ -160,9 +188,34 @@ def check_jobs(rep: Report) -> None:
         return
     import socket
     machine = os.environ.get("DATACORE_ACTOR") or socket.gethostname().split(".")[0].lower()
+    # A host that declares no identity cannot say which of the manifest's
+    # machines it is: matching on its hostname checked a fresh install against
+    # another fleet's jobs and FAILed its first health check (INS-2).
+    if not os.environ.get("DATACORE_ACTOR"):
+        try:
+            sys.path.insert(0, str(LIB))
+            from actor_identity import resolve as _resolve_actor
+            declared = _resolve_actor()[0]
+        except Exception:  # noqa: BLE001 - cannot tell is not "undeclared"
+            declared = machine
+        if not declared:
+            rep.add("0035", f"job contracts ({machine})", None,
+                    "no identity declared for this machine -- which jobs are its own cannot be told"
+                    " (install_doctor.py names the fix)")
+            return
     rc, out = run([PY, str(jv), "--machine", machine, "--no-emit"], 200)
     failed = [l.split("'")[1] for l in out.splitlines() if "FAILED" in l and "'" in l]
     ok_line = next((l for l in out.splitlines() if l.startswith("OK")), "")
+    why = unlooked(rc, out)
+    if why:
+        rep.add("0035", f"job contracts ({machine})", None, f"could not check: {why}")
+        return
+    # "OK 0 jobs" means the verifier matched nothing for this machine (an
+    # identity nobody declared jobs for): nothing was checked, so not a pass.
+    if rc == 0 and re.match(r"OK 0 jobs\b", ok_line):
+        rep.add("0035", f"job contracts ({machine})", None,
+                f"no job declared for machine '{machine}' -- nothing checked")
+        return
     rep.add("0035", f"job contracts ({machine})", rc == 0,
             ok_line or (f"failing: {', '.join(failed)}" if failed else out.strip()[:70]))
 
@@ -246,7 +299,9 @@ def check_projection(rep: Report) -> None:
     if ck.exists():
         rc, out = run([PY, str(ck), "verify"], 250)
         last = next((l for l in reversed(out.splitlines()) if "checkpoint-verify" in l), "")
-        rep.add("0043", "checkpoint restores", rc == 0, last.strip()[:70])
+        why = unlooked(rc, out)
+        rep.add("0043", "checkpoint restores", None if why else rc == 0,
+                f"could not check: {why}" if why else last.strip()[:70])
 
 
 # ── DIP-0044: actor identity ────────────────────────────────────────────────
@@ -284,12 +339,17 @@ def check_identity(rep: Report) -> None:
     except (UnicodeError, ValueError, yaml.YAMLError):
         rep.add("0044", "actor registry", False, "invalid or ambiguous identity configuration")
         return
-    missing = [n for n, c in servers.items()
+    active = {n: c for n, c in servers.items() if not c.get('retired')}
+    missing = [n for n, c in active.items()
                if not isinstance(c['access'].get('actor'), str)
                or not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', c['access']['actor'])]
-    rep.add("0044", "every machine has an actor", not missing,
-            f"{len(servers) - len(missing)}/{len(servers)}" +
-            (f"; missing: {', '.join(missing)}" if missing else ""))
+    retired = len(servers) - len(active)
+    detail = f"{len(active) - len(missing)}/{len(active)}"
+    if retired:
+        detail += f" (+ {retired} retired)"
+    if missing:
+        detail += f"; missing: {', '.join(missing)}"
+    rep.add("0044", "every machine has an actor", not missing, detail)
     invalid = []
     for name, config in servers.items():
         access = config['access']
@@ -305,14 +365,19 @@ def check_identity(rep: Report) -> None:
 
 
 def _reviewed_commits() -> set[str]:
-    """Short hashes a human has reviewed (config/authorship-reviewed.yaml)."""
-    p = ROOT / ".datacore" / "config" / "authorship-reviewed.yaml"
-    try:
-        import yaml
-        d = yaml.safe_load(p.read_text()) or {}
-        return {str(e.get("commit", "")).strip() for e in (d.get("reviewed") or []) if e.get("commit")}
-    except Exception:  # noqa: BLE001
-        return set()
+    """Short hashes a human has reviewed: config/authorship-reviewed.yaml (the
+    shipped template) and authorship-reviewed.local.yaml beside it, where this
+    install keeps its own incidents -- gitignored, never shipped (INS-3)."""
+    out: set[str] = set()
+    for name in ("authorship-reviewed.yaml", "authorship-reviewed.local.yaml"):
+        p = ROOT / ".datacore" / "config" / name
+        try:
+            import yaml
+            d = yaml.safe_load(p.read_text()) or {}
+            out |= {str(e.get("commit", "")).strip() for e in (d.get("reviewed") or []) if e.get("commit")}
+        except Exception:  # noqa: BLE001 -- absent or unreadable: nothing reviewed there
+            continue
+    return out
 
 
 def check_writer_authorship(rep: Report) -> None:
@@ -468,16 +533,20 @@ def check_stores(rep: Report) -> None:
     2026-08-19 and 2026-09-06 with a retention sweep that nothing scheduled
     (datacore-lens#1); a ceiling here is what notices that before the disk does.
     """
-    tracked = []
+    tracked, unread = [], []
     for space in sorted(ROOT.glob("[0-9]-*")):
         if not (space / ".git").exists():
             continue
         rc, out = run(["git", "-C", str(space), "ls-files", "--",
                        ".datacore/*.db", ".datacore/*.db-*", "*.sqlite", "*.sqlite3"], 30)
-        if rc == 0 and out.strip():
+        if rc != 0:
+            unread.append(space.name)   # git did not answer: this space was not looked at
+        elif out.strip():
             tracked.append(f"{space.name}: {out.strip().splitlines()[0]}")
-    rep.add("0046", "no tracked derived db", not tracked,
-            "clean" if not tracked else "; ".join(tracked[:3]))
+    rep.add("0046", "no tracked derived db",
+            False if tracked else (None if unread else True),
+            ("; ".join(tracked[:3]) if tracked else "clean")
+            + (f"; not checked: {', '.join(unread)}" if unread else ""))
     home = Path(os.environ.get("DATACORE_LENS_HOME") or (Path.home() / ".datacore" / "lens"))
     db = home / "observations.db"
     if db.exists():
@@ -559,14 +628,19 @@ def check_topology(rep: Report) -> None:
         rep.add("0046", "repo topology", None, "no registered repositories on this host")
         return
     wrong, parked_knowledge, parked_code, stranded, code_unpushed = [], [], [], [], []
+    no_origin = []
     for name, path, category, canonical in repos:
         rc, url = _git(path, "remote", "get-url", "origin")
         base = ""
         if rc == 0 and url.strip():
             import re as _re
             base = _re.sub(r"\.git$", "", url.strip().rstrip("/").split("/")[-1].split(":")[-1])
-        if not canonical or base != canonical:
-            wrong.append(f"{name}: origin={base or 'none'} registry={canonical or '?'}")
+        if not base:
+            # No origin yet (a fresh checkout before its fork is added): there
+            # is nothing to compare, which is "could not tell", not a wrong remote.
+            no_origin.append(name)
+        elif not canonical or base != canonical:
+            wrong.append(f"{name}: origin={base} registry={canonical or '?'}")
         db = _default_branch(path)
         _, cur = _git(path, "branch", "--show-current")
         cur = cur.strip() or "detached"
@@ -581,8 +655,9 @@ def check_topology(rep: Report) -> None:
             # so it is reported here for the deploy-drift review, not failed.
             (stranded if category == "knowledge" else code_unpushed).append(
                 f"{name}: {n} commit(s), oldest {age:.0f}h")
-    rep.add("0046", "remotes canonical", not wrong,
-            f"{len(repos)} repos" if not wrong else "; ".join(wrong[:3]))
+    rep.add("0046", "remotes canonical", False if wrong else (None if no_origin else True),
+            ("; ".join(wrong[:3]) if wrong else f"{len(repos)} repos")
+            + (f"; no origin: {', '.join(no_origin[:3])}" if no_origin else ""))
     rep.add("0046", "knowledge on default branch", not parked_knowledge,
             ("; ".join(parked_knowledge[:3]) if parked_knowledge
              else (f"code parked: {'; '.join(parked_code[:3])}" if parked_code else "all on default")))
@@ -603,6 +678,11 @@ def _pinned_org_workspace() -> tuple[int, ...] | None:
     return None
 
 
+def _system_space() -> str:
+    from spaces import space_for
+    return space_for("system", ROOT, "0-personal")
+
+
 def interpreters() -> list[str]:
     """The Pythons this host actually runs jobs with: the one running this
     checklist first, then everything named python3 on PATH, the system one,
@@ -610,7 +690,7 @@ def interpreters() -> list[str]:
     import shutil
     cands = [sys.executable, shutil.which("python3"), "/usr/bin/python3",
              "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
-             str(ROOT / "2-datacore" / "2-projects" / "datacore-app" / "daemon" / ".venv" / "bin" / "python")]
+             str(ROOT / _system_space() / "2-projects" / "datacore-app" / "daemon" / ".venv" / "bin" / "python")]
     out: list[str] = []
     for c in cands:
         if not c:
@@ -739,6 +819,12 @@ def hook_script_path(command: str) -> Path | None:
     for tok in parts:
         if tok in _INTERPRETERS:
             continue
+        # Claude Code runs project hooks with CLAUDE_PROJECT_DIR set to the project
+        # root; the shipped settings start from it (then DATACORE_ROOT) so no
+        # install location is hardcoded. Here that root is ROOT.
+        at = tok.find("/.datacore/")
+        if tok.startswith("$") and at > 0:
+            tok = str(ROOT) + tok[at:]
         if tok.startswith(("/", "~", ".")):
             return Path(os.path.expanduser(tok))
         return None   # first real token is a PATH binary or npx: not a file path
@@ -852,6 +938,43 @@ def check_install_current(rep: Report) -> None:
     rep.add("0046", "install is current", int(behind) == 0, detail)
 
 
+def _py_rebase_lines(text: str) -> list[int] | None:
+    """Lines of a Python file where a rebase is part of something it could RUN.
+
+    A string naming the rebase counts unless it is data the code inspects: an
+    element of a set (a set is never an argv -- it has no order), an operand of
+    a comparison (`"--rebase" in argv`), a pattern handed to `re`, or a bare
+    string statement (a docstring). The network guard lists `--rebase` among
+    the git flags it parses (lib/hooks/restricted_hosts_guard.py, 2026-09-30),
+    which turned the box's verification red. No folder is exempt: a hook that
+    builds `["git", "pull", "--rebase"]` still counts. None = not parseable;
+    the caller falls back to the line scan.
+    """
+    import ast
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    excused: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Set):
+            excused.update(id(e) for e in node.elts)
+        elif isinstance(node, ast.Compare):
+            excused.update(id(e) for e in [node.left, *node.comparators])
+        elif isinstance(node, ast.Expr):
+            excused.add(id(node.value))
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == "re"):
+            excused.update(id(a) for a in node.args[:1])
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in excused:
+            s = re.sub(r"`[^`]*`", "", node.value)
+            if "pull --rebase" in s or s.strip() == "--rebase":
+                lines.append(node.lineno)
+    return sorted(set(lines))
+
+
 def check_transport(rep: Report) -> None:
     t = LIB / "ledger_transport.py"
     if not t.exists():
@@ -861,15 +984,33 @@ def check_transport(rep: Report) -> None:
 
     # No rebase anywhere in the scheduled path. Comments naming the anti-pattern
     # are fine; a live call is not.
+    # Modules' code runs on the schedule too: the rebase that paused in the
+    # box's 0-personal on 2026-09-27 was in modules/ventures/lib/cadence_run.py,
+    # which this check did not read. Tests are not a scheduled path.
     hits = []
-    for p in list(LIB.rglob("*.py")) + list(LIB.rglob("*.sh")):
-        if "node_modules" in str(p) or p.name == "v2_verify.py":
+    roots = [LIB] + [d for m in sorted((LIB.parent / "modules").glob("*"))
+                     for d in (m / "lib", m / "server", m / "scripts", m / "bin") if d.is_dir()]
+    files = [p for r in roots for pat in ("*.py", "*.sh") for p in r.rglob(pat)]
+    for p in files:
+        # lib/sim/ is the fleet simulator's fault injector: it runs the bad command
+        # on purpose so the guard can be seen stopping it. Not a sync path.
+        if ("node_modules" in p.parts or ".git" in p.parts or "tests" in p.parts
+                or (p.parent.name == "sim" and p.parent.parent == LIB)
+                or p.name.startswith("test_") or p.name == "v2_verify.py"):
             continue
         try:
-            for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            text = p.read_text(errors="replace")
+            if p.suffix == ".py":
+                found = _py_rebase_lines(text)
+                if found is not None:
+                    hits.extend(f"{p.name}:{i}" for i in found)
+                    continue
+            for i, line in enumerate(text.splitlines(), 1):
                 s = line.strip()
                 if s.startswith(("#", "*", "//")):
                     continue
+                if p.suffix == ".py":           # prose in a docstring quotes the anti-pattern in backticks
+                    s = re.sub(r"`[^`]*`", "", s)
                 if "pull --rebase" in s or "'--rebase'" in s or '"--rebase"' in s:
                     hits.append(f"{p.name}:{i}")
         except OSError:
@@ -888,6 +1029,24 @@ def check_transport(rep: Report) -> None:
 
 
 # ── The APPLICATION layer: the part that was never watched ─────────────────
+def hostname_fallback(actor: str, host: str) -> bool:
+    """Is `actor` the hostname standing in for an identity nobody declared?
+
+    The DIP-0044 trap is a FALLBACK: the registry lookup failed and the
+    hostname became the actor. Equal names alone are not it -- in the pods the
+    hostname IS the agent's name (Winston's pod is `winston`, the writer his
+    principal declares), and both identity checks failed on that correct
+    identity on 2026-10-30. A name a principal declares is not a fallback.
+    """
+    if actor != host or actor in ("mac",):
+        return False
+    try:
+        from actor_identity import principal_of
+        return principal_of(actor)[0] is None
+    except Exception:  # noqa: BLE001 -- no registry: cannot clear it, keep the old answer
+        return True
+
+
 def check_declared_identity(rep: Report) -> None:
     """Is this machine's ledger identity DECLARED, or still being guessed?
 
@@ -914,7 +1073,7 @@ def check_declared_identity(rep: Report) -> None:
     actor = _actor()
     host = socket.gethostname().split(".")[0].lower()
     declared = bool(_identity().get("DATACORE_ACTOR"))
-    if actor == host and actor not in ("mac",):
+    if hostname_fallback(actor, host):
         rep.add("0044", "identity declared", False,
                 f"actor={actor} equals hostname — events filed under the wrong writer")
     elif declared:
@@ -945,9 +1104,35 @@ def check_egress(rep: Report) -> None:
                        cwd="/", capture_output=True, timeout=60, check=True)
         rep.add("app", "core importable by modules", True,
                 "from datacore.ledger import attests")
-    except Exception as exc:  # noqa: BLE001
-        rep.add("app", "core importable by modules", False,
-                f"{type(exc).__name__} — module decorators would record nothing")
+    except subprocess.CalledProcessError as exc:
+        # `datacore` itself missing is the fault this row exists for. Any other
+        # crash (a dependency of the probe's interpreter, a timeout) means the
+        # probe did not get as far as looking: could not check, not broken.
+        err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        err += exc.output.decode(errors="replace") if isinstance(exc.output, bytes) else (exc.output or "")
+        import site
+        try:
+            pth = Path(site.getusersitepackages()) / "datacore-core.pth"
+            set_up = pth.exists()
+        except Exception:  # noqa: BLE001 - cannot locate the user site: treat as set up
+            set_up = True
+        if re.search(r"No module named '?datacore", err) and not set_up:
+            # INSTALL.md step 1b (install_datacore_path.py) has not run for this
+            # interpreter yet: a setup step not taken, named with its fix, rather
+            # than a core that broke. Once the .pth exists, a failing import FAILs.
+            rep.add("app", "core importable by modules", None,
+                    f"not set up for {sys.executable} yet -- run "
+                    "python3 .datacore/lib/install_datacore_path.py (INSTALL.md step 1b)")
+        elif re.search(r"No module named '?datacore", err) or "Traceback" not in err:
+            rep.add("app", "core importable by modules", False,
+                    "CalledProcessError — module decorators would record nothing")
+        else:
+            rep.add("app", "core importable by modules", None,
+                    f"could not check: {err.strip().splitlines()[-1][:60]}")
+        return
+    except Exception as exc:  # noqa: BLE001 - timeout / cannot start: did not look
+        rep.add("app", "core importable by modules", None,
+                f"could not check: {type(exc).__name__}")
         return
 
     scan = LIB / "egress_scan.py"
@@ -985,7 +1170,10 @@ def check_egress(rep: Report) -> None:
         # 3.14, because six modules' dependencies are not installed there — a
         # real gap in whichever interpreter the jobs actually use.
         broken = "0 broken" not in detail
-        unknown = "0 unverifiable" not in detail
+        # Exit 3 / "0 in force" = nothing was verified (decision S5): a run
+        # with no rows has not shown that anything is wired, so it is n-a.
+        nothing = r.returncode == 3 or re.search(r"(?<!\d)0 in force", detail) is not None
+        unknown = nothing or "0 unverifiable" not in detail
         rep.add("app", "egress wired at runtime",
                 False if broken else (None if unknown else True), detail)
     except Exception as exc:  # noqa: BLE001
@@ -1013,7 +1201,7 @@ def check_app(rep: Report) -> None:
         # An actor equal to the hostname is the DIP-0044 trap: it means the
         # registry lookup failed and events would be filed under the wrong
         # writer. Two of five machines were doing exactly that until caught.
-        ok = actor != host or actor in ("mac",)
+        ok = not hostname_fallback(actor, host)
         rep.add("app", "agents can attest actions", ok,
                 f"actor={actor}" + ("" if ok else f" — equals hostname; registry lookup failed"))
     except Exception as exc:  # noqa: BLE001
@@ -1177,15 +1365,14 @@ def check_finality(rep: Report) -> None:
     # sequencer's claim disagrees with the events on this machine.
     sys.path.insert(0, str(LIB))
     try:
-        from ledger.log import read_events
-        from ledger.seal import verify_seal
+        from ledger.hub import seal_status
     except Exception as exc:  # noqa: BLE001
         rep.add("0042", "seals verify", None, f"import failed: {exc}")
         return
     bad, sealed, unsealed = [], 0, 0
     for s_ in spaces():
         try:
-            ok, _d = verify_seal(read_events(s_))
+            ok, _d = seal_status(s_)          # through admission (round 5, amendment 5)
         except Exception:  # noqa: BLE001
             continue
         if ok is True:
@@ -1251,8 +1438,8 @@ def unmanaged_service_processes(names=("hermes_cli.main gateway", "datacored"),
 
     A service-user migration leaves the OLD user's process running: it has no
     unit, logs nowhere, and keeps doing its job — a second Telegram consumer,
-    a second writer. On 2026-09-07 a gateway orphaned by the 2026-08-13
-    root->gregor move had been running 25 days in `user-0.slice`, and was
+    a second writer. Once, a gateway orphaned by a service-user
+    move (root -> the owner's account) had been running 25 days in `user-0.slice`, and was
     found only because someone went looking for a third poller."""
     procfs = procfs or Path("/proc")
     uid = os.getuid() if uid is None else uid
@@ -1290,7 +1477,7 @@ def unmanaged_service_processes(names=("hermes_cli.main gateway", "datacored"),
 def check_migration_leftovers(rep: Report) -> None:
     """The residue of a service-user move, as rows instead of incidents.
 
-    The 2026-08-13 root->gregor move left three things behind, each found
+    The service-user move (root -> the owner's account) left three things behind, each found
     separately and weeks apart: an orphaned gateway process, a `plur` symlink
     into root's home that the service user could not execute, and a deploy
     key. Three incidents, one cause. These two rows catch that cause."""

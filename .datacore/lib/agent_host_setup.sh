@@ -2,7 +2,7 @@
 # Declare an agent host, or verify it: identity, the crons the job contracts
 # assume, the artifacts they read. Idempotent; run it again after every change.
 #
-#   agent_host_setup.sh --host nightshift|hermes|plur-claw          apply, then verify
+#   agent_host_setup.sh --host NAME            apply, then verify (NAME: a roster machine)
 #   agent_host_setup.sh --host NAME --verify                        check, change nothing
 #
 # Why this exists: the box has had an installer with a verify step since
@@ -15,13 +15,20 @@ set -uo pipefail
 HOST=""; VERIFY_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host) HOST="${2:?--host needs nightshift|hermes|plur-claw}"; shift ;;
+    --host) HOST="${2:?--host needs a machine name from .datacore/registry/infrastructure.yaml}"; shift ;;
     --verify) VERIFY_ONLY=1 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac; shift
 done
 [ -n "$HOST" ] || { echo "--host is required" >&2; exit 2; }
-RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
+# The code tree each host runs. Satellites run from a separate runner checkout;
+# the box (winston) has none and runs straight from ~/Data, so for it the
+# "runner" is ~/Data itself -- the same refresh and drift check then apply.
+if [ "$HOST" = box ] || [ "$HOST" = dayshift ]; then  # dayshift: a workstation runs its own working copy, no runner
+  RUNNER="${DATACORE_RUNNER:-$HOME/Data}"
+else
+  RUNNER="${DATACORE_RUNNER:-$HOME/.datacore/v2-runner}"
+fi
 LIB="$RUNNER/.datacore/lib"
 STATE="${DATACORE_STATE:-$HOME/.datacore/state}"
 ID_FILE="$HOME/.datacore/identity.env"
@@ -30,14 +37,41 @@ fail=0
 qgrep() { grep "$@" >/dev/null; }
 
 # ── identity (DIP-0044) ──────────────────────────────────────────────────────
-ACTOR="$(python3 - "$HOST" "$LIB/../registry/infrastructure.yaml" <<'PY'
+# The registry is a PRIVATE OVERLAY: it lives in the data root (~/Data), not in
+# the runner checkout this script runs from. actor_identity already resolves
+# where it really is (6e3e0e4); reuse that rather than a second lookup, which
+# is how this line came to read a file that is never in the runner.
+ACTOR="$(python3 - "$HOST" "$LIB" <<'PY'
 import sys, yaml
-host, reg = sys.argv[1], sys.argv[2]
+host, lib = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib)
+from actor_identity import REGISTRY_DIR
+reg = REGISTRY_DIR / "infrastructure.yaml"
 d = yaml.safe_load(open(reg)) or {}
 print(((d.get("servers") or {}).get(host) or {}).get("access", {}).get("actor", ""))
 PY
 )"
 [ -n "$ACTOR" ] || { log "FAIL registry declares no actor for host $HOST"; exit 2; }
+# WHAT KIND of agent host this is picks the crons and checks below -- not its
+# name, so no host of ours is written here (INS-3). The roster says it
+# (servers.<host>.setup_profile); a host whose identity file already declares
+# the openclaw executor is an openclaw host; otherwise the profile is the
+# host name itself (nightshift, hermes).
+PROFILE="$(python3 - "$HOST" "$LIB" <<'PY'
+import sys, yaml
+host, lib = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib)
+from actor_identity import REGISTRY_DIR
+try:
+    d = yaml.safe_load(open(REGISTRY_DIR / "infrastructure.yaml")) or {}
+except OSError:
+    d = {}
+print(((d.get("servers") or {}).get(host) or {}).get("setup_profile", ""))
+PY
+)"
+if [ -z "$PROFILE" ]; then
+  if grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw' "$ID_FILE"; then PROFILE=openclaw; else PROFILE="$HOST"; fi
+fi
 if [ "$VERIFY_ONLY" = 0 ]; then
   if ! grep -qsE '^(export )?DATACORE_ACTOR=' "$ID_FILE"; then
     mkdir -p "$(dirname "$ID_FILE")"
@@ -54,8 +88,16 @@ if [ "$VERIFY_ONLY" = 0 ]; then
   mkdir -p "$HOME/.datacore/keys"; chmod 700 "$HOME/.datacore/keys"
   # The executor this host runs delegated items through (ledger_claim ->
   # executors/base.get_executor). plur-claw has no claude binary; it has openclaw.
-  if [ "$HOST" = plur-claw ] && ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
-    printf '%s\n' "DATACORE_EXECUTOR=openclaw" >> "$ID_FILE"; log "executor declared: openclaw"
+  # Always the Gateway: `agent exec` reads the env's pay-per-use key and leaves
+  # a ~108 MB state dir in /tmp per run -- a 15-minute retry through it filled
+  # plur-claw's disk (2026-09-28..30). A stale `openclaw` line is rewritten.
+  if [ "$PROFILE" = openclaw ]; then
+    if grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw[[:space:]]*$' "$ID_FILE"; then
+      sed -i.bak -E 's/^((export )?DATACORE_EXECUTOR=)openclaw[[:space:]]*$/\1openclaw-gateway/' "$ID_FILE" && rm -f "$ID_FILE.bak"
+      log "executor switched: openclaw -> openclaw-gateway"
+    elif ! grep -qsE '^(export )?DATACORE_EXECUTOR=' "$ID_FILE"; then
+      printf '%s\n' "DATACORE_EXECUTOR=openclaw-gateway" >> "$ID_FILE"; log "executor declared: openclaw-gateway"
+    fi
   fi
 fi
 
@@ -64,21 +106,26 @@ fi
 # marker is replaced, so a path change here reaches the crontab on the next run.
 CRON_LINES=()
 CRON_KEYS=()
-case "$HOST" in
+case "$PROFILE" in
   nightshift)
     CRON_KEYS=(phase1-cycle bot-alive gate-check)
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
-    CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/miles-bot.alive 2>>$STATE/miles-bot.alive.err")
+    CRON_LINES+=("*/15 * * * * $LIB/unit_alive.sh datacore-telegram.service $STATE/${ACTOR}-bot.alive 2>>$STATE/${ACTOR}-bot.alive.err")
     CRON_LINES+=("40 8 * * * python3 $HOME/Data/.datacore/modules/nightshift/lib/gate_check.py >> $STATE/nightshift-gate.history 2>&1")
     ;;
-  plur-claw)
-    CRON_KEYS=(phase1-cycle ledger-claim)
+  openclaw)
+    CRON_KEYS=(phase1-cycle ledger-claim job-verify)
     # ONE clone per writer per host. Data attests X posts into ~/Data/2-plur-space
     # (DATACORE_ATTEST_SPACE) and the dispatcher used ~/spaces/5-plur: two copies
     # of the same writer log forked at seq 22 (found 2026-09-06). The dispatcher
     # now works in the same clone, and the hourly cycle converges it.
     CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     CRON_LINES+=("*/15 * * * * DISPATCH_SPACE=$HOME/Data/2-plur-space $LIB/ledger-claim-pull.sh >> $STATE/ledger-dispatch.log 2>&1")
+    # plur-claw had contracts in the manifest and nothing running the verifier
+    # (INS-7, 2026-09-26) -- the same gap hermes had until 2026-09-06.
+    # --alert command: Data's machine sends its own alerts through its own bot
+    # (~/.datacore/alerts.yaml -> agent_alert.py --bot data-telegram-bot; owner 2026-09-30).
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command 2>&1 | $LIB/tee_timestamp.sh $STATE/job_verify.log")
     ;;
   hermes)
     CRON_KEYS=(phase1-cycle job-verify)
@@ -88,9 +135,32 @@ case "$HOST" in
     # hermes had contracts in the manifest and nothing running the verifier
     # (found 2026-09-06): its rows read "not heard from" by construction.
     # --manifest: hermes has no ~/Data/.datacore/lib; the runner copy is the canonical one (test_runner_manifest_matches_canonical).
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine hermes --manifest $LIB/jobs/manifest.yaml --alert log >> $STATE/job_verify.log 2>&1")
+    # --alert command: Tris's machine sends its own alerts through its own bot
+    # (owner decision 2026-09-30): ~/.datacore/alerts.yaml runs agent_alert.py --bot tris-telegram-bot.
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command 2>&1 | $LIB/tee_timestamp.sh $STATE/job_verify.log")
+    ;;
+  dayshift)
+    # The owner's session server never sleeps, so it cycles on a clock like the
+    # box rather than on join like the mac. It had no schedule until 2026-10-28:
+    # no task lists, and copies hundreds of commits behind with no alert.
+    CRON_KEYS=(phase1-cycle)
+    CRON_LINES+=("25 * * * * DATACORE_ROOT=$HOME/Data $LIB/ledger_phase1_cycle.sh >> $STATE/phase1-cycle.log 2>&1")
     ;;
 esac
+
+# Every host keeps its runner current. Nothing did on the satellites: on
+# 2026-09-23 hermes's runner was 13 commits behind origin and plur-claw's 50,
+# so fixes that "reached the fleet" were not running there. The mac refreshes
+# its runner from sync_state_from_nightshift.sh; this is the same step for the
+# hosts this installer owns. --ff-only: the runner is read-only by design, so a
+# pull that cannot fast-forward is a problem to report, not to merge.
+CRON_KEYS+=(runner-refresh)
+CRON_LINES+=("17 * * * * git -C $RUNNER pull -q --ff-only origin main >> $STATE/runner-refresh.log 2>&1")
+# Every host that runs Claude sessions keeps a copy of their transcripts:
+# Claude Code prunes its own after a month, and nightshift (4,976) and the box
+# (597) had no copy at all (MEM-67). Beside the host's state, not in a space.
+CRON_KEYS+=(sync-traces)
+CRON_LINES+=("10 0 * * * TRACES_DEST=$HOME/.datacore/traces/claude-code bash $LIB/sync_traces.sh >> $STATE/sync-traces.log 2>&1")
 
 # ── slash commands the scheduled jobs invoke ────────────────────────────────
 # A cron script that runs `claude -p "/weekly-plan ..."` needs that command
@@ -139,12 +209,83 @@ ensure_github_host_key() {
     log "FAIL github.com host key fingerprint did not match GitHub's published key ($fp) — not added"; fail=1
   fi
 }
-case "$HOST" in
-  plur-claw) ensure_github_host_key ;;
+case "$PROFILE" in
+  openclaw) ensure_github_host_key ;;
   hermes)
     : # Tris's heartbeat is a systemd timer (tris-heartbeat.timer); no spaces to project here
     ;;
 esac
+# ── protections every machine gets (INS-7) ──────────────────────────────────
+# A machine added to the fleet gets what the others have, from here, not by
+# hand: the update guard and the git safety hooks were present on all four
+# hosts and installed by no installer (OI-11), so the next machine would have
+# had neither.
+#
+# Update guard: needrestart must not restart a unit mid-job (OPS-5).
+GUARD_SRC="$RUNNER/.datacore/config/host/needrestart-datacore.conf"
+GUARD_DST=/etc/needrestart/conf.d/datacore.conf
+if [ "$VERIFY_ONLY" = 0 ] && [ -f "$GUARD_SRC" ] && ! cmp -s "$GUARD_SRC" "$GUARD_DST"; then
+  sudo -n install -D -m 644 "$GUARD_SRC" "$GUARD_DST" && log "update guard installed ($GUARD_DST)" \
+    || { log "FAIL could not install the update guard to $GUARD_DST (needs sudo)"; fail=1; }
+fi
+# Safety hooks: every checkout (the root and each space) runs Datacore's
+# pre-commit through the central dispatcher. A checkout that already has a
+# hook -- a hooksPath or its own .git/hooks/pre-commit -- is left as it is.
+GITHOOKS="$RUNNER/.datacore/githooks"
+has_hook() {  # has_hook DIR
+  local hp; hp=$(git -C "$1" config core.hooksPath 2>/dev/null)
+  { [ -n "$hp" ] && (cd "$1" && [ -x "$hp/pre-commit" ]); } || [ -e "$1/.git/hooks/pre-commit" ]
+}
+for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
+  [ -e "$_d/.git" ] || continue
+  has_hook "$_d" && continue
+  if [ "$VERIFY_ONLY" = 0 ] && [ -x "$GITHOOKS/pre-commit" ]; then
+    git -C "$_d" config core.hooksPath "$GITHOOKS" && log "safety hooks enabled for $(basename "$_d") (core.hooksPath)"
+  fi
+done
+# Safety guard (AGT-11): every Claude Code run on an agent's machine passes the
+# tool-policy guard, whatever script starts it -- wired in the user settings,
+# because a script that runs `claude -p` without --settings loads nothing else.
+# On the four hosts this was added by hand on 2026-09-30; the fleet week
+# simulator then showed a machine built without it lets `git reset --hard`
+# through (4 of 4, 2026-10-01). A machine without Claude Code has no settings
+# to guard (hermes's own plugin calls the same guard).
+POLICY_INSTALLER="$LIB/hooks/install_redaction_guards.py"
+POLICY_ARGS=(--only policy --hooks-dir "$LIB/hooks")
+if [ "$VERIFY_ONLY" = 0 ] && command -v claude >/dev/null 2>&1; then
+  python3 "$POLICY_INSTALLER" "${POLICY_ARGS[@]}" --create >/dev/null \
+    && log "safety guard wired in ~/.claude/settings.json (tool_policy_guard.py)" \
+    || { log "FAIL could not wire the safety guard into ~/.claude/settings.json"; fail=1; }
+fi
+# Disclosure guards (redaction, publish, memory, evals, guards, client, space,
+# context): the roster says which this machine needs, servers.<host>.guards --
+# the owner's choice, never this script's. Before 2026-10-01 they reached a
+# machine only if someone ran install_redaction_guards.py there by hand.
+ROSTER_GUARDS="$(python3 - "$HOST" "$LIB" <<'PY'
+import sys, yaml
+host, lib = sys.argv[1], sys.argv[2]
+sys.path.insert(0, lib)
+from actor_identity import REGISTRY_DIR
+try:
+    d = yaml.safe_load(open(REGISTRY_DIR / "infrastructure.yaml")) or {}
+except OSError:
+    d = {}
+g = ((d.get("servers") or {}).get(host) or {}).get("guards")
+if g is None:
+    print("")
+elif isinstance(g, list) and g and all(isinstance(x, str) and x.strip() for x in g):
+    print(",".join(x.strip() for x in g))
+else:
+    print("!invalid")
+PY
+)"
+GUARD_ARGS=(--only "$ROSTER_GUARDS" --hooks-dir "$LIB/hooks")
+if [ "$VERIFY_ONLY" = 0 ] && [ -n "$ROSTER_GUARDS" ] && command -v claude >/dev/null 2>&1; then
+  _rg="$(python3 "$POLICY_INSTALLER" "${GUARD_ARGS[@]}" --create 2>&1)" \
+    && log "roster guards wired in ~/.claude/settings.json ($ROSTER_GUARDS)" \
+    || { log "FAIL could not wire the roster guards ($ROSTER_GUARDS): $(printf '%s' "$_rg" | tail -1)"; fail=1; }
+fi
+
 # lines this installer retires (superseded by one of the above)
 RETIRE=("/usr/local/bin/ledger-pull-data.sh")
 
@@ -164,20 +305,50 @@ grep -qsE "^(export )?DATACORE_ACTOR=$ACTOR\$" "$ID_FILE" && log "OK  identity d
 grep -qsE '^(export )?DATACORE_LEDGER_SIGN=1' "$ID_FILE" && log "OK  events signed (DATACORE_LEDGER_SIGN=1)" || { log "FAIL signing not declared in $ID_FILE"; fail=1; }
 res="$(python3 "$LIB/actor_identity.py" 2>/dev/null)"; [ "${res%% *}" = "$ACTOR" ] && log "OK  resolver agrees: $res" || { log "FAIL resolver says '$res', registry says $ACTOR"; fail=1; }
 python3 "$LIB/cron_install.py" --verify "${CRON_ARGS[@]}" || fail=1
+if [ ! -f "$GUARD_SRC" ]; then
+  log "WARN this runner ships no update guard ($GUARD_SRC) -- nothing to compare"
+else
+  cmp -s "$GUARD_SRC" "$GUARD_DST" && log "OK  update guard in place ($GUARD_DST)" || { log "FAIL update guard missing or stale: $GUARD_DST"; fail=1; }
+fi
+for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
+  [ -e "$_d/.git" ] || continue
+  has_hook "$_d" && log "OK  safety hooks: $(basename "$_d")" || { log "FAIL no pre-commit hook in $_d"; fail=1; }
+done
+if command -v claude >/dev/null 2>&1; then
+  _pg="$(python3 "$POLICY_INSTALLER" "${POLICY_ARGS[@]}" --verify 2>&1)" \
+    && log "OK  safety guard before every tool call (~/.claude/settings.json)" \
+    || { log "FAIL safety guard: ${_pg:-not wired}"; fail=1; }
+else
+  log "--  safety guard: Claude Code is not installed here, no user settings to guard"
+fi
+if [ -z "$ROSTER_GUARDS" ]; then
+  log "--  roster names no disclosure guards for $HOST (servers.$HOST.guards); only the safety guard is required"
+elif ! command -v claude >/dev/null 2>&1; then
+  log "--  roster guards ($ROSTER_GUARDS): Claude Code is not installed here, no user settings to guard"
+else
+  _rg="$(python3 "$POLICY_INSTALLER" "${GUARD_ARGS[@]}" --verify 2>&1)" \
+    && log "OK  roster guards wired: $ROSTER_GUARDS (~/.claude/settings.json)" \
+    || { log "FAIL roster guards ($ROSTER_GUARDS): $(printf '%s' "${_rg:-not wired}" | tr '\n' ';')"; fail=1; }
+fi
 [ -x "$LIB/ledger_phase1_cycle.sh" ] && log "OK  runner lib present at $LIB" || { log "FAIL runner lib missing: $LIB"; fail=1; }
-case "$HOST" in
+# Current, not merely present: compare with origin/main as of the last fetch
+# (the runner-refresh cron fetches hourly). Behind is a warning, not a failure:
+# it clears on the next refresh, and failing here would block a re-run.
+_behind=$(git -C "$RUNNER" rev-list --count HEAD..origin/main 2>/dev/null || echo "?")
+if [ "$_behind" = "0" ]; then log "OK  runner current with origin/main"; else log "WARN runner is $_behind commit(s) behind origin/main (runner-refresh cron pulls hourly)"; fi
+case "$PROFILE" in
   nightshift)
     systemctl show -p Environment --value nightshift-overnight.service 2>/dev/null | tr ' ' '\n' | qgrep -x "DATACORE_ACTOR=nightshift" && log "OK  overnight executor declares its own writer (nightshift)" || { log "FAIL overnight unit does not declare DATACORE_ACTOR=nightshift"; fail=1; }
-    systemctl is-active --quiet datacore-telegram.service && log "OK  Miles bot unit active" || { log "FAIL datacore-telegram.service not active"; fail=1; }
+    systemctl is-active --quiet datacore-telegram.service && log "OK  $ACTOR bot unit active" || { log "FAIL datacore-telegram.service not active"; fail=1; }
     systemctl is-active --quiet venture-heartbeat.service && log "OK  venture heartbeat active" || { log "FAIL venture-heartbeat.service not active"; fail=1; }
     ;;
   hermes)
-    systemctl is-active --quiet tris-heartbeat.timer && log "OK  tris-heartbeat.timer active" || { log "FAIL tris-heartbeat.timer not active"; fail=1; }
+    systemctl is-active --quiet "${ACTOR}-heartbeat.timer" && log "OK  ${ACTOR}-heartbeat.timer active" || { log "FAIL ${ACTOR}-heartbeat.timer not active"; fail=1; }
     systemctl --user is-active --quiet hermes-gateway.service 2>/dev/null && log "OK  hermes gateway (user unit) active" || { log "FAIL hermes-gateway.service (user) not active"; fail=1; }
     ;;
-  plur-claw)
+  openclaw)
     [ -d "$HOME/Data/2-plur-space/.git" ] && log "OK  dispatch space present ($HOME/Data/2-plur-space)" || { log "FAIL $HOME/Data/2-plur-space is not a repository"; fail=1; }
-    grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw' "$ID_FILE" && log "OK  executor declared: openclaw" || { log "FAIL executor not declared in $ID_FILE"; fail=1; }
+    grep -qsE '^(export )?DATACORE_EXECUTOR=openclaw-gateway[[:space:]]*$' "$ID_FILE" && log "OK  executor declared: openclaw-gateway" || { log "FAIL executor is not openclaw-gateway in $ID_FILE (agent exec leaks /tmp and uses the env key)"; fail=1; }
     ;;
 esac
 [ "$fail" = 0 ] && log "ALL CHECKS PASS ($HOST)" || log "SOME CHECKS FAILED ($HOST)"

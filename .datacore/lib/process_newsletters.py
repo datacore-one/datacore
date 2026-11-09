@@ -26,44 +26,59 @@ for ef in [DATA_DIR / '.datacore' / 'env' / '.env', DATA_DIR / '.datacore' / 'en
                     os.environ[k] = v
 
 
-GROUPS = [
+# Generic topic groups. An installation's own map — its projects, ventures and
+# routing — lives in the untracked `.datacore/config/newsletters.local.yaml`
+# (key `groups:`, same shape) and replaces these when present.
+DEFAULT_GROUPS = [
     {
-        'name': 'Verity & Data Economy',
-        'tags': ['verity', 'rwa', 'privacy-tech', 'data-economy', 'erc3643'],
-        'projects': 'Verity (data marketplace + tokenization), Datafund (fair data economy), Dubai pilot, Santorio',
-        'filename': 'newsletter-verity-data-economy',
+        'name': 'Data & Privacy',
+        'tags': ['privacy-tech', 'data-economy', 'rwa'],
+        'projects': 'data products, data marketplaces, privacy tooling',
+        'filename': 'newsletter-data-privacy',
     },
     {
         'name': 'AI & Technology',
         'tags': ['ai', 'tech', 'openai'],
-        'projects': 'Datacore (AI second brain), PLUR (engram memory for AI agents), ADE (agent data exchange)',
+        'projects': 'AI tooling, agent memory, developer tools',
         'filename': 'newsletter-ai-technology',
     },
     {
-        'name': 'Crypto & Trading',
+        'name': 'Crypto & Markets',
         'tags': ['crypto', 'trading'],
-        'projects': 'Meridian (hedge fund), Trading bots (turtle/momentum/HMM/BZZ), Hyperliquid positions',
-        'filename': 'newsletter-crypto-trading',
+        'projects': 'crypto markets, trading systems',
+        'filename': 'newsletter-crypto-markets',
     },
     {
         'name': 'Strategy & Business',
         'tags': ['strategy', 'management', 'pitchdeck', 'product', 'work'],
-        'projects': 'Ventures framework (Forge, Meridian, Megaphone), Datafund fundraising, client consulting',
+        'projects': 'business strategy, product, fundraising',
         'filename': 'newsletter-strategy-business',
     },
     {
         'name': 'Health & Personal',
-        'tags': ['health', 'stoicism', 'teo'],
-        'projects': 'Health module (Oura/HealthKit tracking), longevity research, personal development',
+        'tags': ['health', 'stoicism'],
+        'projects': 'health tracking, longevity research, personal development',
         'filename': 'newsletter-health-personal',
     },
-    {
-        'name': 'Datafund & Swarm',
-        'tags': ['datafund', 'swarm', 'fairdrop'],
-        'projects': 'Datafund (fair data economy), FDS (Fair Data Society), Fairdrop, Swarm storage',
-        'filename': 'newsletter-datafund-swarm',
-    },
 ]
+
+LOCAL_GROUPS = DATA_DIR / '.datacore' / 'config' / 'newsletters.local.yaml'
+
+
+def load_groups(path: Path = LOCAL_GROUPS) -> list:
+    """The installation's topic map if present and valid, else the generic one."""
+    if path.exists():
+        try:
+            import yaml
+            groups = (yaml.safe_load(path.read_text()) or {}).get('groups')
+            if isinstance(groups, list) and groups:
+                return groups
+        except Exception as exc:  # noqa: BLE001
+            print(f"warning: {path} unreadable ({exc}); using generic groups", file=sys.stderr)
+    return DEFAULT_GROUPS
+
+
+GROUPS = load_groups()
 
 
 def load_newsletter_items():

@@ -2,7 +2,9 @@
 # sync_state_from_nightshift.sh — Pull venture/crew state from the nightshift
 # server (the authoritative source) onto the local Mac.
 #
-# Why: nightshift owns the heartbeat. Local writes are NOT authoritative.
+# Why: the overnight agent's host owns the heartbeat (since 2026-10-28 Miles on
+# dayshift, as the user miles; the launchd plist sets REMOTE and REMOTE_USER).
+# Local writes are NOT authoritative.
 # The Mac desktop app reads filesystem files, so we mirror the relevant
 # state subset from nightshift periodically.
 #
@@ -24,7 +26,14 @@
 set -uo pipefail
 
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
-REMOTE="${REMOTE:-nightshift}"
+# The remote is opt-in. It defaulted to "nightshift"; that host was retired
+# (2026-10) and the job then failed two ssh timeouts every 5 minutes. With no
+# REMOTE the mirror is skipped and only the v2-runner refresh below runs.
+REMOTE="${REMOTE:-}"
+# The Unix user that writes the state on the remote, when it is not the ssh login:
+# Miles runs on dayshift as `miles`, whose home the login cannot read (2026-10-29).
+# Every remote read then runs as that user there (sudo -n -u), from their Data.
+REMOTE_USER="${REMOTE_USER:-}"
 LOG_FILE="${LOG_FILE:-$HOME/.datacore/state-sync.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -32,41 +41,93 @@ mkdir -p "$(dirname "$LOG_FILE")"
 ts() { date -u "+%Y-%m-%dT%H:%M:%SZ"; }
 log() { printf '[%s] %s\n' "$(ts)" "$*" >> "$LOG_FILE"; }
 
+# Every remote call is bounded. On 2026-09-24 one rsync hung on a dead ssh link
+# for days; launchd does not start a StartInterval job while the last run is
+# still alive, so the whole sync silently stopped. BatchMode: never wait on a
+# prompt. ConnectTimeout + ServerAlive*: a dead link fails in ~40 s.
+# rsync --timeout: a stalled transfer fails after 120 s of no I/O.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
+RSYNC=(rsync -a --timeout=120 -e "ssh ${SSH_OPTS[*]}")
+RDATA="Data"
+AS=""
+if [[ -n "$REMOTE_USER" ]]; then
+  RDATA="~$REMOTE_USER/Data"
+  AS="sudo -n -u $REMOTE_USER "
+  RSYNC+=(--rsync-path="sudo -n -u $REMOTE_USER rsync")
+fi
+
+if [[ -z "$REMOTE" ]]; then
+  log "no remote configured (REMOTE unset) -- state mirror skipped"
+else
 log "begin sync from $REMOTE"
 
 # 1) Crew agent state (single directory, fixed location)
 mkdir -p "$DATA_DIR/.datacore/state/agents"
-if rsync -a --include='*.json' --exclude='*' \
-    "$REMOTE:Data/.datacore/state/agents/" \
+if "${RSYNC[@]}" --include='*.json' --exclude='*' \
+    "$REMOTE:$RDATA/.datacore/state/agents/" \
     "$DATA_DIR/.datacore/state/agents/" 2>>"$LOG_FILE"; then
   log "crew state ok"
 else
-  log "crew state FAILED (rc=$?)"
+  rc=$?
+  log "crew state FAILED (rc=$rc)"
 fi
 
 # 2) Per-venture heartbeat.json + decisions-pending.json
 #    Iterate the local space dirs; mirror state per venture.
+#    Only spaces the remote actually has: some spaces live on this Mac alone
+#    (9-practice holds private health data and is never deployed to the
+#    server). Rsyncing those failed every 5 minutes with "No such file or
+#    directory", which buried real failures in the log.
 shopt -s nullglob
+# Spaces the daemon never writes (install.yaml roles.held) are skipped.
+# Fail closed: if the held list cannot be read, no space is mirrored this run.
+if ! held_spaces=$(python3 "$(dirname "${BASH_SOURCE[0]}")/spaces.py" role held --root "$DATA_DIR" 2>>"$LOG_FILE"); then
+  log "  cannot read roles.held from install.yaml -- per-space sync skipped"
+  held_unknown=1
+fi
 synced=0
 failed=0
-for space_dir in "$DATA_DIR"/[1-9]-*/; do
-  space_name=$(basename "$space_dir")
-  # 6-meridian is intentionally not written by daemon — skip
-  if [[ "$space_name" == "6-meridian" ]]; then
-    continue
-  fi
+list_cmd="cd $RDATA && for d in [1-9]-*/.datacore/state; do [ -d \"\$d\" ] && echo \"\${d%%/*}\"; done; true"
+[[ -n "$AS" ]] && list_cmd="${AS}sh -c $(printf '%q' "$list_cmd")"
+if remote_spaces=$(ssh "${SSH_OPTS[@]}" "$REMOTE" "$list_cmd" 2>>"$LOG_FILE"); then
+  for space_dir in "$DATA_DIR"/[1-9]-*/; do
+    [[ -n "${held_unknown:-}" ]] && break
+    space_name=$(basename "$space_dir")
+    if grep -qxF "$space_name" <<<"$held_spaces"; then
+      continue
+    fi
+    # The number prefix is local and differs per host (ENG-2026-08-03-047):
+    # find the remote folder holding the same space by its bare name.
+    bare="$space_name"
+    [[ "$space_name" =~ ^[0-9]+-(.+)$ ]] && bare="${BASH_REMATCH[1]}"
+    remote_name=""
+    while IFS= read -r r; do
+      [[ -z "$r" ]] && continue
+      rb="$r"
+      [[ "$r" =~ ^[0-9]+-(.+)$ ]] && rb="${BASH_REMATCH[1]}"
+      if [[ "$rb" == "$bare" ]]; then remote_name="$r"; break; fi
+    done <<<"$remote_spaces"
+    if [[ -z "$remote_name" ]]; then
+      log "  $space_name not on $REMOTE — skipped (local-only space)"
+      continue
+    fi
 
-  mkdir -p "$space_dir.datacore/state"
-  if rsync -a --include='heartbeat.json' --include='decisions-pending.json' \
-        --exclude='*' \
-        "$REMOTE:Data/$space_name/.datacore/state/" \
-        "$space_dir.datacore/state/" 2>>"$LOG_FILE"; then
-    synced=$((synced + 1))
-  else
-    failed=$((failed + 1))
-    log "  $space_name FAILED (rc=$?)"
-  fi
-done
+    mkdir -p "$space_dir.datacore/state"
+    if "${RSYNC[@]}" --include='heartbeat.json' --include='decisions-pending.json' \
+          --exclude='*' \
+          "$REMOTE:$RDATA/$remote_name/.datacore/state/" \
+          "$space_dir.datacore/state/" 2>>"$LOG_FILE"; then
+      synced=$((synced + 1))
+    else
+      rc=$?
+      failed=$((failed + 1))
+      log "  $space_name FAILED (rc=$rc)"
+    fi
+  done
+else
+  failed=$((failed + 1))
+  log "venture state FAILED: cannot list spaces on $REMOTE"
+fi
 
 log "venture state: $synced ok, $failed failed"
 log "end sync"
@@ -75,6 +136,8 @@ log "end sync"
 if [[ -t 1 ]]; then
   echo "Synced from $REMOTE: crew state + $synced venture heartbeats ($failed failed)"
   echo "Log: $LOG_FILE"
+fi
+
 fi
 
 # ── keep the v2-runner checkout current ──────────────────────────────────────
@@ -104,7 +167,7 @@ if [[ -e "$RUNNER/.git" ]]; then
     mkdir -p "$(dirname "$STAMP")"
     # Merge, never rebase (DIP-0046). --ff-only would be safer still, but this
     # checkout is read-only in practice, so a merge cannot strand local work.
-    if git -C "$RUNNER" pull -q --no-rebase origin main 2>&1 | tail -2 >> "$LOG_FILE"; then
+    if GIT_SSH_COMMAND="ssh ${SSH_OPTS[*]}" git -C "$RUNNER" pull -q --no-rebase origin main 2>&1 | tail -2 >> "$LOG_FILE"; then
       echo "$now" > "$STAMP"
       # ASSERT the outcome, do not assume it. The whole point is that the
       # detectors run current code; a pull that "succeeded" while leaving the

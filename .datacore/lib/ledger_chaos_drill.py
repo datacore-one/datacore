@@ -347,7 +347,8 @@ class Drill:
         writer.append("item.create", {"id": "d1", "title": "A task", "tags": ["work"]})
 
         target = space / "org" / "next_actions.org"
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         target.write_text(rendered)
         # Establish the projection base. Without it the guard takes its earlier
         # "no base" path, and the scenario would quietly test something easier
@@ -382,7 +383,8 @@ class Drill:
         The log's contract distinguishes the two by POSITION: an unparseable
         FINAL line can only be an interrupted write, so `append` truncates it
         and `read_events` skips it; the same damage anywhere else cannot be
-        explained that way and must raise rather than silently drop events.
+        explained that way and must never be dropped silently (since LED-7 the
+        reader warns and withholds that log's tail; the writer still refuses).
         The drill asserts both halves, because a reader that swallowed a
         mid-file corruption would lose data with no error at all.
         """
@@ -404,19 +406,46 @@ class Drill:
         self.check("no complete event was lost to the repair",
                    [r["payload"]["id"] for r in rows[:5]] == [f"p{n}" for n in range(5)])
 
+        # Damage in the MIDDLE. Since LED-7 (afd3e84) a reader no longer raises
+        # here -- one damaged writer log used to stop fold, projection and
+        # policy for the whole space. It reads the events before the damage and
+        # withholds the rest. That is only safe if the withholding is NEVER
+        # silent, so the drill asserts every way it must be seen: a warning
+        # naming the file and line, a chain that verifies as incomplete (so
+        # attestation readers fail closed), and a writer that refuses to append
+        # past the damage rather than "repairing" it away.
+        import warnings as _w
+        from ledger.log import CorruptLogWarning
+        from ledger.verify import verify_events
         lines = whole.splitlines()
         lines[2] = '{"seq": 2, "type": "item.crea'
         path.write_text("\n".join(lines) + "\n")
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            try:
+                got = list(read_events(space))
+                raised = False
+            except CorruptLogError:
+                got, raised = [], True
+        notes = [str(w.message) for w in caught if issubclass(w.category, CorruptLogWarning)]
+        self.check("damage in the MIDDLE of the log is never read silently",
+                   raised or bool(notes), f"read_events returned {len(got)} event(s) with no warning")
+        if notes:
+            self.check("the warning names the file and the line",
+                       "drill.jsonl" in notes[0] and "line 3" in notes[0], notes[0])
+            self.check("only the events before the damage are read",
+                       [e.payload.get("id") for e in got] == ["p0", "p1"],
+                       str([e.payload.get("id") for e in got]))
+            errors = verify_events(list(enumerate(got, 1)))
+            self.check("the chain verifies as INCOMPLETE, so evidence readers fail closed",
+                       any("incomplete" in e for e in errors), str(errors))
         try:
-            list(read_events(space))
-            raised, detail = False, ""
-        except CorruptLogError as exc:
-            raised, detail = True, str(exc)
-        self.check("damage in the MIDDLE of the log raises instead of dropping events",
-                   raised, "read_events silently returned a short log")
-        if raised:
-            self.check("the error names the file and the line",
-                       "drill.jsonl" in detail and "3" in detail, detail)
+            self.log(space, "drill").append("item.create", {"id": "px", "title": "past the damage"})
+            refused = False
+        except CorruptLogError:
+            refused = True
+        self.check("a writer refuses to append past mid-log damage",
+                   refused, "append wrote over a damaged log")
 
     def simultaneous_hosts(self) -> None:
         """Two hosts appending and publishing to one remote at the same moment.
@@ -438,7 +467,7 @@ class Drill:
 
         # Distinct writers, as two hosts would be: per-writer files are disjoint.
         self.log(space, "mac").append("item.create", {"id": "m1", "title": "from mac"})
-        self.log(other, "winston").append("item.create", {"id": "n1", "title": "from winston"})
+        self.log(other, "host-b").append("item.create", {"id": "n1", "title": "from host-b"})
 
         script = (
             "import sys\n"
@@ -455,15 +484,15 @@ class Drill:
                  for d in (space, other)]
         outs = [p.communicate()[0].decode().strip() for p in procs]
         print(f"      mac     -> {outs[0] or 'no output'}")
-        print(f"      winston -> {outs[1] or 'no output'}")
+        print(f"      host-b  -> {outs[1] or 'no output'}")
 
         # Whatever each race outcome was, converging again must reconcile them.
         for d in (space, other):
             t.converge(d, root=self.root)
         rc_m, remote_mac = self.git(origin, "show", "main:.datacore/events/mac.jsonl")
-        rc_w, remote_win = self.git(origin, "show", "main:.datacore/events/winston.jsonl")
+        rc_w, remote_win = self.git(origin, "show", "main:.datacore/events/host-b.jsonl")
         self.check("mac's event reached the remote", rc_m == 0 and '"m1"' in remote_mac)
-        self.check("winston's event reached the remote", rc_w == 0 and '"n1"' in remote_win)
+        self.check("host-b's event reached the remote", rc_w == 0 and '"n1"' in remote_win)
         self.check("neither host was left mid-merge",
                    not (space / ".git" / "MERGE_HEAD").exists()
                    and not (other / ".git" / "MERGE_HEAD").exists())
@@ -492,7 +521,8 @@ class Drill:
         self.log(space, "drill").append("item.create", {"id": "n1", "title": "A task"})
 
         target = space / "org" / "next_actions.org"
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered)
         (space / STATE).parent.mkdir(parents=True, exist_ok=True)
@@ -505,7 +535,8 @@ class Drill:
         self.check("the drill authored an empty property value", n == 1)
         target.write_text(edited)
 
-        proposed = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        proposed = project(authoritative_state(space), space=space.name, as_of=0).text
         try:
             guard_projection(space, edited, proposed)
             drifted = False
@@ -513,9 +544,11 @@ class Drill:
             drifted = True
         self.check("an un-ingested authored field is REFUSED", drifted)
 
-        sync_generated(space, fold(read_events(space)), "drill")
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        sync_generated(space, authoritative_state(space), "drill")
 
-        after = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        after = project(authoritative_state(space), space=space.name, as_of=0).text
         try:
             guard_projection(space, target.read_text(), after)
             closed, reason = True, ""
@@ -550,7 +583,8 @@ class Drill:
             "id": "c1", "title": "Ship the release notes", "state": "NEXT"})
 
         target = space / "org" / "next_actions.org"
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(rendered)
         (space / STATE).parent.mkdir(parents=True, exist_ok=True)
@@ -573,7 +607,8 @@ class Drill:
             ok, why = False, f"{type(exc).__name__}: {exc}"
         self.check("the closing ingest and the one after it both succeed", ok, why)
 
-        item = fold(read_events(space)).items.get("c1")
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space).items.get("c1")
         self.check("the item is closed in the ledger", item is not None and item.status == "dismissed",
                    getattr(item, "status", "missing"))
         title = (getattr(item, "payload", None) or {}).get("title")
@@ -622,7 +657,8 @@ class Drill:
                             "org": {"heading": "Captured follow-up", "level": 2}})
 
         # What the Phase-1 projector then writes over next_actions.org.
-        rendered = project(fold(read_events(space)), space=space.name, as_of=0).text
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        rendered = project(authoritative_state(space), space=space.name, as_of=0).text
         (space / "org" / "next_actions.org").write_text(rendered)
         self.check("the projection reproduces the captured id", tid in rendered,
                    "the scenario never built the collision it is about")
@@ -665,7 +701,8 @@ class Drill:
             ensure_ids(space)
             import_space(space, actor="drill")
             sync_state(space)
-            sync_generated(space, fold(read_events(space)), "drill")
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            sync_generated(space, authoritative_state(space), "drill")
             ok, why = True, ""
         except Exception as exc:  # noqa: BLE001
             ok, why = False, f"{type(exc).__name__}: {exc}"

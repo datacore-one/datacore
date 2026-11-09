@@ -5,7 +5,7 @@
 #   name        - Short identifier (slug-style, lowercase, hyphens ok)
 #   description - One-sentence summary of the venture
 #   stage       - One of: discovery, validation, growth, maturity
-#   space       - Datacore space directory (e.g. "4-forge")
+#   space       - Datacore space directory (e.g. "4-acme")
 #   autonomy    - AI autonomy level: 0=off, 1=suggest, 2=draft, 3=act
 #   thesis      - Core hypothesis being tested (optional)
 #   budget      - Spending limits (all in USD)

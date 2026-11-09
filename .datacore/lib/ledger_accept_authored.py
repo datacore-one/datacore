@@ -62,11 +62,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--actor', default=None)
     ap.add_argument('--apply', action='store_true')
     a = ap.parse_args(argv)
+    # Identity at startup, strictly (owner follow-up Q2); --actor wins.
+    if not a.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            a.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 2
 
     space = a.space.resolve()
     path = a.field.split('.')
     top = path[0]
-    item = fold(read_events(space)).items.get(a.item)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    item = authoritative_state(space).items.get(a.item)
     if item is None:
         raise SystemExit(f'{a.item} is not in the ledger for {space.name}')
     want = authored(space, a.item)
@@ -83,11 +92,11 @@ def main(argv: list[str] | None = None) -> int:
         print('  dry run -- pass --apply to record the authored value')
         return 0
 
-    from actor_identity import this_actor
-    log = EventLog(space, a.actor or this_actor())
+    log = EventLog(space, a.actor)
     payload = conditional_payload(item, {top: want[top]})
     event = log.append('item.update', payload)
-    after = fold(read_events(space)).items[a.item]
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    after = authoritative_state(space).items[a.item]
     if event.hash in after.edit_conflicts:
         raise SystemExit('refused: the ledger changed underneath this edit; re-run')
     print(f'  recorded {event.hash[:12]} seq {event.seq}')

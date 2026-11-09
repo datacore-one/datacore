@@ -10,6 +10,10 @@ Usage:
     python3 ledger_cli.py verify --space <dir> [--strict]
     python3 ledger_cli.py items --space <dir> [--status <s>] [--owner <o>]
     python3 ledger_cli.py balances --space <dir>
+    python3 ledger_cli.py void ...   (retired 2026-11-01: refused, names the forward correction)
+    python3 ledger_cli.py init --space <dir> --actor <name> [--email <git email>]
+    python3 ledger_cli.py principals add --actor <name> [--kind human|agent] [--email <git email>]
+    python3 ledger_cli.py doctor [--space <dir>]
 
 Stdout/stderr discipline: every command's DATA (the appended event's
 hash/hlc, the "OK ..." summary, item JSON lines, the balances object) goes
@@ -20,8 +24,11 @@ clean one-line stderr message with a nonzero exit code -- never a
 traceback. Genuinely unexpected exceptions are allowed to propagate with a
 traceback; that is not this script's job to hide.
 
-Actor resolution (append only): `--actor`, else `$DATACORE_ACTOR`, else
-`socket.gethostname()`.
+Actor resolution (append/approve only): `--actor`, else this machine's
+declared actor via `actor_identity.this_actor(strict=True)` ($DATACORE_ACTOR,
+~/.datacore/identity.env, the infrastructure registry), resolved at startup.
+An undeclared host is refused with exit 2 before anything is opened; the
+hostname is never a guess (owner decisions L10, follow-up Q2).
 """
 
 from __future__ import annotations
@@ -35,11 +42,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ledger.fold import fold  # noqa: E402
-from ledger.index import build_index, items_by  # noqa: E402
-from ledger.log import EventLog, read_events  # noqa: E402
-from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
-from ledger.policy import approval_payload_hash, guarded_append, load_policy
+try:
+    from ledger.fold import fold  # noqa: E402
+    from ledger.index import build_index, items_by  # noqa: E402
+    from ledger.log import TELEMETRY_DIR, EventLog, read_events  # noqa: E402
+    from ledger.verify import check_not_rewound, verify_chain  # noqa: E402
+    from ledger.policy import approval_payload_hash, guarded_append, load_policy
+    _MISSING = None
+except ImportError as _exc:  # a package is not installed: `doctor` names it (ledger upgrade I2)
+    _MISSING = _exc
+
+#: Subcommands that set an installation up or check it; they run without the
+#: ledger's packages, so they can say which one is missing (ledger_install.py).
+INSTALLERS = ("init", "doctor", "principals")
 
 
 def _default_actor() -> str:
@@ -50,7 +65,11 @@ def _default_actor() -> str:
         _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
         _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
         this_actor = _m.this_actor
-    return this_actor()
+    return this_actor(strict=True)
+
+
+#: Subcommands that append, and so need a writer identity.
+WRITERS = ("append", "approve", "close", "void")
 
 
 def _json_dict(raw: str) -> dict:
@@ -106,42 +125,231 @@ def cmd_approve(args):
     print(json.dumps({"approval_ref": event.hash, "payload_hash": event.payload["payload_hash"]}))
 
 
+def cmd_close(args: argparse.Namespace) -> None:
+    """Close one task in the ledger: the conditional `item.dismiss` org ingest writes.
+
+    For when the space's projection cannot be edited (its ingest is stopped, or
+    the file is stale or missing): on 2026-10-29 25 closes in 5-plur had to be
+    hand-written. Pinned to the item's current payload like an ingested close,
+    and written through the write guard.
+    """
+    from ledger.edits import EditConflict, conditional_payload, require_edit_protocol
+    from ledger.hub import authoritative_state
+    space = _require_space(args.space)
+    try:
+        version = require_edit_protocol(space)
+    except EditConflict as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    item = authoritative_state(space).items.get(args.id)
+    if item is None:
+        print(f"error: no item {args.id} in {space}", file=sys.stderr)
+        sys.exit(1)
+    if item.status in ("dismissed", "archived", "verified"):
+        print(f"error: {args.id} is already closed ({item.status})", file=sys.stderr)
+        sys.exit(1)
+    payload = conditional_payload(item, {"kind": args.kind, "reason": args.reason}, terminal=True,
+                                  version=version)
+    try:
+        event = guarded_append(EventLog(space, args.actor or _default_actor()), "item.dismiss", payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"hash": event.hash, "hlc": event.hlc, "closed": args.id, "kind": args.kind}))
+
+
+def cmd_void(args: argparse.Namespace) -> None:
+    """RETIRED (DIP-0034 amendment of 2026-10-31, plan phase B): refused with a
+    pointer to the forward correction (`ledger.compensate`); writes nothing.
+
+    Until 2026-11-01 it cancelled one bad event with an in-ledger `ledger.void`
+    (LED-4/LED-5), as follows; the code stays for the history it describes.
+
+    Names the event exactly as stored (log, seq, stored hash) and pins the hash
+    its body produces, so a later edit of the voided event revokes the void.
+    Written through EventLog as the current actor; whether it takes effect is
+    decided at read time (ledger.voids): only an authorised voider who is not
+    the event's writer cancels anything.
+    """
+    from ledger import voids
+    try:
+        voids.refuse_new_void(voids.VOID_TYPE)
+    except voids.VoidRetired as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    from ledger.voids import body_hash, log_stem, refusal
+    space = _require_space(args.space)
+    actor = args.actor or _default_actor()
+    stem = log_stem(args.log)
+    path = space / ".datacore" / "events" / f"{stem}.jsonl"
+    target = None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip() and json.loads(line).get("seq") == args.seq:
+                from ledger.events import from_line
+                target = from_line(line.strip())
+                break
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if target is None:
+        print(f"error: no event seq {args.seq} in {path}", file=sys.stderr)
+        sys.exit(1)
+    from ledger.finality import reversible
+    from ledger.hub import load_config
+    if load_config(space) is not None and not reversible(target.type):   # a hub space (owner, round 7)
+        print(f"error: {target.type} is a control record and is never reversible (owner, round 7); "
+              "correct it with a new forward record", file=sys.stderr)
+        sys.exit(1)
+    why = refusal(actor, stem)
+    if why:
+        print(f"error: {why}; a void by this actor would have no effect", file=sys.stderr)
+        sys.exit(1)
+    event = EventLog(space, actor).append("ledger.void", {
+        "log": f"{stem}.jsonl", "seq": target.seq, "hash": target.hash,
+        "body_sha256": body_hash(target), "reason": args.reason})
+    print(json.dumps({"hash": event.hash, "hlc": event.hlc, "voids": f"{stem}.jsonl#{target.seq}"}))
+
+
+def _shown(path: Path) -> str:
+    return f"{TELEMETRY_DIR}/{path.name}" if path.parent.name == TELEMETRY_DIR else path.name
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
+    """Verify every log of a space: task logs, the per-space telemetry logs
+    (LED-8) and any log this machine wrote that is now gone (LED-2).
+
+    One verifier (ledger.verify.verify_space, Phase 2 V2): the health check,
+    the relay guard, the seal and the checkpoint give the same verdict.
+    Exit 0 sound, 1 broken (a fault in the data), 3 could not check on this
+    machine (e.g. a writer whose verify key it does not hold) -- never a pass,
+    never "broken" (V5). By default only what was appended since this
+    machine's last clean verify is judged; --full re-verifies everything.
+    """
+    from ledger.verify import verify_space
     space = _require_space(args.space)
     events_dir = space / ".datacore" / "events"
-    files = sorted(events_dir.glob("*.jsonl")) if events_dir.exists() else []
+    report = verify_space(space, strict=args.strict, incremental=not args.full)
+    for log in report.logs:
+        for problem in log.problems:
+            print(f"{log.shown}: {problem.text}", file=sys.stderr)
 
-    had_errors = False
-    for path in files:
-        for error in verify_chain(path, strict=args.strict):
-            print(f"{path.name}: {error}", file=sys.stderr)
-            had_errors = True
-        # Truncation leaves a shorter but internally perfect chain, so it must
-        # be checked against an external witness rather than the chain itself.
-        for error in check_not_rewound(path):
-            print(f"{path.name}: {error}", file=sys.stderr)
-            had_errors = True
-
-    if had_errors:
+    if report.verdict == "broken":
         sys.exit(1)
+    if report.verdict == "unknown":
+        print(f"COULD NOT CHECK {len(report.logs)} files: this machine cannot judge every event "
+              "(see above); that is not a fault in the data", file=sys.stderr)
+        sys.exit(3)
 
-    total_events = len(read_events(space))
-    print(f"OK {len(files)} files {total_events} events")
+    files = sum(1 for log in report.logs if log.path.exists())
+    # Voided records are named, never silent: a voided event is still in the
+    # history, cancelled by an in-ledger ledger.void that says why.
+    from ledger.voids import for_events_dir
+    voided = len(for_events_dir(events_dir))
+    note = f" ({voided} voided record(s))" if voided else ""
+    print(f"OK {files} files {report.events} events{note}")
+
+
+def cmd_stopped(args: argparse.Namespace) -> None:
+    """Every log in the space the ledger has stopped (a binding stop record).
+
+    Read-only. Exit 3 and one line per stopped log when there is any, exit 0
+    when none: the check a job runs before writing, so it stops instead of
+    working around the refusal (owner decision 2026-09-28).
+    """
+    from ledger.log import read_stop
+    from ledger.verify import _tail_seq
+    space = Path(args.space)
+    hwm = space / ".datacore" / "state" / "seq-hwm"
+    stopped = []
+    for rec in sorted(hwm.glob("*.stopped")) + sorted((hwm / TELEMETRY_DIR).glob("*.stopped")):
+        folder = space / ".datacore" / (TELEMETRY_DIR if rec.parent.name == TELEMETRY_DIR else "events")
+        log = folder / f"{rec.stem}.jsonl"
+        stop = read_stop(log) or {"hwm": None}
+        tail = _tail_seq(log)
+        if stop["hwm"] is None or tail < stop["hwm"]:
+            stopped.append(f"{_shown(log)}: appends stopped since {stop.get('at', '?')} -- the log "
+                           f"ends at seq {tail}, this machine wrote seq {stop['hwm']}")
+    # A log the hub stops admitting is stopped too: nothing written after the
+    # refused event counts. On 2026-10-28 Winston's log stopped at a retired
+    # `task.create` written by a stale library, and this command said nothing.
+    stopped.extend(_admission_refusals(space))
+    for line in stopped:
+        print(line)
+    sys.exit(3 if stopped else 0)
+
+
+def _admission_refusals(space: Path) -> list[str]:
+    """One line per log hub admission stops, with the reason; [] without a hub."""
+    from ledger.log import read_events
+    from ledger import hub
+    try:
+        events = list(read_events(space))
+        cfg = hub.require_config_or_no_hub(space, events, None)
+        if cfg is None:
+            return []
+        res = hub.admit(events, hub.authority(space, cfg, None), now_ms=hub._wall_ms())
+    except Exception as exc:  # noqa: BLE001 -- unreadable admission is not "all clear"
+        return [f"{_shown(space)}: hub admission could not be read ({type(exc).__name__}: {exc})"]
+    return ([f"{log}.jsonl: hub admission stops this log at {why} -- nothing written after it counts"
+             for log, why in sorted(res.refused.items())]
+            + [f"{log}.jsonl: hub admission HOLDS {why} -- in the chain, no effect; the writer's key "
+               "did not sign it" for log, whys in sorted(res.held.items()) for why in whys])
 
 
 def cmd_items(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     db_path = space / ".datacore" / "state" / "ledger" / "index.db"
     build_index(state, db_path)
     for item in items_by(db_path, status=args.status, owner=args.owner):
+        # A closed item says how it closed: `item.dismiss` carries both "done"
+        # (a task completed) and "dropped"/"housekeeping", and "dismissed" alone
+        # reads finished work as cancelled (INS-2).
+        st = state.items.get(item["id"])
+        if st is not None and st.closed_kind:
+            item["closed_as"] = st.closed_kind
         print(json.dumps(item))
 
 
 def cmd_balances(args: argparse.Namespace) -> None:
     space = _require_space(args.space)
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     print(json.dumps(state.spend))
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    """Make a space ledger-ready for a person on this machine (profile A)."""
+    import ledger_install as inst
+    try:
+        for line in inst.init(Path(args.space), args.actor, email=args.email):
+            print(line)
+    except inst.InstallRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(f"next: python3 .datacore/lib/ledger_cli.py doctor --space {args.space}")
+
+
+def cmd_principals(args: argparse.Namespace) -> None:
+    import ledger_install as inst
+    try:
+        print(inst.add_principal(args.actor, kind=args.kind, email=args.email))
+    except inst.InstallRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Every missing prerequisite, each with its fix; exit 1 when any is missing."""
+    import ledger_install as inst
+    checks = inst.doctor(Path(args.space) if args.space else None)
+    for check in checks:
+        print(check.line())
+    gaps = [c for c in checks if c.ok is False]
+    print(f"{len(gaps)} missing" if gaps else "nothing missing")
+    sys.exit(1 if gaps else 0)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--type", required=True, dest="type", help="Event type")
     p.add_argument("--payload", required=True, type=_json_dict, help="Event payload (JSON object)")
-    p.add_argument("--actor", default=None, help="Actor id (default: $DATACORE_ACTOR or hostname)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
 
     p = sub.add_parser("approve", help="Approve the exact proposed item.create payload")
     p.add_argument("--space", required=True)
@@ -165,6 +373,25 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("verify", help="Verify every writer's hash chain in a space")
     p.add_argument("--space", required=True, help="Space directory root")
     p.add_argument("--strict", action="store_true", help="Flag unsigned events as errors")
+    p.add_argument("--full", action="store_true",
+                   help="Re-verify all history (default: only what was appended since this machine's last clean verify)")
+
+    p = sub.add_parser("stopped", help="List logs the ledger stopped (exit 3 when any)")
+    p.add_argument("--space", required=True, help="Space directory root")
+
+    p = sub.add_parser("close", help="Close one task in the ledger when its org projection cannot be edited")
+    p.add_argument("--space", required=True, help="Space directory root")
+    p.add_argument("--id", required=True, help="The item's id")
+    p.add_argument("--kind", required=True, choices=("done", "dropped"), help="done = finished, dropped = cancelled")
+    p.add_argument("--reason", required=True, help="Why it closed (recorded in the ledger)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
+
+    p = sub.add_parser("void", help="Retired 2026-11-01: refused; correct with a forward ledger.compensate")
+    p.add_argument("--space", required=True, help="Space directory root")
+    p.add_argument("--log", required=True, help="The voided event's log file (e.g. agent-a.jsonl)")
+    p.add_argument("--seq", required=True, type=int, help="The voided event's seq")
+    p.add_argument("--reason", required=True, help="Why it is void (recorded in the ledger)")
+    p.add_argument("--actor", default=None, help="Actor id (default: this machine's declared actor)")
 
     p = sub.add_parser("items", help="Fold events and list items")
     p.add_argument("--space", required=True, help="Space directory root")
@@ -174,6 +401,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("balances", help="Fold events and print per-actor spend")
     p.add_argument("--space", required=True, help="Space directory root")
 
+    p = sub.add_parser("init", help="Make a space ledger-ready for a person on this machine")
+    p.add_argument("--space", required=True, help="Space directory root (created if missing)")
+    p.add_argument("--actor", required=True, help="The person writing from this machine (never guessed)")
+    p.add_argument("--email", default=None, help="Their git author email, bound by hash in principals.yaml")
+
+    p = sub.add_parser("principals", help="Declare a person in principals.yaml")
+    psub = p.add_subparsers(dest="principals_op", required=True)
+    pa = psub.add_parser("add", help="Add (or bind an email to) a principal")
+    pa.add_argument("--actor", required=True, help="Writer name (their log is <name>.jsonl)")
+    pa.add_argument("--kind", default="human", choices=("human", "agent"))
+    pa.add_argument("--email", default=None, help="A git author email, stored as a hash")
+
+    p = sub.add_parser("doctor", help="Name every missing prerequisite, each with its fix")
+    p.add_argument("--space", default=None, help="Also check this space")
+
     return parser
 
 
@@ -181,14 +423,32 @@ COMMANDS = {
     "append": cmd_append,
     "approve": cmd_approve,
     "verify": cmd_verify,
+    "stopped": cmd_stopped,
+    "close": cmd_close,
+    "void": cmd_void,
     "items": cmd_items,
     "balances": cmd_balances,
+    "init": cmd_init,
+    "principals": cmd_principals,
+    "doctor": cmd_doctor,
 }
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if _MISSING is not None and args.command not in INSTALLERS:
+        print(f"error: the ledger cannot load ({_MISSING}); run "
+              "`python3 .datacore/lib/ledger_cli.py doctor` to see what to install", file=sys.stderr)
+        sys.exit(2)
+    if args.command in WRITERS and not args.actor:
+        try:
+            args.actor = _default_actor()
+        except RuntimeError as exc:
+            if type(exc).__name__ != "UndeclaredActor":
+                raise
+            print(f"error: {exc}", file=sys.stderr)
+            sys.exit(2)
     COMMANDS[args.command](args)
 
 

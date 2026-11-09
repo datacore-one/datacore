@@ -40,10 +40,10 @@ Run the full scan using discovered orgs:
 
 ```bash
 python3 .datacore/modules/github/lib/github_scanner.py \
-  --username plur9 \
+  --username <username from module settings> \
   --orgs "<comma-separated orgs from step 1>" \
   --hours 24 \
-  --cache .datacore/modules/github/data/scan_cache.json \
+  --cache 0-personal/.datacore/module-data/github/data/scan_cache.json \
   --format json
 ```
 
@@ -53,8 +53,8 @@ If `auto_task_create` is enabled (default: true), create tasks from actionable i
 
 ```bash
 python3 .datacore/modules/github/lib/task_creator.py \
-  --scan-file .datacore/modules/github/data/scan_cache.json \
-  --repos-file .datacore/modules/github/data/repos.json \
+  --scan-file 0-personal/.datacore/module-data/github/data/scan_cache.json \
+  --repos-file 0-personal/.datacore/module-data/github/data/repos.json \
   --data-dir ~/Data
 ```
 
@@ -68,7 +68,7 @@ Use the scan results to produce a markdown summary. Call `format_summary()` from
 ```markdown
 ### GitHub: Your Items
 
-**@plur9 mentions:**
+**@<username> mentions:**
 - owner/repo#N — "Issue title"
   State: open | [View](url)
 
@@ -109,7 +109,7 @@ Read from `.datacore/modules/github/module.yaml`:
 
 | Setting | Key | Default |
 |---------|-----|---------|
-| GitHub username | `username` | plur9 |
+| GitHub username | `username` | none — required |
 | Scan window | `scan_hours` | 24 |
 | Auto-create tasks | `auto_task_create` | true |
 | Excluded repos | `exclude_repos` | [] |

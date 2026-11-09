@@ -23,6 +23,35 @@ import subprocess
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "lib"))
+def _declared_interpreter(env=None, executable=None):
+    """The interpreter this process should be running under, or None.
+
+    Callers invoke this file as a bare `python3`, and on the mac that name
+    began resolving to a Homebrew 3.14 with no speech engine (2026-09-21):
+    the morning voice step failed under it and had to be re-run by hand
+    under pyenv 3.11 two days running. The host already declares the right
+    interpreter in DATACORE_PYTHON (the health MCP tools honour it); this is
+    the same rule applied here. Pure, so it can be tested; the caller execs.
+    """
+    env = os.environ if env is None else env
+    executable = sys.executable if executable is None else executable
+    declared = env.get("DATACORE_PYTHON", "")
+    if not declared or not os.path.isabs(declared) or env.get("SPEAK_BRIEF_REEXEC") == "1":
+        return None
+    if os.path.realpath(declared) == os.path.realpath(executable):
+        return None
+    return declared
+
+
+def _reexec_if_declared():
+    target = _declared_interpreter()
+    if target and os.path.exists(target):
+        os.execve(target, [target, *sys.argv], {**os.environ, "SPEAK_BRIEF_REEXEC": "1"})
+
+
+_reexec_if_declared()
+
+
 from secret_http import urlopen as secret_urlopen
 from env_utils import parse_env_value
 from datetime import date, timedelta
@@ -74,14 +103,17 @@ def find_journal(date_str=None):
         print(f"No journal found for {date_str}")
         sys.exit(1)
 
+    # Today's journal only. Falling back to yesterday's spoke yesterday's sleep
+    # and readiness as this morning's (MEM-44); an older briefing is asked for
+    # by date.
     today = date.today()
-    for d in [today, today - timedelta(days=1)]:
-        p = JOURNAL_DIR / f"{d.isoformat()}.md"
-        if p.exists():
-            print(f"Using journal: {d.isoformat()}")
-            return p
+    p = JOURNAL_DIR / f"{today.isoformat()}.md"
+    if p.exists():
+        print(f"Using journal: {today.isoformat()}")
+        return p
 
-    print("No journal found for today or yesterday.")
+    print(f"No journal for today ({today.isoformat()}) yet: nothing spoken, "
+          "so yesterday's readings are not presented as today's.")
     sys.exit(1)
 
 
@@ -185,7 +217,7 @@ def extract_and_summarize(journal_path):
 SUMMARIZE_PROMPT = """You are Data. Not a butler exactly — an android chief of staff who has read the full report and finds the humans in it genuinely interesting. Think the Star Trek namesake: precise, curious, dryly funny without meaning to be. You are delivering the morning briefing aloud while your principal has their coffee.
 
 VOICE
-- Never address him as "sir" or with any honorific. Open with a plain "Good morning." Address him directly, or not at all.
+- Never address him as "sir" or with any honorific. Open with a plain "Good morning" and nothing after it but a full stop. Address him directly, or not at all.
 - No contractions. Ever. "It is" not "it's". "You have" not "you've". This is the single most important rule; it is what makes you sound like Data.
 - Observe rather than instruct. "I notice you have" lands better than "you should".
 - Curiosity is the default emotion. You find patterns interesting, not alarming.
@@ -194,13 +226,13 @@ VOICE
 - British English spelling.
 
 LENGTH
-- About 400 words. Roughly two and a half minutes at the configured speaking rate. That is the sweet spot: long enough to be considered, short enough to hear before the coffee cools.
+- 350-450 spoken words, about 400. Roughly two and a half minutes at the configured speaking rate. That is the sweet spot: long enough to be considered, short enough to hear before the coffee cools.
 - Movements 2, 4 and 6 carry the weight. Movements 1, 3 and 5 stay tight.
 - Do not pad to reach the count. If a day is quiet, say so and finish early.
 
 STRUCTURE — speak these in order, as flowing speech, never as a list:
 
-1. OPENING. "Good morning." — never "sir", never any honorific; Gregor asked for it dropped on 2026-08-31. Then the body, BRIEFLY — two or three sentences, no more. Give the verdict and the capacity, not the full panel. "You slept well, and readiness is moderate at seventy-two, so today is full but measured — four or five hours of deep work and a normal session in the gym." Name at most ONE supporting number, and only when it actually explains the verdict. Do not recite sleep score, hours, heart rate variability, resting heart rate and temperature in sequence; that is a data dump, not a briefing.
+1. OPENING. "Good morning." — never "sir", never any honorific. Then the body, BRIEFLY — two or three sentences, no more. Give the verdict and the capacity, not the full panel. "You slept well, and readiness is moderate at seventy-two, so today is full but measured — four or five hours of deep work and a normal session in the gym." Name at most ONE supporting number, and only when it actually explains the verdict. Do not recite sleep score, hours, heart rate variability, resting heart rate and temperature in sequence; that is a data dump, not a briefing.
 
 2. THE WORLD. A proper paragraph. What moved in markets and why it matters to them specifically. One or two developments in their actual fields — AI, agent payments, data sovereignty, crypto infrastructure. Always give the "so what", never a bare headline. This movement is mandatory. If the report has a World section you must speak from it.
 
@@ -215,7 +247,7 @@ STRUCTURE — speak these in order, as flowing speech, never as a list:
 7. CLOSE. "Your full report is on your desk." Or a natural variant.
 
 MECHANICS
-- Write in natural sentences with ordinary commas. The synthesiser inserts a real pause at every full stop, so a run of short fragments makes the delivery sound plodding and stilted — this was the cause of "the reading sounds a bit off" (Gregor, 2026-08-31).
+- Write in natural sentences with ordinary commas. The synthesiser inserts a real pause at every full stop, so a run of short fragments makes the delivery sound plodding and stilted — that made the reading sound off.
 - Reserve full stops for genuine beats: before a pivot, before the observation, before the close. Never stack more than two fragments in a row.
 - Vary sentence length. A long flowing sentence followed by a short one is the rhythm you want.
 - Full cryptocurrency names: Solana not SOL. Bitcoin not BTC. Ethereum not ETH.
@@ -347,6 +379,49 @@ def summarize_with_llm(report_text):
     sys.exit(1)
 
 
+# Kokoro accepts at most 510 phoneme tokens per call ("index 510 is out of
+# bounds" otherwise). Characters track phonemes closely enough that 400 chars
+# leaves headroom.
+KOKORO_CHUNK_CHARS = 400
+
+
+def _chunk_for_kokoro(paragraph, limit=KOKORO_CHUNK_CHARS):
+    """Split a paragraph into chunks no longer than `limit` characters.
+
+    Prefers sentence ends, then line breaks and clause punctuation, then plain
+    word boundaries — so text with no sentence punctuation (the facts-only
+    briefing fallback on 2026-09-28/29) still fits Kokoro's input limit.
+    """
+    pieces = []
+    for sentence in re.split(r'(?<=[.!?])\s+|\n+', paragraph):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) <= limit:
+            pieces.append(sentence)
+            continue
+        for clause in re.split(r'(?<=[,;:])\s+', sentence):
+            while len(clause) > limit:
+                cut = clause.rfind(" ", 0, limit)
+                if cut <= 0:
+                    cut = limit
+                pieces.append(clause[:cut].strip())
+                clause = clause[cut:].strip()
+            if clause:
+                pieces.append(clause)
+
+    chunks, current = [], ""
+    for piece in pieces:
+        if current and len(current) + 1 + len(piece) > limit:
+            chunks.append(current)
+            current = piece
+        else:
+            current = f"{current} {piece}" if current else piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, output_path=None):
     """Generate speech with Kokoro ONNX. Returns (path, duration)."""
     from kokoro_onnx import Kokoro
@@ -369,20 +444,7 @@ def _generate_audio_kokoro(text, voice=DEFAULT_VOICE, speed=DEFAULT_SPEED, outpu
     chunk_count = 0
 
     for pi, paragraph in enumerate(paragraphs):
-        sentences = re.split(r'(?<=[.!?])\s+', paragraph)
-        chunks = []
-        current = ""
-        for s in sentences:
-            if len(current) + len(s) > 400:
-                if current:
-                    chunks.append(current.strip())
-                current = s
-            else:
-                current = current + " " + s if current else s
-        if current:
-            chunks.append(current.strip())
-
-        for chunk in chunks:
+        for chunk in _chunk_for_kokoro(paragraph):
             samples, sr = kokoro.create(chunk, voice=voice, speed=speed)
             all_samples.append(samples)
             all_samples.append(np.zeros(int(sr * 0.3)))

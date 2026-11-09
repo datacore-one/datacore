@@ -1,0 +1,9 @@
+# fixture for box-audit-nightly artifact[0]
+# producer artifact: ~/.datacore/state/audit-nightly.log on box
+# harvested: 2026-09-28 (the same code's output on plur-claw's rehearsal run; the box job had not run yet)
+# regex under test: pins validated at write time
+# represents: SUCCESS (one findings file written, its pins validated where it was written, committed)
+# ---
+cross_model_audit: data (gpt) audits audits at 09cb0cfead: 9 files, 48328 chars, 0 re-offered -> ~/.datacore/audit-src/datacore/2-datacore/1-tracks/dev/audits/nightly/2026-09-29/data.yaml
+cross_model_audit: 4 finding(s), 0 rejected, $0.0000; pins validated at write time
+cross_model_audit: pushed

@@ -22,12 +22,15 @@
 set -euo pipefail
 
 REMOTE_HOST="${AGENT_STREAM_REMOTE_HOST:-nightshift}"
-# The service user moved from deploy to gregor (DIP-0044, 2026-08-13) and
+# The service user moved from deploy to the owner's account (DIP-0044) and
 # this default did not follow. With the <HOME> bug above fixed, rsync
 # reached /home/deploy/... , found nothing, and exited 0 -- the job would
 # have gone GREEN while syncing an empty file list. A silent no-op is
 # worse than the crash it replaced.
-REMOTE_USER="${AGENT_STREAM_REMOTE_USER:-gregor}"
+# Default: the same user name as here, which is how an install's own hosts are
+# normally set up; set AGENT_STREAM_REMOTE_USER when the server's differs. No
+# user of ours is named in this file (INS-3).
+REMOTE_USER="${AGENT_STREAM_REMOTE_USER:-$(id -un)}"
 # A LITERAL PLACEHOLDER, NEVER SUBSTITUTED. `<HOME>` reached production and
 # bash read it as input redirection: every run since died with
 # "HOME: No such file or directory" and mac-agent-stream-rsync failed

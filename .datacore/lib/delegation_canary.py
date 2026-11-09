@@ -26,11 +26,18 @@ multi-host ring into a job that must stay boring.
 WHAT IT DELIBERATELY DOES NOT DO. It does not fail when the fleet is merely
 busy or offline: a canary that pages for a closed laptop trains people to
 ignore it. `--check` reads the previous run's outcome and is the half a job
-contract asserts; `--run` does the work. A run that cannot even publish reports
-`blocked`, not `failed`, because an unreachable remote is a condition and not a
-broken delegation loop.
+contract asserts; `--run` does the work.
 
-    delegation_canary.py --run    --space DIR [--assignee WHO]
+A FAILED LOCAL COMMIT IS `failed` (owner decision N5, 2026-09-23). This used to
+write `blocked`, justified as "an unreachable remote is a condition". But the
+only path that wrote it was the LOCAL `git commit` of the canary input -- nothing
+here pushes -- and `blocked` passed the contract, so a space whose commits kept
+failing reported a healthy loop every day for ever
+(DatacoreSpec/NightshiftGates.lean, `Canary.blocked_forever`). And a `blocked`
+verdict that is still on disk after BLOCKED_MAX_AGE_HOURS (48 h) fails
+`--check`: a condition that lasts two days is a broken loop.
+
+    delegation_canary.py --run    [--space DIR] [--assignee WHO]
     delegation_canary.py --check  [--max-age-hours N]
 
 Exit 0 when the last canary completed inside its budget; 1 when it did not.
@@ -59,6 +66,10 @@ MARK = "delegation-canary"
 #: model retry must not page anyone.
 DEFAULT_BUDGET_HOURS = 20
 
+#: A `blocked` verdict older than this fails `--check` (decision N5). Nothing
+#: writes `blocked` since N5; this ages out any that is still on disk.
+BLOCKED_MAX_AGE_HOURS = 48
+
 
 def _task(target: str, day: str) -> tuple[str, str, str]:
     """(title, check, artifact path) for one self-contained unit of work.
@@ -68,12 +79,12 @@ def _task(target: str, day: str) -> tuple[str, str, str]:
     and anything not in git is simply not there. That cost a live round to
     learn on 2026-09-18, when the task counted a generated, gitignored file.
 
-    The artifact lives under `4-outbox`, which DIP-0015's structure hook
+    The artifact lives under `4-archive`, which DIP-0015's structure hook
     permits; a top-level directory would be refused at commit time and no
     agent could ever satisfy the check.
     """
-    src = f"4-outbox/{MARK}/input-{day}.txt"
-    out = f"4-outbox/{MARK}/count-{day}.txt"
+    src = f"4-archive/{MARK}/input-{day}.txt"
+    out = f"4-archive/{MARK}/count-{day}.txt"
     title = f"count the lines of {src} and write only that number into {out}"
     check = (f'test -f {out} && test "$(wc -l < {src} | tr -d " ")" '
              f'= "$(tr -d "[:space:]" < {out})"')
@@ -81,7 +92,7 @@ def _task(target: str, day: str) -> tuple[str, str, str]:
 
 
 def _write(verdict: str, **fields) -> None:
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
+    RESULT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     RESULT.write_text(json.dumps({"verdict": verdict, "at": time.time(),
                                   "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                   **fields}, indent=2) + "\n")
@@ -120,7 +131,8 @@ def cmd_run(args) -> int:
     if prev.get("verdict") == "dispatched" and prev.get("item"):
         from ledger.fold import fold
         from ledger.log import read_events
-        item = fold(read_events(space)).items.get(prev["item"])
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space).items.get(prev["item"])
         status = getattr(item, "status", None)
         age_h = (time.time() - float(prev.get("at", 0))) / 3600
         if status in ("completed", "verified"):
@@ -140,13 +152,15 @@ def cmd_run(args) -> int:
     title, check, src = _task(args.assignee, day)
 
     path = space / src
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text("".join(f"line {n}\n" for n in range(1, 18)))
     for cmd in (["add", "--", src], ["commit", "-q", "-m", f"{MARK}: input {day}", "--", src]):
         r = subprocess.run(["git", "-C", str(space), *cmd], capture_output=True, text=True, timeout=60)
         if r.returncode and cmd[0] == "commit":
-            _write("blocked", detail=f"could not commit the canary input: {r.stderr.strip()[-160:]}")
-            return 0
+            # `failed`, not `blocked` (decision N5): this is a LOCAL commit, so
+            # no remote is involved, and `blocked` passed the contract for ever.
+            _write("failed", detail=f"could not commit the canary input: {r.stderr.strip()[-160:]}")
+            return 1
 
     try:
         guarded_append(EventLog(space, actor), "item.create",
@@ -174,8 +188,15 @@ def cmd_check(args) -> int:
         return 0                       # not a failure: nothing has been asked of it
 
     if last.get("verdict") == "blocked":
+        age_h = (time.time() - float(last.get("at", 0))) / 3600
+        if age_h > BLOCKED_MAX_AGE_HOURS:
+            # A condition that outlasts two days is a broken loop (decision N5).
+            _write("failed", detail=(
+                f"blocked for {age_h:.1f}h (> {BLOCKED_MAX_AGE_HOURS}h): "
+                f"{last.get('detail','')}"))
+            return 1
         print(f"canary: blocked — {last.get('detail','')}")
-        return 0                       # a condition, not a broken loop
+        return 0                       # a short condition, not a broken loop
 
     iid = last.get("item")
     if not iid:
@@ -183,7 +204,8 @@ def cmd_check(args) -> int:
         return 0 if last.get("verdict") != "failed" else 1
 
     space = args.space.resolve()
-    item = fold(read_events(space)).items.get(iid)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    item = authoritative_state(space).items.get(iid)
     age_h = (time.time() - float(last.get("at", 0))) / 3600
     status = getattr(item, "status", None)
 
@@ -204,12 +226,27 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", action="store_true", help="seed one canary item")
     ap.add_argument("--check", action="store_true", help="report on the last one")
-    ap.add_argument("--space", required=True, type=Path)
-    ap.add_argument("--assignee", default="miles", help="the principal expected to do it")
+    ap.add_argument("--space", type=Path, default=None,
+                    help="the space to seed it in (default: the install's system space, install.yaml roles.system)")
+    ap.add_argument("--assignee", default=None,
+                    help="the principal expected to do it (default: the install's "
+                         "chief of operations, from principals.yaml)")
     ap.add_argument("--max-age-hours", type=float, default=DEFAULT_BUDGET_HOURS)
     a = ap.parse_args(argv)
     if a.run == a.check:
         ap.error("exactly one of --run or --check")
+    if a.space is None:
+        from spaces import space_for
+        root = Path(os.environ.get("DATACORE_ROOT") or LIB.parents[1])
+        name = space_for("system", root)
+        if a.run and not name:
+            ap.error("no --space, and install.yaml declares no roles.system")
+        a.space = root / name if name else root
+    if a.run and not a.assignee:
+        import roster
+        a.assignee = roster.by_role("chief of operations")
+        if not a.assignee:
+            ap.error("no --assignee, and no principal has the role 'chief of operations' in principals.yaml")
     return cmd_run(a) if a.run else cmd_check(a)
 
 

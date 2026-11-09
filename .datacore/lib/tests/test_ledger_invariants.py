@@ -62,7 +62,7 @@ def test_a_conflict_marker_is_caught(fleet):
     root, space = fleet
     log = space / ".datacore/events/worker.jsonl"
     lines = log.read_text().splitlines()
-    lines.insert(2, "<<<<<<< HEAD")
+    lines.insert(2, "" + "<" * 7 + " HEAD")
     log.write_text("\n".join(lines) + "\n")
 
     assert "parseable" in _names(inv.sweep(root))
@@ -152,8 +152,13 @@ def test_an_accepted_finding_does_not_fail_the_sweep(fleet, tmp_path, capsys):
         {"invariant": "declared", "space": "1-work",
          "detail_startswith": "stranger: belongs to no declared principal"}])
 
-    assert inv.main(["--root", str(root), "--baseline", str(baseline), "--quick"]) == 0
-    assert "accepted by the owner" in capsys.readouterr().out
+    # The accepted finding does not fail the sweep (not BROKEN, not exit 1).
+    # The tmp space is not a git repository, so `unforked` is could-not-tell,
+    # and since decision L2 (2026-09-23) that makes the verdict UNKNOWN, exit 2.
+    assert inv.main(["--root", str(root), "--baseline", str(baseline), "--quick"]) == 2
+    out = capsys.readouterr().out
+    assert "accepted by the owner" in out
+    assert out.strip().splitlines()[-1].startswith("ledger-invariants: UNKNOWN")
 
 
 def test_a_different_finding_in_the_same_space_still_fails(fleet, tmp_path):

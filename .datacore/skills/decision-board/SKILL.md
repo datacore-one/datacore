@@ -31,7 +31,7 @@ The owner makes decisions on a page, not in chat. This skill covers only present
 
 ## Stays local
 
-- Write the page to `$DATACORE_STATE/decision-boards/<YYYY-MM-DD>-<slug>.html` (default `~/.datacore/state/decision-boards/`). The directory must be owner-only (0700), and artifacts are published atomically as 0600. This state is outside synchronized source repositories.
+- Write the page to `$DATACORE_STATE/decision-boards/<YYYY-MM-DD>-<slug>.html` (default `~/.datacore/state/decision-boards/`). Saved answers are filed into its `answers/` subfolder (see "Reading choices back"). The directory must be owner-only (0700), and artifacts are published atomically as 0600. This state is outside synchronized source repositories.
 - Open the page with `open <path>`.
 - Never publish it to claude.ai (Artifacts), a gist or any hosted URL, even privately. If a hosted page seems necessary, ask first.
 - Inline all CSS and JS. Use local/system font fallbacks without external font requests. The generated page has a restrictive content policy. Reference links accept only explicit HTTP(S) URLs; executable or other URL schemes are rendered as text.
@@ -78,7 +78,14 @@ The owner makes decisions on a page, not in chat. This skill covers only present
 
 ## Reading choices back
 
-1. When the owner says they've saved, read `~/Downloads/<slug>.decisions.json`, or the path they give.
+1. When the owner says they've saved, file the answers first:
+   `python3 .datacore/lib/decision_board_collect.py --only <slug>`. This moves
+   `~/Downloads/<slug>.decisions.json` to the default answers folder,
+   `$DATACORE_STATE/decision-boards/answers/<YYYY-MM-DD>-<slug>.decisions.json`
+   (owner-only, next to the boards, covered by the machine backup). Then read the
+   filed copy: `decision_board_collect.py --latest <slug>` prints its path. Every
+   board and every saved answer stays in that one folder for later reference.
+   If the owner names another path, read that one and file it the same way.
 2. Summarise what they chose, including their notes. Change nothing yet.
 3. Act only after they say "apply the decisions", and only on what they chose. Dry-run anything irreversible first.
 4. Use `gtd_decision_board.py apply` for task decisions. It checks source and ledger versions, serializes mutation, and records durable per-row completion. An interrupted row is retained as pending and blocks replay; preserve its receipt, inspect the task and ledger, reconcile conflicts, then create a new board. Never delete a pending receipt to force a retry.

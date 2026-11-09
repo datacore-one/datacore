@@ -27,11 +27,8 @@ from sync.adapters import (
 )
 
 from sync.conflict import (
-    ConflictDetector,
-    ConflictResolver,
     ConflictQueue,
     Conflict,
-    ConflictResolution,
     ConflictStrategy,
     load_conflict_config,
 )
@@ -69,9 +66,8 @@ class SyncEngine:
         self.config: Dict[str, Any] = {}
         self._last_sync: Optional[datetime] = None
 
-        # Conflict resolution (Phase 2)
-        self.conflict_detector: Optional[ConflictDetector] = None
-        self.conflict_resolver: Optional[ConflictResolver] = None
+        # Conflict queue (Phase 2). Detection/resolution were removed until
+        # sync() exists (decision P7): see sync/conflict.py for the spec.
         self.conflict_queue: Optional[ConflictQueue] = None
 
     def load_config(self) -> bool:
@@ -120,13 +116,10 @@ class SyncEngine:
         self.adapters = initialized
 
     def _init_conflict_resolution(self):
-        """Initialize conflict detection and resolution."""
-        # Load conflict config from settings
-        conflict_config = load_conflict_config(self.data_dir, settings=self.config)
-
-        # Initialize components
-        self.conflict_detector = ConflictDetector()
-        self.conflict_resolver = ConflictResolver(conflict_config)
+        """Validate the conflict config and open the human-review queue."""
+        # Invalid rules still fail the load: the configuration is kept for the
+        # engine that will consult it.
+        load_conflict_config(self.data_dir, settings=self.config)
         self.conflict_queue = ConflictQueue(self.config_dir / "state" / "sync_history.db")
 
     def is_enabled(self) -> bool:
@@ -218,51 +211,6 @@ class SyncEngine:
 
         result.success = result.items_failed == 0 and not result.errors
         return result
-
-    def detect_conflicts(
-        self,
-        org_task: OrgTask,
-        external_task: ExternalTask
-    ) -> Optional[Conflict]:
-        """
-        Detect conflicts between org and external task.
-
-        Args:
-            org_task: The org-mode task
-            external_task: The corresponding external task
-
-        Returns:
-            Conflict if detected, None otherwise
-        """
-        if not self.conflict_detector:
-            return None
-
-        return self.conflict_detector.detect(
-            org_task,
-            external_task,
-            self._last_sync
-        )
-
-    def resolve_conflict(self, conflict: Conflict) -> ConflictResolution:
-        """
-        Resolve a conflict using configured strategies.
-
-        Args:
-            conflict: The conflict to resolve
-
-        Returns:
-            ConflictResolution with changes to apply
-        """
-        if not self.conflict_resolver:
-            raise RuntimeError("Conflict resolver not initialized")
-
-        resolution = self.conflict_resolver.resolve(conflict)
-
-        # If needs human review, add to queue
-        if resolution.needs_human_review and self.conflict_queue:
-            self.conflict_queue.add(conflict)
-
-        return resolution
 
     def get_unresolved_conflicts(self, limit: int = 50) -> List[Conflict]:
         """

@@ -35,9 +35,11 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 | Question | Answer |
 |----------|--------|
-| Where is inbox? | `0-personal/org/inbox.org` |
-| Where do tasks go? | `0-personal/org/next_actions.org` |
-| Where do research items go? | `0-personal/org/research_learning.org` |
+| Where is inbox? | `[space]/org/inbox.org` (the one you were given; personal = install.yaml `roles.personal`) |
+| Where do tasks go? | `[space]/org/next_actions.org` |
+| Where do research items go? | `[space]/org/research_learning.org` |
+| Where do finished (DONE/CANCELLED) entries go? | `[space]/org/inbox_archive.org`, unchanged |
+| What if I cannot decide? | It stays in the inbox, title prefixed `[NEEDS_REVIEW]` |
 | Who spawns me? | `gtd-inbox-coordinator` |
 
 ### Related DIPs
@@ -75,6 +77,31 @@ You will receive a single inbox entry and must:
 - Line number where the entry starts in inbox.org
 - Path to inbox.org: `~/Data/[space]/org/inbox.org`
 
+## Before clarifying: finished entries and entries you cannot decide
+
+These two rules match `/process-inbox` and the owner's promise, and override
+anything below that seems to say otherwise.
+
+- **Finished entry** (state DONE or CANCELLED): it leaves the inbox and is
+  kept. Move the whole entry unchanged (state, `CLOSED:`, properties, body) to
+  the end of `[space]/org/inbox_archive.org` (create it with
+  `#+TITLE: Inbox archive` if missing). Never reopen it, never file it as an
+  open task, never delete it.
+- **Entry you cannot decide** (you cannot tell what it is or what its next
+  action would be — e.g. "blue thing w/ Marko??"): it STAYS in the inbox where
+  it is, with `[NEEDS_REVIEW]` at the front of its title after any state
+  keyword (`** TODO [NEEDS_REVIEW] blue thing w/ Marko??`). Do not file it in
+  someday.org or next_actions.org. The owner reviews it. When someone is
+  present you may ask instead; unanswered, it is marked the same way.
+- **Group heading** (a top-level heading with no state whose only content is
+  child entries and a `:PROPERTIES:` drawer — e.g. `* Continuation from wrap-up
+  2026-09-30 (...)` or a parked batch): it is a container, not an entry. Process
+  each child as an entry. When the last child has left, remove the empty group
+  heading in the same edit; an empty container left behind reads as an
+  unprocessed entry. A group that still holds a child (one marked
+  `[NEEDS_REVIEW]`, say) stays. A heading with body text of its own is an entry,
+  never a group.
+
 ## Clarify Step — the GTD discipline that's been missing
 
 For every item, answer in order:
@@ -93,7 +120,17 @@ For every item, answer in order:
   **Test for "is this a project?":** if you can't say what done looks like in one sentence, it's still too vague (route to someday). If you can name the outcome but it'll take >1 atomic action, it's a project.
 
 - **Aspiration** (vague, no clear outcome yet): `someday.org`
-- **Captured fragment** (URL, tweet, half-thought without context): `someday.org` with a "needs-clarify" marker; user re-triages quarterly
+- **Link (URL)** — decide by whether the owner wrote anything with it:
+  - **Bare link** (only the URL, or only "read / review / check out"): it is
+    something to consume. Route to `research_learning.org` under the matching
+    focus area — never `someday.org`, never `next_actions.org`.
+  - **Link with the owner's comment** (any sentence of their own below or next
+    to it): the comment says they already read it, so it is an ACTION. Route to
+    `next_actions.org` as a verb-first task derived from the comment (e.g. "We
+    move Verity to three pricing tiers" -> "Move Verity to three pricing
+    tiers"), keep the URL as `:SOURCE:` and the comment verbatim as `:CONTEXT:`.
+    Not research, not someday.
+- **Captured fragment** (tweet, half-thought without context — not a link): if you cannot tell what it means or what to do with it, it stays in the inbox marked `[NEEDS_REVIEW]` (see above). Only an aspiration whose meaning is clear goes to `someday.org`.
 - **Product or roadmap idea** — a capability the product might gain, a technique
   from a paper, a competitor's move, a customer asking for something that does
   not exist yet: route to `[space]/1-tracks/product/feature-ideas.md`, NOT to
@@ -147,12 +184,12 @@ After clarify, route to one of these files:
 
 | Destination | When | Owner | Cadence |
 |---|---|---|---|
-| `[space]/org/next_actions.org` | You (human) execute it personally | gregor | active work |
+| `[space]/org/next_actions.org` | You (human) execute it personally | the owner | active work |
 | `0-personal/org/ai.org` | An always-on AI agent picks up, quick (<30 min) | Miles/CC subagents | realtime |
 | `0-personal/org/nightshift.org` | AI deliberation, deep/multi-step, batchable | overnight orchestrator | nightly 02:00 UTC |
-| `[space]/org/projects.org` | Multi-action outcome (the project itself, not the next-action) | gregor reviews weekly | weekly |
+| `[space]/org/projects.org` | Multi-action outcome (the project itself, not the next-action) | the owner reviews weekly | weekly |
 | `[space]/org/someday.org` | Parked, no clear next-action, aspirational | quarterly review | parked |
-| `[space]/org/research_learning.org` | URL or content to consume (research-orchestrator picks up) | research-orchestrator | nightly |
+| `[space]/org/research_learning.org` | Bare URL or content to consume (research-orchestrator picks up); a URL with the owner's comment is an action instead | research-orchestrator | nightly |
 | `~/Data/[space]/3-knowledge/pages/` | Pure reference, never an action | none | reference |
 
 **Files RETIRED (do not route to):** `ideas.org`, `calendar.org`, `protocol.org` (the protocol.org content moved to a notes page; calendar.org is Google Calendar; ideas.org merged into someday.org).
@@ -311,6 +348,13 @@ When you see obvious connections to the knowledge base, add wiki-links in the bo
 
 ## Routing to next_actions.org
 
+**In a ledger space** (the file's header says "Generated from the ledger") never write
+into next_actions.org. File the entry with
+`python3 .datacore/lib/org_workspace_adapter.py move --from <space>/org/inbox.org --to <space>/org/next_actions.org --id <ID>`:
+it creates the task in the ledger, removes it from the inbox and re-renders the file.
+Enhance the entry in inbox.org first (state, tags, properties); a refusal (already
+closed in the ledger, not admitted) leaves it in the inbox, so mark it `[NEEDS_REVIEW]`.
+
 ### Focus Areas (Top-level sections)
 Common focus areas you'll encounter:
 - `* Organization` - Core business development, partnerships, fundraising
@@ -359,7 +403,7 @@ For items classified as Ideas:
 
 ### Decision Tree for Unclear Items
 - Cannot determine focus area? → `* Operations` with note
-- Unclear what action is needed? → Add `[NEEDS CLARIFICATION]` to heading, place in Operations
+- Unclear what action is needed? → Leave it in the inbox with `[NEEDS_REVIEW]` at the front of its title
 - Multiple focus areas apply? → Choose primary focus, add Related links to others
 - Not sure if actionable? → Default to making it actionable with clarifying questions in Details field
 
@@ -371,6 +415,7 @@ For items classified as Ideas:
 3. **Preserve org-mode formatting** - Heading levels (`*`, `**`, `***`), property drawers (`:PROPERTIES:` ... `:END:`), timestamps
 4. **Never remove standing items** - Specifically: `TODO Do more. With Less.` and `* Inbox` heading
 5. **Create backups for major edits** - Use `.backup` extension if editing multiple files
+6. **Uncommitted files belong to other writers** - Never run `git stash` (any form), `git reset` (any form), `git checkout -- <file>` / `git checkout <path>`, `git restore` or `git clean`. The working tree holds other agents' uncommitted work, including the ledger's event logs (`.datacore/events/*.jsonl`); these commands hide or discard it (2026-09-30: an unattended run stashed to get a pull through and swallowed five ledger events). To undo your own edit, edit it back. Commit only your own files, by explicit path (`git commit -m "..." -- <files>`), and not at all when the caller commits for you. The unattended tool policy refuses these commands (`worktree.discard`); a refusal is not an obstacle to route around.
 
 ### Execution Sequence
 1. **Read** the specific inbox entry location in inbox.org
@@ -411,9 +456,10 @@ Example:
 ## Error Handling
 
 **If you encounter issues:**
-- **Ambiguous entry** → Add `[NEEDS CLARIFICATION]` to heading, place in Operations with note explaining ambiguity
+- **Ambiguous entry** → Leave it in the inbox with `[NEEDS_REVIEW]` at the front of its title (never move it to Operations)
 - **Cannot determine focus area** → Default to Operations with note: "Needs focus area classification"
 - **Technical file error** → Stop, report error clearly, do NOT corrupt files
+- **Git problem** (a commit, pull or push fails, a conflict, unexpected changes in the tree) → Report it in one line and stop there. It is reported, not tidied: never stash, reset, checkout, restore or clean to get past it
 - **Missing metadata** → Infer intelligently from context, mark uncertain fields with `[Inferred]`
 - **Complex multi-part task** → Break into separate tasks if appropriate, or keep as one with detailed steps in Details field
 

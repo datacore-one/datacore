@@ -1,0 +1,393 @@
+"""In-ledger void records: RETIRED for new writes since 2026-11-01; the voids
+already in the history keep their effect (LED-4, LED-5, LED-15).
+
+RETIRED (DIP-0034 amendment of 2026-10-31, items 2 and 3: "no voids";
+"corrections are forward only"; plan phase B). No new `ledger.void` is
+written: `refuse_new_void` is called by every writer (the event log, the hub
+writer, `ledger_cli.py void`) and raises `VoidRetired`, naming the forward
+correction. A hub refuses one it had not admitted by `VOID_RETIRED_MS` (its
+own admission clock), however it arrives. Everything below still decides how
+the voids written BEFORE the retirement fold -- exactly as before, so the
+history never changes. The rest of this docstring describes that history.
+
+WHY. The ledger is append-only, so an event that fails its own checks -- a hash
+that never matched its body (5-plur tris.jsonl seq 5), a hand-written line whose
+`sig` is a copy of its hash (6-meridian miles.jsonl seq 21140-21141) -- can not
+be removed once genuine events chain on top of it. Until 2026-09-26 such events
+were excused by an out-of-band file (`registry/ledger-exceptions.yaml`) that
+anyone with commit access could extend. Owner decision 6 (ledger-upgrade PLAN,
+2026-09-26): no exceptions. A bad event is cancelled by a `ledger.void` event
+INSIDE the ledger, appended by an authorised actor who is not the event's own
+writer; history is never rewritten.
+
+THE RECORD. `ledger.void` with payload
+
+    {"log": "miles.jsonl", "seq": 21140, "hash": "<stored hash>",
+     "reason": "...", "body_sha256": "<hash the body produces>"}
+
+`log`, `seq` and `hash` name exactly one event as it is stored. `body_sha256`
+(written by `ledger_cli.py void`) pins the voided event's body as well: an
+event whose stored hash never matched its body can only be pinned that way.
+Without `body_sha256` a void applies only while the event still hashes to its
+stored hash, so the body is pinned by `hash` itself. Either way, editing the
+voided event afterwards makes the void stop applying and verify fail again.
+
+WHO MAY VOID. The void's actor must resolve (principals.yaml, `writes_as`) to a
+principal of `kind: human`, or be named in the registry's top-level `voiders:`
+list (a principal or writer name). It must NOT be the voided event's writer,
+nor another writer of the same principal: no one voids their own events.
+
+A void that fails any of these has no effect, and verify reports it on the
+voider's own log, so an attempted self-cancel is itself visible.
+
+A void of a void is allowed (to cancel a mistaken void); a void that is itself
+voided by an authorised void has no effect. Resolution is one level deep and
+order-free, so two voids naming each other simply cancel nothing.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .events import Event, body_dict, compute_hash, event_body, from_line
+
+VOID_TYPE = "ledger.void"
+COMPENSATE_TYPE = "ledger.compensate"
+
+# ── voids are retired (DIP-0034 amendment of 2026-10-31; plan phase B) ──────
+#: The moment no new reversal takes effect, by the HUB'S admission clock:
+#: 2026-11-01T00:00:00Z. A reversal a hub admitted before it keeps the
+#: decision recorded then; one it had not admitted by then is refused
+#: (`void_retired`), whoever wrote it and however it arrived (by the network or
+#: by git from a machine still on older code). One named constant.
+VOID_RETIRED_MS = 1_793_491_200_000
+
+#: The way to correct a mistake now: a new forward event that names it.
+FORWARD_CORRECTION = ("correct it with a new forward event instead: `ledger.compensate` naming the event "
+                      "(log, seq, hash) and why, once it is sealed, or for a task a new item.update / "
+                      "item.reopen")
+VOID_RETIRED_WHY = ("ledger.void is retired (DIP-0034 amendment of 2026-10-31): nothing is cancelled after "
+                    "the fact; " + FORWARD_CORRECTION)
+
+
+class VoidRetired(ValueError):
+    """A new `ledger.void`: refused at write time; nothing was written."""
+
+
+def refuse_new_void(type_) -> None:
+    """Raise `VoidRetired` for a new `ledger.void`; every writer calls this first."""
+    if type_ == VOID_TYPE:
+        raise VoidRetired(VOID_RETIRED_WHY + "; nothing was written")
+
+# ── the correction window (round 5; round 6 owner decisions, 2026-10-23) ────
+# HISTORY since 2026-11-01: it judges only reversals a hub admitted before
+# `VOID_RETIRED_MS`; no new reversal is admitted.
+# In a HUB space a reversal (`ledger.void`) takes effect only inside the
+# correction window: admitted by the hub before the first grantor seal that
+# covers the reversed event, AND at most REVERSAL_MAX_AGE_MS after the hub
+# admitted that event -- by the HUB'S clock (its admission times), never by a
+# timestamp a writer chose (Codex round 5, H1). Seal = block finality; the
+# window = before inclusion in a block. The hub decides at admission and
+# records the decision in its own log (`ledger.admit` or `ledger.reject`);
+# every reader takes the effect from those records alone (ledger.finality).
+#
+# A PLACEHOLDER for the pilot (owner, 2026-10-23): one hour, to be set later
+# from a study of how long errors take to be noticed. One named constant.
+REVERSAL_MAX_AGE_MS = 60 * 60 * 1000
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
+
+Key = tuple  # (log_stem, seq, stored_hash)
+
+
+def log_stem(name: str) -> str:
+    name = str(name or "")
+    return name[:-6] if name.endswith(".jsonl") else name
+
+
+def _writer(name: str) -> str:
+    return _RUN_SUFFIX.sub("", (name or "").strip().lower())
+
+
+def body_hash(e: Event) -> str:
+    return compute_hash(event_body(e))
+
+
+# ── authority ────────────────────────────────────────────────────────────────
+
+_VOIDERS_CACHE: dict = {}
+
+
+def _registry():
+    """(principals, voiders) from the principal registry; empty if unreadable.
+
+    Resolved at call time through `actor_identity.PRINCIPALS`, so a test or an
+    operator pointing it elsewhere is honoured. An unreadable or invalid
+    registry authorises nobody: a void must never gain force from a broken file.
+    """
+    import actor_identity
+    path = Path(actor_identity.PRINCIPALS)
+    try:
+        principals = actor_identity.principals(path)
+    except ValueError:
+        return {}, frozenset()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return principals, frozenset()
+    if key not in _VOIDERS_CACHE:
+        try:
+            import yaml
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            vs = raw.get("voiders") if isinstance(raw, dict) else None
+            _VOIDERS_CACHE[key] = frozenset(_writer(v) for v in vs if isinstance(v, str)) \
+                if isinstance(vs, list) else frozenset()
+        except Exception:  # noqa: BLE001 -- unreadable: no explicit voiders
+            _VOIDERS_CACHE[key] = frozenset()
+    return principals, _VOIDERS_CACHE[key]
+
+
+def _principal_of(writer: str, principals: dict) -> tuple[str | None, dict]:
+    w = _writer(writer)
+    if w in principals and isinstance(principals[w], dict):
+        return w, principals[w]
+    for name, p in principals.items():
+        if isinstance(p, dict) and w in {_writer(x) for x in (p.get("writes_as") or []) if isinstance(x, str)}:
+            return name, p
+    return None, {}
+
+
+def refusal(void_actor: str, target_writer: str) -> str | None:
+    """Why `void_actor` may not void an event of `target_writer`, or None."""
+    principals, voiders = _registry()
+    va, tw = _writer(void_actor), _writer(target_writer)
+    vp, ventry = _principal_of(va, principals)
+    tp, _ = _principal_of(tw, principals)
+    if va == tw or (vp is not None and vp == tp):
+        return f"{void_actor!r} may not void its own event"
+    if vp is None and va not in voiders:
+        return f"{void_actor!r} is not a principal in the registry"
+    if ventry.get("kind") == "human" or va in voiders or (vp is not None and vp in voiders):
+        return None
+    return f"{void_actor!r} is not an authorised voider (human principal or `voiders:`)"
+
+
+# ── resolution ───────────────────────────────────────────────────────────────
+
+
+def _target(payload) -> tuple[Key, str | None] | str:
+    """(target key, body pin) from a void payload, or the reason it is malformed."""
+    if not isinstance(payload, dict):
+        return "payload is not an object"
+    log, seq, h, reason = payload.get("log"), payload.get("seq"), payload.get("hash"), payload.get("reason")
+    if not isinstance(log, str) or not log_stem(log):
+        return "payload.log missing"
+    if type(seq) is not int or seq < 0:
+        return "payload.seq must be a non-negative integer"
+    if not isinstance(h, str) or not _HEX64.fullmatch(h):
+        return "payload.hash must be 64 lowercase hex"
+    if not isinstance(reason, str) or not reason.strip():
+        return "payload.reason missing"
+    pin = payload.get("body_sha256")
+    if pin is not None and (not isinstance(pin, str) or not _HEX64.fullmatch(pin)):
+        return "payload.body_sha256 must be 64 lowercase hex"
+    return (log_stem(log), seq, h), pin
+
+
+@dataclass
+class Voids:
+    #: target key -> body pin (None = the stored hash pins the body)
+    effective: dict = field(default_factory=dict)
+    #: (void log stem, void seq) -> reason it has no effect
+    refused: dict = field(default_factory=dict)
+
+    def applies(self, log: str, event: Event, computed: str | None = None) -> bool:
+        """Is this event, exactly as it is stored now, cancelled by a void?"""
+        key = (log_stem(log), event.seq, event.hash)
+        if key not in self.effective:
+            return False
+        computed = computed if computed is not None else body_hash(event)
+        pin = self.effective[key]
+        return computed == (pin if pin is not None else event.hash)
+
+    def refusal_for(self, log: str, seq: int) -> str | None:
+        return self.refused.get((log_stem(log), seq))
+
+    def __len__(self) -> int:
+        return len(self.effective)
+
+
+def resolve(voids: list[tuple[str, Event]], lookup=None, authority=None) -> Voids:
+    """Decide which void records take effect.
+
+    Args:
+        voids: (log stem, event) for every `ledger.void` event in one space.
+        lookup: optional `(log_stem, seq) -> Event | None`; when given, a void
+            naming no event with that stored hash is refused as such.
+        authority: optional `(void event, target log stem) -> reason | None`;
+            default `refusal` (the principal registry: spaces without a hub).
+            A hub space passes the rule from its owner records
+            (ledger.finality).
+    """
+    out = Voids()
+    authorised: dict[tuple, tuple[Key, str | None]] = {}
+    for log, e in voids:
+        me = (log_stem(log), e.seq)
+        if body_hash(e) != e.hash:
+            out.refused[me] = "ledger.void has no effect: its own hash does not match its body"
+            continue
+        if _writer(e.actor) != _writer(log_stem(log)):
+            out.refused[me] = f"ledger.void has no effect: actor {e.actor!r} is not this log's writer"
+            continue
+        t = _target(e.payload)
+        if isinstance(t, str):
+            out.refused[me] = f"ledger.void has no effect: {t}"
+            continue
+        key, pin = t
+        why = authority(e, key[0]) if authority is not None else refusal(e.actor, key[0])
+        if why:
+            out.refused[me] = f"ledger.void has no effect: {why}"
+            continue
+        if lookup is not None:
+            target = lookup(key[0], key[1])
+            if target is None or target.hash != key[2]:
+                out.refused[me] = (f"ledger.void has no effect: no event {key[0]}.jsonl seq {key[1]} "
+                                   "with that stored hash in this space")
+                continue
+        authorised[(log_stem(log), e.seq, e.hash)] = (key, pin)
+    for me, (key, pin) in authorised.items():
+        if me in {k for k, _ in authorised.values()}:
+            out.refused[me[:2]] = "ledger.void has no effect: it is itself voided"
+            continue
+        out.effective[key] = pin
+    return out
+
+
+def from_events(events: list[Event]) -> Voids:
+    """Resolve voids over an in-memory, merged event list (fold's input)."""
+    vs = [(getattr(e, "log", e.actor), e) for e in events if e.type == VOID_TYPE]
+    if not vs:
+        return Voids()
+    index = {(log_stem(getattr(e, "log", e.actor)), e.seq): e for e in events}
+    return resolve(vs, lambda log, seq: index.get((log, seq)))
+
+
+def _tolerant_events(raw: bytes) -> list[tuple[int, Event]]:
+    out = []
+    for i, line in enumerate(raw.split(b"\n"), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append((i, from_line(line.decode("utf-8"))))
+        except Exception:  # noqa: BLE001 -- a damaged line is verify's to report
+            continue
+    return out
+
+
+_SPACE_CACHE: dict = {}
+
+
+def for_events_dir(events_dir: Path, registry_path=None) -> Voids:
+    """Resolve every void in one space's `.datacore/events/` directory.
+
+    Reads tolerantly (a damaged line is reported by verify, never here) and
+    caches on the stat signature of every log, so verifying each log of a space
+    in turn does not re-read the space once per log.
+
+    A HUB space (round 6, Codex round 5 H2): the same correction rule as every
+    other reader -- the admitted events and the grantor's records, through
+    `ledger.finality` -- so generic verification never excuses an event by a
+    reversal the hub refused, and the principal registry decides nothing. A
+    space without a hub keeps the old rule exactly (owner, 2026-10-23).
+    """
+    events_dir = Path(events_dir)
+    hub_voids = _hub_space_voids(events_dir, registry_path)
+    if hub_voids is not None:
+        return hub_voids
+    files = sorted(events_dir.glob("*.jsonl")) if events_dir.is_dir() else []
+    try:
+        sig = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    except OSError:
+        sig = None
+    import actor_identity
+    try:
+        st = Path(actor_identity.PRINCIPALS).stat()
+        reg = (str(actor_identity.PRINCIPALS), st.st_mtime_ns, st.st_size)
+    except OSError:
+        reg = (str(actor_identity.PRINCIPALS),)
+    ck = (str(events_dir), sig, reg)
+    if sig is not None and ck in _SPACE_CACHE:
+        return _SPACE_CACHE[ck]
+    raws = {}
+    voids: list[tuple[str, Event]] = []
+    for p in files:
+        try:
+            raw = p.read_bytes()
+        except OSError:
+            continue
+        raws[p.stem] = raw
+        if b'"ledger.void"' not in raw and b'"ledger.void' not in raw:
+            continue
+        voids.extend((p.stem, e) for _, e in _tolerant_events(raw) if e.type == VOID_TYPE)
+    parsed: dict[str, dict[int, Event]] = {}
+
+    def lookup(log: str, seq: int):
+        if log not in raws:
+            return None
+        if log not in parsed:
+            parsed[log] = {e.seq: e for _, e in _tolerant_events(raws[log])}
+        return parsed[log].get(seq)
+
+    result = resolve(voids, lookup) if voids else Voids()
+    if sig is not None:
+        _SPACE_CACHE.clear()          # one space at a time is all any caller needs
+        _SPACE_CACHE[ck] = result
+    return result
+
+
+def _hub_space_voids(events_dir: Path, registry_path=None):
+    """The effective reversals of a hub space, or None for a space without a hub.
+
+    A hub space whose authority cannot be read excuses nothing (an empty set):
+    a reversal never gains force from a broken record."""
+    space = events_dir.parent.parent
+    try:
+        from .hub import load_config
+        cfg = load_config(space)
+    except Exception:  # noqa: BLE001 -- an unreadable opt-in: not a hub space this reader can judge
+        return Voids() if (space / ".datacore" / "ledger-hub.json").exists() else None
+    if cfg is None:
+        # The config is a cache of the owner's record (Codex final audit, F2):
+        # a space whose logs carry the owner's activation record but no config
+        # excuses nothing -- never the old rule. One shared rule decides what
+        # counts (`ledger.hub.records_a_hub`, escape-proof, bound to this space).
+        try:
+            from .hub import records_a_hub
+            return Voids() if records_a_hub(space, registry_path) else None
+        except Exception:  # noqa: BLE001 -- cannot tell: nothing is excused
+            return Voids()
+        try:
+            from .hub import require_config_or_no_hub
+            require_config_or_no_hub(space, registry_path=registry_path)
+        except Exception:  # noqa: BLE001 -- the ledger records a hub (or cannot tell): nothing is excused
+            return Voids()
+        return None
+    try:
+        from .finality import resolve as resolve_finality
+        from .hub import authoritative_events
+        events, kw = authoritative_events(space, registry_path=registry_path)
+        fin = resolve_finality(events, lease_grantors=kw.get("lease_grantors"), reversers=kw.get("reversers"),
+                               legacy_reversals=kw.get("legacy_reversals"))
+    except Exception:  # noqa: BLE001 -- no verified authority: nothing is excused
+        return Voids()
+    return Voids(effective=dict(fin.voids.effective))
+
+
+def is_voided(events_dir: Path, log: str, event: Event) -> bool:
+    """Is this stored event cancelled by an effective void in its space?"""
+    return for_events_dir(events_dir).applies(log, event)

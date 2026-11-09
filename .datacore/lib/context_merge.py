@@ -11,6 +11,11 @@ Merges context files across permission levels:
 
 Output: Composed .md file (gitignored, read at runtime)
 
+Write guards (the composed file is refused, not written, when):
+- a PRIVATE layer exists and git would, or might, track the output;
+- a SPACE or TEAM layer exists, git would track the output, and the repo has a
+  public remote or its visibility cannot be told (owner decision D6).
+
 Registry injection: <!-- REGISTRY:xxx --> markers in templates are replaced
 with auto-generated tables from YAML registries (agents.yaml, commands.yaml,
 sources.yaml, module.yaml files, infrastructure.yaml).
@@ -19,6 +24,7 @@ See DIP-0002 for full specification.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -30,7 +36,27 @@ try:
 except ImportError:
     yaml = None
 
-# Layer order (later layers extend/override earlier)
+# Harnesses other than Claude Code read their instructions from AGENTS.md
+# (Codex, Cursor, Antigravity, OpenCode, OpenClaw) or GEMINI.md (Gemini CLI).
+# They are written from the same layers, under the same refusals.
+DEFAULT_EMIT = ("AGENTS", "GEMINI")
+GENERATED_HEADER = "<!-- AUTO-GENERATED: Do not edit directly -->"
+_EMIT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+
+def emit_targets_from_env() -> list[str]:
+    """Extra context filenames requested via DATACORE_CONTEXT_EMIT (comma list).
+
+    Names are basenames only. Anything that could be a path is dropped, because
+    this value comes from the environment and decides where private content lands.
+    """
+    raw = os.environ.get("DATACORE_CONTEXT_EMIT", "")
+    return [n.strip() for n in raw.split(",") if _EMIT_NAME.match(n.strip())]
+
+
+# Layer order. Later layers EXTEND earlier ones by concatenation; nothing is
+# overridden textually (DIP-0002, "Resolved Questions" 1: same-named sections
+# both appear, and precedence is left to the reader of the composed file).
 LAYERS = [
     ("base", "PUBLIC"),    # Generic template - validated for private content
     ("space", "SPACE"),    # Space-specific - tracked in space repo
@@ -38,8 +64,33 @@ LAYERS = [
     ("local", "PRIVATE"),  # Personal - always gitignored, never validated
 ]
 
-# Layers that should be validated for private content (only PUBLIC for now)
+# Layers that should be validated for private content (only PUBLIC for now).
+# DIP-0002 lets SPACE carry team contacts, so SPACE is not held to the PUBLIC
+# patterns. A hit is a warning here; the blocking gate is the commit hook and
+# CI (git_privacy.py), which is where DIP-0002 puts it: the composed output is
+# gitignored, so writing it publishes nothing.
 VALIDATED_LAYERS = ("PUBLIC",)
+
+# Layers whose content must never land in a file git would track. The composed
+# output of such a layer is written only where `git check-ignore` confirms the
+# output path is ignored (and therefore untracked), or outside any work tree.
+UNTRACKED_ONLY_LEVELS = ("PRIVATE",)
+
+# Layers whose content must not land in a file git would track in a repository
+# with a PUBLIC remote (owner decision D6, 2026-09-23). SPACE may hold team
+# contacts (DIP-0002), which is fine in a private space repo and a leak in a
+# public one. "Public" is decided the way the pre-push hook decides it: a
+# remote whose GitHub org/name is listed under `protected_repos` in
+# public-repo-denylist.yaml. When that cannot be established (no readable
+# policy, git failing), the write is refused.
+NOT_PUBLIC_LEVELS = ("SPACE", "TEAM")
+
+# Same file and same default as pre_push_scan.DEFAULT_DENYLIST and
+# githooks/pre-push. Tests (and callers) may point it elsewhere.
+PUBLIC_REPO_DENYLIST: Optional[Path] = None
+
+# githooks/pre-push: sed -E 's#^(git@github.com:|https://github.com/|ssh://git@github.com/)##; s#\.git$##'
+_GITHUB_PREFIX = re.compile(r"^(git@github\.com:|https://github\.com/|ssh://git@github\.com/)")
 
 # Patterns that should never appear in PUBLIC layers
 PRIVATE_PATTERNS = [
@@ -341,7 +392,7 @@ def merge_context(
 
     # Header
     if include_markers:
-        content_parts.append(f"<!-- AUTO-GENERATED: Do not edit directly -->\n")
+        content_parts.append(f"{GENERATED_HEADER}\n")
         content_parts.append(f"<!-- Source: {name}.base.md + .space.md + .local.md -->\n")
         content_parts.append(f"<!-- Regenerate: datacore context rebuild -->\n\n")
 
@@ -424,10 +475,15 @@ def rebuild_context(
     component_path: Path,
     name: str = "CLAUDE",
     dry_run: bool = False,
-    include_markers: bool = True
+    include_markers: bool = True,
+    emit: Optional[list[str]] = None,
 ) -> tuple[bool, list[str]]:
     """
     Rebuild a composed context file from its layers.
+
+    `emit` names extra outputs (e.g. ["AGENTS", "GEMINI"]) written with the
+    same merged content. Every output passes every refusal before any is
+    written.
 
     Args:
         component_path: Directory containing the layered files
@@ -465,11 +521,226 @@ def rebuild_context(
         print(merged_content[:500] + "..." if len(merged_content) > 500 else merged_content)
         return len(warnings) == 0, warnings
 
-    # Write output
-    output_file.write_text(merged_content)
+    # Private content never reaches a tracked file. DIP-0002 says the composed
+    # file is "always gitignored"; that is a property of the repository, not of
+    # this script, so check it rather than assume it.
+    outputs = [output_file]
+    notices: list[str] = []   # reported, but not a failure
+    previous = output_file.read_text() if output_file.exists() else None
+    for extra in (emit or []):
+        twin = component_path / f"{extra}.md"
+        if extra == name:
+            continue
+        if twin.exists():
+            existing = twin.read_text()
+            # A twin this script wrote carries its header, or (under
+            # --no-markers) equals the CLAUDE.md written alongside it. Anything
+            # else is someone's own file -- 2-datacore/AGENTS.md is an OpenClaw
+            # workspace file -- and a rebuild must not replace it.
+            if GENERATED_HEADER not in existing and existing != previous:
+                notices.append(f"not overwriting {twin}: it was not written by context_merge")
+                continue
+        tracked_reason = _twin_would_be_tracked(twin)
+        if tracked_reason:
+            notices.append(f"not writing {twin}: {tracked_reason}")
+            continue
+        outputs.append(twin)
+    levels = dict(LAYERS)
+    private_layers = [f for f in existing_layers
+                      if levels.get(f.name[len(name) + 1:-len(".md")]) in UNTRACKED_ONLY_LEVELS]
+    # Every output gets every check before any is written: a second filename
+    # must not become a way around the refusal the first one would get.
+    for out in outputs:
+        if private_layers:
+            refusal = output_untracked_refusal(out)
+            if refusal:
+                return False, warnings + [refusal]
+        refusal = shared_layer_refusal(out, existing_layers, name)
+        if refusal:
+            return False, warnings + [refusal]
+
+    # Write outputs
+    for out in outputs:
+        out.write_text(merged_content)
     _ensure_composed_ignored(output_file)
 
-    return len(warnings) == 0, warnings
+    return len(warnings) == 0, warnings + notices
+
+
+def _twin_would_be_tracked(twin: Path) -> str | None:
+    """Why a harness twin (AGENTS.md, GEMINI.md) must not be written here, or None.
+
+    CLAUDE.md is gitignored in every Datacore repo; its twins are new names that
+    most .gitignore files do not list yet. A twin git would track could be swept
+    into a commit by a sync, so it is written only where git ignores it (or
+    outside any work tree).
+    """
+    directory = twin.parent
+    try:
+        inside = subprocess.run(["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+                                capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            return None
+        ignored = subprocess.run(["git", "-C", str(directory), "check-ignore", "-q", "--", twin.name],
+                                 capture_output=True, text=True)
+    except OSError as exc:
+        return f"git unavailable ({exc})"
+    if ignored.returncode == 0:
+        return None
+    return f"git would track it; add {twin.name} to .gitignore next to CLAUDE.md"
+
+
+def output_untracked_refusal(output_file: Path) -> str | None:
+    """None when `output_file` may hold PRIVATE content, else the reason not to.
+
+    Allowed: git reports the path ignored (`check-ignore` exit 0; a tracked
+    path is never reported ignored), or the directory is in no work tree.
+    Everything else, including git being unavailable, refuses: fail closed.
+    """
+    directory = output_file.parent
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            if "not a git repository" in inside.stderr:
+                return None
+            if inside.returncode == 0:      # e.g. inside .git: not a work tree
+                return None
+            return (f"REFUSED: {output_file} not written: cannot tell whether git "
+                    f"would track it (git rev-parse failed)")
+        ignored = subprocess.run(
+            ["git", "-C", str(directory), "check-ignore", "-q", "--", output_file.name],
+            capture_output=True, text=True)
+    except OSError as exc:
+        return (f"REFUSED: {output_file} not written: git unavailable ({exc}); "
+                f"it would contain the PRIVATE layer")
+    if ignored.returncode == 0:
+        return None
+    if ignored.returncode == 1:
+        return (f"REFUSED: {output_file} not written: it would contain the PRIVATE "
+                f"layer and git does not ignore it (add it to .gitignore, and "
+                f"`git rm --cached` it if tracked)")
+    return (f"REFUSED: {output_file} not written: git check-ignore failed "
+            f"(exit {ignored.returncode})")
+
+
+def private_context_reason(path: Path, tracked: bool = False) -> str:
+    """Why `path` must never be committed by a sync, or '' (SPC-3).
+
+    A sync that stages with `add -A` publishes whatever the repo's .gitignore
+    fails to list, and a hand-made or freshly cloned space may list nothing.
+    So the rule is judged from the file, not from .gitignore:
+      * a private layer (`*.local.*`) never leaves the machine;
+      * a composed context file (starts with GENERATED_HEADER) is never newly
+        committed -- it is regenerated on every machine -- and one carrying the
+        LOCAL layer is never committed at all, tracked or not.
+    """
+    path = Path(path)
+    if ".local." in path.name:
+        return "private layer (DIP-0002)"
+    if path.suffix != ".md" or not path.is_file():
+        return ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4000)
+    except OSError:
+        return ""
+    if not head.startswith(GENERATED_HEADER):
+        return ""
+    if "Layer: LOCAL" in head:
+        return "composed context holding the private layer (DIP-0002)"
+    if not tracked:
+        return "composed context file (generated, DIP-0002)"
+    return ""
+
+
+def remote_slug(url: str) -> str:
+    """The pre-push hook's repo identifier for a remote URL (org/name for a
+    GitHub URL; any other URL unchanged, which no GitHub slug list matches)."""
+    return re.sub(r"\.git$", "", _GITHUB_PREFIX.sub("", url.strip()))
+
+
+def _denylist_path() -> Path:
+    if PUBLIC_REPO_DENYLIST is not None:
+        return Path(PUBLIC_REPO_DENYLIST)
+    return Path(os.environ.get("DATA_DIR", os.path.expanduser("~/Data"))) / \
+        ".datacore" / "config" / "public-repo-denylist.yaml"
+
+
+def public_remotes(directory: Path) -> tuple[list[str] | None, str | None]:
+    """(public remote slugs, None), or (None, why it cannot be told).
+
+    A remote is public when its slug is in `protected_repos`, exactly the
+    pre-push hook's test. No remote at all is not public: nothing can be
+    pushed. Any remote that is public makes the repository public, whatever
+    the others are (an `upstream` counts as much as `origin`).
+    """
+    path = _denylist_path()
+    try:
+        import yaml as _yaml
+        policy = _yaml.safe_load(path.read_text())
+    except Exception as exc:  # noqa: BLE001 — missing, unreadable, invalid, no PyYAML
+        return None, f"public-repo policy {path} unreadable ({type(exc).__name__})"
+    protected = policy.get("protected_repos") if isinstance(policy, dict) else None
+    if not isinstance(protected, list):
+        return None, f"public-repo policy {path} has no protected_repos list"
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(directory), "config", "--get-regexp", r"^remote\..*\.url$"],
+            capture_output=True, text=True)
+    except OSError as exc:
+        return None, f"git unavailable ({exc})"
+    if out.returncode not in (0, 1):          # 1: no remote configured
+        return None, f"git config failed (exit {out.returncode})"
+    urls = [line.split(None, 1)[1] for line in out.stdout.splitlines() if " " in line]
+    return sorted({remote_slug(u) for u in urls} & {str(p) for p in protected}), None
+
+
+def shared_layer_refusal(output_file: Path, existing_layers: list[Path],
+                         name: str = "CLAUDE") -> str | None:
+    """None when the composed file may be written as far as SPACE/TEAM content
+    goes, else the reason it may not (owner decision D6).
+
+    Refused: a SPACE or TEAM layer exists, git would track the output (it is in
+    a work tree and not ignored), and the repository has a public remote, or
+    whether it has one cannot be told. Everything unknown fails closed.
+    """
+    levels = dict(LAYERS)
+    shared = [f.name for f in existing_layers
+              if levels.get(f.name[len(name) + 1:-len(".md")]) in NOT_PUBLIC_LEVELS]
+    if not shared:
+        return None
+    directory = output_file.parent
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            if "not a git repository" in inside.stderr or inside.returncode == 0:
+                return None                    # no work tree: nothing is tracked
+            return (f"REFUSED: {output_file} not written: cannot tell whether git "
+                    f"would track it (git rev-parse failed) and it holds {', '.join(shared)}")
+        ignored = subprocess.run(
+            ["git", "-C", str(directory), "check-ignore", "-q", "--", output_file.name],
+            capture_output=True, text=True)
+    except OSError as exc:
+        return (f"REFUSED: {output_file} not written: git unavailable ({exc}); "
+                f"it would hold {', '.join(shared)}")
+    if ignored.returncode == 0:
+        return None
+    if ignored.returncode != 1:
+        return (f"REFUSED: {output_file} not written: git check-ignore failed "
+                f"(exit {ignored.returncode}) and it holds {', '.join(shared)}")
+    public, why = public_remotes(directory)
+    if why:
+        return (f"REFUSED: {output_file} not written: cannot tell whether this repo is "
+                f"public ({why}); git would track it and it holds {', '.join(shared)}")
+    if public:
+        return (f"REFUSED: {output_file} not written: git would track it, the repo has a "
+                f"public remote ({', '.join(public)}), and it holds {', '.join(shared)} "
+                f"(add {output_file.name} to .gitignore, and `git rm --cached` it if tracked)")
+    return None
 
 
 def validate_layers(component_path: Path, name: str = "CLAUDE") -> list[str]:
@@ -483,6 +754,84 @@ def validate_layers(component_path: Path, name: str = "CLAUDE") -> list[str]:
         Path(component_path), name, include_markers=False, validate=True
     )
     return warnings
+
+
+def expected_context(component_path: Path, name: str = "CLAUDE") -> str:
+    """What `rebuild` would write for this component right now (nothing written)."""
+    component_path = Path(component_path)
+    merged, _ = merge_context(component_path, name)
+    datacore_dir = component_path / ".datacore"
+    if datacore_dir.is_dir() and REGISTRY_MARKER.search(merged):
+        merged = inject_registries(merged, datacore_dir)
+    return merged
+
+
+def _registry_inputs(component_path: Path, name: str = "CLAUDE") -> list[Path]:
+    """Files `inject_registries` reads for this component, when its layers use markers."""
+    datacore_dir = Path(component_path) / ".datacore"
+    if not datacore_dir.is_dir():
+        return []
+    merged, _ = merge_context(component_path, name, include_markers=False, validate=False)
+    if not REGISTRY_MARKER.search(merged):
+        return []
+    reg = datacore_dir / "registry"
+    files = [reg / f for f in ("agents.yaml", "agents.local.yaml", "commands.yaml",
+                               "commands.local.yaml", "sources.yaml", "infrastructure.yaml")]
+    files += list((datacore_dir / "modules").glob("*/module.yaml"))
+    return [p for p in files if p.exists()]
+
+
+def composed_drift(component_path: Path, name: str = "CLAUDE") -> Optional[str]:
+    """Why the composed file differs from its layers, or None when it matches (SPC-4).
+
+    Stale: a layer changed after the last rebuild. Hand-edited: the composed
+    file was changed after it was written. Either way a session reads text its
+    layers do not hold.
+    """
+    component_path = Path(component_path)
+    layers = [component_path / f"{name}.{suffix}.md" for suffix, _ in LAYERS]
+    layers = [p for p in layers if p.exists()]
+    if not layers:
+        return None
+    out = component_path / f"{name}.md"
+    if not out.exists():
+        return f"{out} is missing: run `context_merge.py rebuild --path {component_path}`"
+    expected = expected_context(component_path, name)
+    if out.read_text() == expected:
+        return None
+    # The registry tables injected into the root file are inputs too: a server
+    # added to infrastructure.yaml after the last rebuild makes the file stale,
+    # not hand-edited (2026-10-25: misread as hand-edited, so `check --fix` left it).
+    inputs = layers + _registry_inputs(component_path, name)
+    newest = max(p.stat().st_mtime for p in inputs)
+    if newest > out.stat().st_mtime or GENERATED_HEADER not in out.read_text()[:200]:
+        return (f"{out} is stale: its layers changed since the last rebuild "
+                f"(run `context_merge.py rebuild --path {component_path}`)")
+    return (f"{out} was hand-edited: it differs from its layers; move the edit into a "
+            f"layer ({name}.space.md or {name}.local.md), then rebuild")
+
+
+def check_installation(root_path: Path, fix: bool = False) -> list[str]:
+    """Drift of the root's and every space's composed CLAUDE.md (SPC-4).
+
+    With `fix`, a STALE file is rebuilt (its layers are the source); a
+    hand-edited one is only reported -- rebuilding would destroy the edit.
+    Returns one line per component still out of step.
+    """
+    root_path = Path(root_path)
+    dirs = [root_path, *sorted(p for p in root_path.glob("[0-9]*-*") if p.is_dir())]
+    problems = []
+    for d in dirs:
+        drift = composed_drift(d)
+        if drift and fix and (" is stale" in drift or " is missing" in drift):
+            _, msgs = rebuild_context(d, "CLAUDE", emit=emit_targets_from_env())
+            if composed_drift(d) is None:
+                drift = None
+            else:
+                drift = f"{drift} -- rebuild did not fix it: {'; '.join(msgs[-1:])}"
+        if drift:
+            problems.append(drift)
+    return problems
 
 
 def find_all_contexts(root_path: Path) -> list[tuple[Path, str]]:
@@ -503,7 +852,8 @@ def find_all_contexts(root_path: Path) -> list[tuple[Path, str]]:
     return contexts
 
 
-def rebuild_all(root_path: Path, dry_run: bool = False) -> tuple[int, int, list[str]]:
+def rebuild_all(root_path: Path, dry_run: bool = False,
+                emit: Optional[list[str]] = None) -> tuple[int, int, list[str]]:
     """
     Rebuild all context files under a root path.
 
@@ -516,7 +866,10 @@ def rebuild_all(root_path: Path, dry_run: bool = False) -> tuple[int, int, list[
     all_warnings = []
 
     for component_path, name in contexts:
-        success, warnings = rebuild_context(component_path, name, dry_run=dry_run)
+        # Only the agent instructions have harness twins; SCAFFOLDING and
+        # other layered files keep a single output.
+        success, warnings = rebuild_context(component_path, name, dry_run=dry_run,
+                                            emit=emit if name == "CLAUDE" else None)
 
         if success:
             success_count += 1
@@ -558,9 +911,16 @@ def main():
         "--no-markers", action="store_true",
         help="Don't include layer boundary markers"
     )
+    rebuild_parser.add_argument(
+        "--emit", nargs="?", const=",".join(DEFAULT_EMIT), default=None,
+        help="Also write these context names from the CLAUDE layers "
+             "(comma list; bare --emit means AGENTS,GEMINI; else $DATACORE_CONTEXT_EMIT)"
+    )
 
     # validate command
-    validate_parser = subparsers.add_parser("validate", help="Validate layers for private content")
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate layers for private content, and that the composed file "
+                         "matches its layers (not stale, not hand-edited)")
     validate_parser.add_argument(
         "--path", type=Path, default=Path("."),
         help="Path to component directory"
@@ -569,6 +929,15 @@ def main():
         "--name", default="CLAUDE",
         help="Base name of context file (default: CLAUDE)"
     )
+
+    # check command -- the SessionStart hook (SPC-4)
+    check_parser = subparsers.add_parser(
+        "check", help="Check the root's and every space's composed CLAUDE.md against its "
+                      "layers; --fix rebuilds stale ones (hand-edited ones are only reported)")
+    check_parser.add_argument("--path", type=Path, default=Path(__file__).resolve().parents[2],
+                              help="Datacore root (default: this installation)")
+    check_parser.add_argument("--fix", action="store_true", help="rebuild stale composed files")
+    check_parser.add_argument("--quiet", action="store_true", help="print nothing when all match")
 
     # trace command
     trace_parser = subparsers.add_parser("trace", help="Show which layer contains a section")
@@ -585,23 +954,32 @@ def main():
     args = parser.parse_args()
 
     if args.command == "rebuild":
+        emit = ([n.strip() for n in args.emit.split(",") if _EMIT_NAME.match(n.strip())]
+                if args.emit else emit_targets_from_env())
         if args.all:
-            success, failure, warnings = rebuild_all(args.path, dry_run=args.dry_run)
+            success, failure, warnings = rebuild_all(args.path, dry_run=args.dry_run, emit=emit)
             print(f"\nRebuilt: {success} OK, {failure} with warnings")
         else:
             success, warnings = rebuild_context(
                 args.path, args.name,
                 dry_run=args.dry_run,
-                include_markers=not args.no_markers
+                include_markers=not args.no_markers,
+                emit=emit if args.name == "CLAUDE" else None,
             )
 
         for w in warnings:
             print(f"  {w}", file=sys.stderr)
 
-        sys.exit(0 if not warnings else 1)
+        # The verdict, not the volume of output: a skipped hand-written twin is
+        # reported above but is not a failed rebuild.
+        ok = (failure == 0) if args.all else success
+        sys.exit(0 if ok else 1)
 
     elif args.command == "validate":
         warnings = validate_layers(args.path, args.name)
+        drift = composed_drift(args.path, args.name)
+        if drift:
+            warnings.append(f"ERROR: {drift}")
 
         if warnings:
             print("Validation failed:")
@@ -611,6 +989,15 @@ def main():
         else:
             print("Validation passed")
             sys.exit(0)
+
+    elif args.command == "check":
+        problems = check_installation(args.path, fix=args.fix)
+        for p in problems:
+            print(f"Context check: {p}")
+        if not problems and not args.quiet:
+            print("Context check passed: every composed CLAUDE.md matches its layers")
+        # A SessionStart hook must never block the session: the finding is the output.
+        sys.exit(1 if problems and not args.quiet else 0)
 
     elif args.command == "trace":
         component_path = Path(args.path)

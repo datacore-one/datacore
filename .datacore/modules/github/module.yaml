@@ -18,12 +18,13 @@ optional:
   - nightshift@>=0.2.0
 
 provides:
-  skills:
-    - triage-github
+  # triage-github is a command (commands/triage-github.md); there is no
+  # skills/triage-github/SKILL.md, so it is not declared as a skill (2026-10-16).
   agents:
     - github-responder
   commands:
     - triage-github
+    - today-hook
 
 settings:
   enabled:
@@ -32,7 +33,7 @@ settings:
 
   username:
     description: "GitHub username to monitor mentions for"
-    default: "plur9"
+    default: ""   # required: set in module.local.yaml or GITHUB_TRIAGE_USERNAME
 
   scan_hours:
     description: "How far back to scan for activity (hours)"
@@ -91,3 +92,9 @@ recall:
     - module:github
   tags:
     - github
+
+# MOD-3: the scheduled jobs this module owns. Their full entries (machine, schedule,
+# cmd, artifact) live in .datacore/lib/jobs/manifest.yaml, which the installer and
+# verifier read; `module_remove.py github` takes these out of it with the module.
+schedules:
+  - name: nightshift-github-triage

@@ -42,14 +42,14 @@ Every GitHub action creates an org-mode task with:
 | `lib/repo_discovery.py` | Discover repos from space git remotes |
 | `lib/github_scanner.py` | Scan GitHub via gh CLI |
 | `lib/task_creator.py` | Create org-mode tasks from scan results |
-| `data/repos.json` | Cached repo list (gitignored) |
-| `data/scan_cache.json` | Cached scan results (gitignored) |
+| `<personal space>/.datacore/module-data/github/data/repos.json` | Cached repo list (private, MEM-63) |
+| `<personal space>/.datacore/module-data/github/data/scan_cache.json` | Cached scan results (private, MEM-63) |
 
 ## Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| username | plur9 | GitHub handle to monitor |
+| username | (none — required) | GitHub handle to monitor |
 | scan_hours | 24 | How far back to scan |
 | auto_task_create | true | Create GTD tasks automatically |
 | confidence_threshold | 80 | Min confidence for auto-fix |

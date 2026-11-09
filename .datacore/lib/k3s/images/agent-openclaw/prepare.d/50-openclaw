@@ -1,0 +1,8 @@
+#!/bin/sh
+# OpenClaw keeps its config, sessions and plugin registry in the volume
+# ($OPENCLAW_STATE_DIR); the code is in the image. Nothing to link -- only make
+# sure the state directory exists and is private.
+set -eu
+mkdir -p "$OPENCLAW_STATE_DIR"
+chmod 700 "$OPENCLAW_STATE_DIR"
+echo "agent-prepare: openclaw state at $OPENCLAW_STATE_DIR"

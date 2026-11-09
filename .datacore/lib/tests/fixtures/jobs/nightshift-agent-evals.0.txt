@@ -1,0 +1,9 @@
+# fixture for nightshift-agent-evals artifact[0]
+# producer artifact: ~/.datacore/state/agent-evals.log on nightshift
+# NOT harvested: the job has not run yet (each run costs model time; owner, 2026-10-01).
+# Built from promise_nightly.main's own contract line with label "agent-evals";
+# replace with the first real run's last line.
+# regex under test: ^agent-evals: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$
+# represents: SUCCESS
+# ---
+agent-evals: 30 green, 8 red, 0 could not run here; 0 turned red, 0 recovered; alert none

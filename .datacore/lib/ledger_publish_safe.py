@@ -125,7 +125,9 @@ def publish(space: pathlib.Path, machine: list[str]) -> tuple[str, str]:
             return "FAIL", 'commit failed; inspect local hooks; source retained'
     r = _git(space, "fetch", "-q", timeout=300)
     if r.returncode:
-        return "held", 'fetch failed; inspect local remote configuration'
+        # The real cause, in git's words (fleet sim 2026-10-03, break 3): GitHub
+        # being down read as "inspect local remote configuration".
+        return "held", f'{_remote_reason(r.stderr, space)}; local commit retained for retry'
     up = _git(space, "rev-parse", "--abbrev-ref", "@{u}")
     if up.returncode:
         return "held", "no upstream branch"
@@ -157,8 +159,25 @@ def publish(space: pathlib.Path, machine: list[str]) -> tuple[str, str]:
         return 'held', 'publication commit/ref is invalid'
     r = _git(space, *args, timeout=300)
     if r.returncode:
-        return "held", 'push failed; local commit retained for retry'
+        return "held", f'push: {_remote_reason(r.stderr, space)}; local commit retained for retry'
     return "ok", ""
+
+
+def _remote_reason(stderr: str, space: pathlib.Path) -> str:
+    try:
+        from ledger_transport import _fetch_reason
+        return _fetch_reason(stderr or "", space)
+    except Exception:  # noqa: BLE001 -- the classifier is a nicety; git's line is the fact
+        lines = [l.strip() for l in (stderr or "").splitlines() if l.strip()]
+        return f"remote failed -- git said: {lines[-1][:200]}" if lines else "remote failed"
+
+
+def _queue(name: str, *args) -> list[str]:
+    try:
+        import ledger_queue
+        return getattr(ledger_queue, name)(*args)
+    except Exception as exc:  # noqa: BLE001 -- publication must not fail on the notice
+        return [f"queued-task notice unavailable ({type(exc).__name__})"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -185,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
                 rc = 1
                 continue
             if ahead.stdout.strip() == '0':
+                for line in _queue('note_published', space):
+                    print(f"  {line}")
                 continue
         note = f" (leaving {len(human)} human file(s) untouched)" if human else ""
         if a.dry_run:
@@ -193,6 +214,10 @@ def main(argv: list[str] | None = None) -> int:
         status, detail = publish(space, machine)
         published += 1
         print(f"  {status:5} {space.name}: {len(machine)} ledger file(s){note}" + (f" -- {detail}" if detail else ""))
+        # QUEUED, NOT LOST (break 3): what is recorded here and not yet on the
+        # remote is named, and the owner told once; once it goes out, said once.
+        for line in (_queue('note_held', space, detail) if status != "ok" else _queue('note_published', space)):
+            print(f"  {line}")
         rc = rc or (0 if status == "ok" else 1)
     print(f"{stamp} run complete: {published} space(s) published, rc={rc}")
     return rc

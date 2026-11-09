@@ -70,7 +70,12 @@ def validate(registry_path: Path, section: str) -> dict:
         name for name, e in entries.items()
         if e.get('deprecated') or 'DEPRECATED' in str(e.get('description', '')))
     registered_sources = set()
-    for e in entries.values():
+    # Entries in the installation-private overlay (agents.local.yaml) register
+    # their files too; registry_overlay.py merges it for every reader.
+    from registry_overlay import local_path
+    overlay = local_path(registry_path)
+    overlay_entries = _registered(_load(overlay)[1] or {}, section) if overlay.exists() else {}
+    for e in [*entries.values(), *overlay_entries.values()]:
         src = e.get('source')
         if src:
             try:
@@ -109,8 +114,7 @@ def prune(registry_path: Path, section: str) -> list:
                 if not _source_exists(entries[name] or {})]
     if not to_prune:
         return []
-    backup = registry_path.with_suffix(
-        f'.yaml.bak-{date.today().isoformat()}')
+    backup = registry_path.with_suffix('.yaml.bak')
     shutil.copy2(registry_path, backup)
     for name in to_prune:
         del entries[name]

@@ -44,14 +44,28 @@ REQUIRED = ("pre-commit", "pre-push")
 TRANSPORT = -1
 SSH_FAILED = (TRANSPORT, 255)
 
-# (label, ssh host or None for local, user to run as or None)
-MACHINES = [
-    ("mac", None, None),
-    ("winston", "winston", None),
-    ("nightshift", "nightshift", None),
-    ("hermes", "hermes", "gregor"),
-    ("plur-claw", "plur-claw", None),
-]
+
+
+def _machines() -> list[tuple[str, str | None, str | None]]:
+    """(label, ssh host or None for local, user to run as or None), one per
+    machine in the install's roster (registry/infrastructure.yaml): the roster
+    name, its ssh alias (none -- '-' or null -- means this machine), and
+    `access.run_as`. Never a list of ours written here (INS-3). No roster: this
+    machine alone, which is still a real check."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from jobs.manifest import _reachable_alias, _servers
+        servers = _servers()
+    except Exception:  # noqa: BLE001 -- unreadable roster: check locally only
+        servers = {}
+    out = [(name, _reachable_alias(cfg), (cfg.get("access") or {}).get("run_as") or None)
+           for name, cfg in servers.items()]
+    return out or [("local", None, None)]
+
+
+MACHINES = _machines()
 
 
 def run(host: str | None, user: str | None, cmd: str) -> tuple[int, str]:

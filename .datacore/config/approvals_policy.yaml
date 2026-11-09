@@ -30,32 +30,112 @@ cosign_effects:
   - email.send
   - payment
   - prod.deploy
+  # MEM-02: irreversible steps wait for the owner's go, after a one-item
+  # trial. A grant can release them; for agents the list below may not.
+  - data.delete
+  - bulk.change
+  - push.shared
+  # AGT-1: public speech is Data's lane; a message to the owner's chat waits
+  # for a grant like an e-mail does.
+  - public.post
+  - message.send
+  # MEM-17: a hosted page or shared link waits for the owner's go.
+  - page.publish
+  # Hiring and retiring an agent (k3s fleet-hire, 2026-10-25): an agent may
+  # propose; only the owner's grant lets the controller carry it out.
+  - agent.hire
+  - agent.retire
 known_effects:
+  - agent.hire
+  - agent.retire
   - email.send
   - payment
   - prod.deploy
+  - data.delete
+  - bulk.change
+  - push.shared
+  # never-effects of every agent (tool_effects.yaml; owner decisions
+  # 2026-09-26: agents never spend money, touch trading, rotate credentials,
+  # delete data, submit to authorities or merge on their own)
+  - trading
+  - credential.rotate
+  - gov.submit
+  - code.merge
+  - secret.search
+  - guard.disable
+  - ledger.forge
+  - calendar.respond
+  - data.egress
+  - history.rewrite
+  - public.post
+  - message.send
+  - page.publish
+  - eval.edit
+  # 2026-09-30: an agent never hides or discards uncommitted work (git
+  # stash/reset/checkout/restore/clean) -- it holds other writers' event logs
+  - worktree.discard
+  # AUD-2: any change but an audit's own findings file (only the auditor
+  # principal is bound by it)
+  - write
 
 # Per-principal limits (product description, stage 4; DIP-0044 §7). Defaults
-# when a principal is absent: agents get max_hops 3 and 50 creates a day,
-# humans are unbounded (claim_gate.py). `never_effects` cannot be granted.
+# when a principal is absent: agents get max_hops 3; creates are unbounded
+# unless a principal names `max_creates_per_day` (owner decision 2026-09-30,
+# "There should be no limit"; the 50-a-day agent default is gone) (claim_gate.py). `never_effects` cannot be granted.
+# `max_creates_per_day` is counted per principal PER SPACE (all of the
+# principal's writer names, today UTC, in the space being written to): each
+# space allows the full cap, so the fleet-wide ceiling is cap x spaces.
+# Owner decision L6, 2026-09-23.
+# `own_repos` (optional) lists regexes over a push destination's URL naming
+# the principal's own repositories: a push that provably lands in one is not a
+# shared push, so push.shared (and nothing else) is released for it. The
+# repository must be named by the call itself (git -C, cd, the tool's workdir);
+# one that cannot be told stays co-signed. Owner decision 2026-09-30.
+# `standing_grants` (optional) is a list of {effect, command, why?}: the
+# co-signed `effect` is released for a shell call whose every command causing
+# it matches the `command` regex -- for a scheduled job whose runtime carries
+# no per-task grant (Data's daily X post through OpenClaw's gateway). A
+# never-effect is still refused, a per-transaction effect (payment) still
+# needs its exact call's grant, and code is never resolved. Owner decision
+# 2026-09-30.
+#
+# AGENT_NEVER is what no agent may cause, whatever a task's grants say: money,
+# trading, credentials, filings, merges (each space/project names its human
+# merge gate, the owner by default -- AGT-5), secret searches, switching a
+# guard off, writing another's log, answering an invite, data to an
+# unapproved destination, rewriting shared history, editing a promise eval
+# (MEM-30: the builder never edits its judge). Outward speech -- e-mail and
+# public posts -- belongs to one agent's lane (AGT-1): never for the others, a
+# grant for that one.
+#
+# THIS INSTALL'S OWN PRINCIPALS ARE NOT HERE. The file is tracked and a fresh
+# install must name nothing of ours (INS-3), so the entries below are neutral
+# examples. The install's people and agents, and its arbitration order, go in
+# the gitignored approvals_policy.local.yaml beside this file: load_policy
+# merges it over this one (an entry there replaces the one of the same name).
 principals:
-  gregor: {}
-  winston:
-    never_effects: [payment]
-    may_delegate_to: [miles, tris, data]
-  miles:
-    never_effects: [payment]
-    may_delegate_to: [tris, data]
-  tris:
-    never_effects: [payment, prod.deploy]
-    may_delegate_to: [miles]
-  data:
-    never_effects: [payment, prod.deploy]
-    may_delegate_to: [miles]
+  owner: {}
+  assistant:
+    never_effects: [payment, trading, credential.rotate, gov.submit, code.merge,
+                    secret.search, guard.disable, ledger.forge, calendar.respond,
+                    data.egress, history.rewrite, eval.edit, email.send, public.post,
+                    worktree.discard]
+    may_delegate_to: []
+  # The nightly cross-model audit (AUD-2, spec .datacore/specs/cross-model-audit.md):
+  # whichever agent's model runs it, the audit only reads. It may write its own
+  # findings file and nothing else, and it delegates nothing. cross_model_audit.py
+  # sets DATACORE_POLICY_PRINCIPAL=auditor for the model turn.
+  auditor:
+    never_effects: [write, payment, prod.deploy, trading, credential.rotate, gov.submit, code.merge,
+                    secret.search, guard.disable, ledger.forge, calendar.respond, data.egress,
+                    history.rewrite, eval.edit, email.send, public.post, message.send, push.shared, page.publish,
+                    data.delete, bulk.change, worktree.discard]
+    may_delegate_to: []
+    max_creates_per_day: 0
 
 # Arbitration across principals (product description, stage 5). Earlier
 # outranks later: a principal may close or release another principal's item
 # only if it precedes the owner here; agents not listed cannot override each
 # other at all. The client outranks everyone; the chief of staff outranks the
-# agents.
-arbitration: [gregor, winston]
+# agents. (Replaced by the local file's `arbitration` when it has one.)
+arbitration: [owner, assistant]

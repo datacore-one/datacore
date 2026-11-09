@@ -103,7 +103,7 @@ sys.path.insert(0, '<HOME>/Data/.datacore/lib')
 from agent_emit import emit, emit_message, emit_task
 
 # Outbound message:
-emit_message("data", "telegram", "Replied to @gregor: kept it short",
+emit_message("data", "telegram", "Replied to @owner: kept it short",
              message_id=str(sent_msg.id))
 
 # Task lifecycle:

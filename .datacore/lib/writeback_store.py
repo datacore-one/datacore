@@ -5,6 +5,15 @@ changes. A crash after publication but before queue acknowledgement is safe:
 retry recognizes the already-applied bytes rather than appending them again.
 Org transaction recovery handles interrupted publication before this protocol
 examines the file. A third version is a conflict, never an overwrite target.
+
+Writes queued against one file before any is processed form a CHAIN: each is
+rendered from, and expects, the file as its pending predecessors will leave it
+(`_predicted`, which runs `_apply`'s rule on text), and a write's pending
+predecessors are processed first. Before 2026-09-23 every such write
+expected the same original bytes, so the second always conflicted and
+`writeback_engine --clear-failed` then deleted it (DatacoreSpec/Publication.lean,
+`unchained_second_write_conflicts`). A write queued after an external edit is
+rendered from that edit instead; the stale predecessor still conflicts.
 """
 from contextlib import closing
 import hashlib
@@ -119,14 +128,30 @@ def render(text, operation, changes):
     raise ValueError('unsupported write-back operation')
 
 
+def _predicted(conn, target, current):
+    """The file as it will be once every pending prepared write on `target` is
+    processed in queue order: exactly `_apply`'s rule, run on text."""
+    text = current
+    for plan in conn.execute('''SELECT p.before_sha256, p.after_text FROM writeback_plans p
+            JOIN pending_writes w ON w.id = p.write_id
+            WHERE p.target_file = ? AND w.status = 'pending' ORDER BY p.write_id''',
+            (str(target),)):
+        if sha(text) == plan['before_sha256']:
+            text = plan['after_text']
+        # else: already applied (text == after), or it will conflict; either
+        # way the file is unchanged by it.
+    return text
+
+
 @serialized
 def queue(space, table_name, record_id, target_file, operation, changes=None):
     target = target_path(space, target_file)
     watch_file(target)
-    before = target.read_bytes().decode('utf-8')
-    after = render(before, operation, changes or {})
+    current = target.read_bytes().decode('utf-8')
     with closing(zettel_db.get_connection(space)) as conn, conn:
         ensure_plans(conn)
+        before = _predicted(conn, target, current)
+        after = render(before, operation, changes or {})
         cursor = conn.execute('''INSERT INTO pending_writes
             (table_name, record_id, operation, changes, target_file, status)
             VALUES (?, ?, ?, ?, ?, 'pending')''',
@@ -186,13 +211,35 @@ def _finish(identity, space, applied):
         conn.execute("UPDATE pending_writes SET status='completed', applied_at=?, error_message=NULL WHERE id=?", (now, identity))
 
 
-def process(identity, space):
+def _predecessors(identity, space):
+    with closing(zettel_db.get_connection(space)) as conn:
+        ensure_plans(conn)
+        row = conn.execute('SELECT target_file FROM writeback_plans WHERE write_id = ?',
+                           (identity,)).fetchone()
+        if row is None:
+            return []
+        return [r['id'] for r in conn.execute('''SELECT w.id FROM pending_writes w
+            JOIN writeback_plans p ON p.write_id = w.id
+            WHERE p.target_file = ? AND w.status = 'pending' AND w.id < ?
+            ORDER BY w.id''', (row['target_file'], identity))]
+
+
+def _process_one(identity, space):
     ok, message, applied = _apply(identity, space)
     # _apply's Org transaction is fully committed before acknowledging the DB.
     # If this step fails, its durable plan reconciles the retry without replay.
     if ok and applied is not None:
         _finish(identity, space, applied)
     return ok, message
+
+
+def process(identity, space):
+    # A chained write expects its predecessors' result: apply them first, in
+    # queue order. Each one's own outcome (applied or conflict) is recorded on
+    # its own row; only this write's outcome is returned.
+    for earlier in _predecessors(identity, space):
+        _process_one(earlier, space)
+    return _process_one(identity, space)
 
 
 @serialized

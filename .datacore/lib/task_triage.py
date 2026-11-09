@@ -37,41 +37,49 @@ except ImportError:
 
 REPO = Path(__file__).resolve().parents[2]
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
-ROADMAP = REPO / "5-plur" / "roadmap.yaml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import _implied_name, space_for  # noqa: E402
 
-ORG_FILES = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
-             "5-plur/org/inbox.org", "0-personal/org/next_actions.org",
+#: The product space (install.yaml roles.product) and the tag its tasks carry
+#: elsewhere: `<n>-<name>` -> `<name>`.
+PRODUCT = space_for("product", REPO, "0-personal")
+TAG = _implied_name(Path(PRODUCT))
+ROADMAP = REPO / PRODUCT / "roadmap.yaml"
+
+ORG_FILES = [f"{PRODUCT}/org/next_actions.org", f"{PRODUCT}/org/someday.org",
+             f"{PRODUCT}/org/inbox.org", "0-personal/org/next_actions.org",
              "0-personal/org/someday.org"]
 
 # Words that carry no signal for similarity — every task has them.
 STOP = set("""the a an and or of for to in on with from into at by is are be
-was were this that these those it its as if then than so but not no plur add
+was were this that these those it its as if then than so but not no add
 new use using make made get set run fix update review check via per each
 about after before also just only more most some any all can could should
-would will shall may might must task item work do does done""".split())
+would will shall may might must task item work do does done""".split()) | {TAG}
+
+CONFIG = REPO / ".datacore" / "config"
+
+
+def themes(key: str = "themes") -> dict:
+    """{theme: regex}, in match order. The install's own taxonomy in the
+    gitignored task-themes.local.yaml wins over the neutral shipped
+    task-themes.yaml; a table missing from both is {} (INS-3)."""
+    found = {}
+    for name in ("task-themes.yaml", "task-themes.local.yaml"):
+        try:
+            doc = yaml.safe_load((CONFIG / name).read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        table = doc.get(key) if isinstance(doc, dict) else None
+        if isinstance(table, dict) and table:
+            found = {str(k): str(v) for k, v in table.items()}
+    return found
 
 
 # Coarse buckets for the inventory. Deliberately overlapping-tolerant: a task
 # lands in the first theme that matches, and "unfiled" is a finding rather
 # than a failure — it is where work nobody categorised accumulates.
-THEMES = {
-    "packs / hub": r"\bpack|hub\b|marketplace|listing|seller",
-    "provenance / audit": r"provenance|lineage|tamper|signed|attest|audit chain",
-    "retrieval / recall": r"recall|retriev|rerank|embed|inject|bm25|vector|hybrid",
-    "scopes / permissions": r"scope|permission|acl|multi-tenant|rbac|tenant",
-    "enterprise delivery": r"enterprise|customer|deploy|onboard|install|docker|helm|runbook",
-    "integrator / channel": r"integrator|channel|partner|reseller|civo|stackit",
-    "geo / content": r"\bgeo\b|dev\.to|blog|share of voice|wikidata|seo|content|publish",
-    "benchmark": r"benchmark|longmemeval|locomo|bench\b|leaderboard",
-    "exchange / token": r"exchange|token|escrow|x402|verity|\bfee\b",
-    "spec / standard": r"\bspec\b|standard|capsule|schema|protocol",
-    "security / trust": r"security|vulnerab|trust page|soc2|dpa|secret|credential",
-    "agents / nightshift": r"nightshift|agent fleet|miles|cadence|prompt|orchestrat",
-    "verticals": r"vertical|clinical|medicine|health|legal|law",
-    "fundraising": r"fundrais|investor|seed|deck|cap table|round",
-    "release / ci": r"\bci\b|workflow|release|version|npm|pypi|publish to",
-    "infra / ops": r"backup|monitor|server|dns|smoke|token rotation|systemd",
-}
+THEMES = themes()
 
 
 def tokens(s):
@@ -97,8 +105,8 @@ def load_tasks(plur_only=True):
             continue
         for t in json.loads(r.stdout)["tasks"]:
             tags = set(t.get("tags") or [])
-            if plur_only and not ("plur" in tags or f.startswith("5-plur")
-                                  or "plur" in t["heading"].lower()):
+            if plur_only and not (TAG in tags or f.startswith(PRODUCT + "/")
+                                  or TAG in t["heading"].lower()):
                 continue
             t["_file"] = f
             t["_tok"] = tokens(t["heading"])

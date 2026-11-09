@@ -247,3 +247,16 @@ def test_unreadable_org_file_skips_the_whole_space(space, monkeypatch):
 
     assert r["skipped"] == "unreadable org file(s)"
     assert r["orphans"] == []
+
+
+def test_a_phase1_space_never_dismisses_by_absence(space):
+    """EVAL (ledger upgrade, audit B-F1): in a Phase-1 space next_actions.org is
+    GENERATED from the ledger. An item another host created is absent from a
+    projection that has not re-rendered yet, and two sweeps an hour apart
+    closed it for good as 'housekeeping' -- about 41 live tasks since the flip,
+    two of them on 2026-09-26. Absence from a rendering is not evidence."""
+    (space / ".datacore" / "ledger-phase").write_text("1\n")
+    orph.confirm_and_dismiss(space, now=1000.0, execute=True)
+    r = orph.confirm_and_dismiss(space, now=1000.0 + HOUR, execute=True)
+    assert r.get("dismissed", 0) == 0 and "phase-1" in (r.get("refused") or "")
+    assert _status(space, "task-gone") in orph.LIVE

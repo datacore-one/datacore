@@ -221,3 +221,18 @@ def test_duplicate_job_names_are_refused_before_any_command(sandbox):
     assert result.returncode == 3
     assert "duplicate job name" in result.stdout
     assert not artifact.exists()
+
+
+def test_the_envelope_judges_with_job_verifys_checks(sandbox):
+    """mac-suite-audit printed "satisfied its contract" from the envelope while
+    job_verify failed it, twice (2026-09-22, 09-23): the envelope re-implemented
+    `nonempty` and `regex` and waved every other check through. A
+    `last_line_regex` that job_verify fails must fail here too."""
+    out = sandbox / "audit.log"
+    job = _job("audit", f"printf '0 unexplained\\n3 unexplained\\n' > {out}", out)
+    job["artifacts"] = [{"path": str(out), "check": "last_line_regex",
+                         "arg": "^0 unexplained$", "max_age_hours": 1}]
+    _write(sandbox, [job])
+    r = _run(sandbox, "audit")
+    assert r.returncode == 1, r.stdout
+    assert "last line does not match" in r.stdout

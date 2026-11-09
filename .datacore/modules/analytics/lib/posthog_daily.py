@@ -13,11 +13,25 @@ import urllib.error
 from datetime import datetime, timedelta
 
 API_HOST = "https://eu.posthog.com"
-PROJECTS = {
-    "Datacore": 156062,
-    "PLUR": 156064,
-    "Datafund": 156069,
-}
+# Which PostHog projects to report is per installation, never in this public
+# file: $POSTHOG_PROJECTS ("Name=id,Name=id") or projects.local.json next to
+# the module (gitignored; {"Name": id, ...}).
+PROJECTS_FILE = Path(__file__).resolve().parents[1] / "projects.local.json"
+
+
+def load_projects() -> dict:
+    raw = os.environ.get("POSTHOG_PROJECTS", "").strip()
+    if raw:
+        out = {}
+        for part in raw.split(","):
+            name, _, pid = part.partition("=")
+            if name.strip() and pid.strip().isdigit():
+                out[name.strip()] = int(pid)
+        return out
+    if PROJECTS_FILE.exists():
+        data = json.loads(PROJECTS_FILE.read_text())
+        return {str(k): int(v) for k, v in data.items()}
+    return {}
 
 def get_api_key():
     key = os.environ.get("POSTHOG_API_KEY")
@@ -97,11 +111,16 @@ def main():
         print("No POSTHOG_API_KEY found")
         sys.exit(1)
 
+    projects = load_projects()
+    if not projects:
+        print(f"No PostHog projects configured: set POSTHOG_PROJECTS or create {PROJECTS_FILE}")
+        sys.exit(1)
+
     print("| Project | Visitors | Pages | Sessions | vs Yesterday |")
     print("|---------|----------|-------|----------|--------------|")
 
     total_v, total_p = 0, 0
-    for name, pid in PROJECTS.items():
+    for name, pid in projects.items():
         m = get_metrics(api_key, pid)
         prev = get_previous_metrics(api_key, pid)
         d = delta_str(m["visitors"], prev["visitors"])

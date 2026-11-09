@@ -32,7 +32,11 @@ REPO = Path(__file__).resolve().parents[2]
 # One roadmap per space, one set of tools. Every path below derives from the
 # selected space, so a second roadmap can never validate against the first
 # one's intent graph by accident. Select with --space or ROADMAP_SPACE.
-SPACE = os.environ.get("ROADMAP_SPACE", "5-plur")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+# Default space: install.yaml roles.product; ROADMAP_SPACE or --space overrides.
+SPACE = os.environ.get("ROADMAP_SPACE") or space_for("product", REPO, "0-personal")
 
 
 def space_root(space: str) -> Path:
@@ -100,7 +104,7 @@ DRIVES = {"status", "self-protection", "affiliation", "disease-avoidance", "kin-
 # Only these node kinds are expected to carry roadmap items. A constraint is an
 # anti-goal, a vision is not schedulable, and operations are recurring activity —
 # reporting them as uncovered would bury the ones that matter.
-ITEM_BEARING = {"goal", "intent", "initiative"}
+ITEM_BEARING = {"goal", "intent", "initiative", "project"}
 
 
 def load_intents(path: Path) -> dict:
@@ -116,6 +120,20 @@ def load_intents(path: Path) -> dict:
         if m:
             intents[m.group(1)] = kind
     return intents
+
+
+def item_bearing(path: Path) -> set:
+    """Nodes expected to carry roadmap items. A node with :ROADMAP: IS an item."""
+    intents, roadmapped, current = load_intents(path), set(), None
+    for line in path.read_text().splitlines():
+        m = re.match(r"^\s*:INTENT_ID:\s*(\S+)\s*$", line)
+        if m:
+            current = m.group(1)
+        if current and re.match(r"^\s*:ROADMAP:\s*\S", line):
+            roadmapped.add(current)
+        if line.startswith("*"):
+            current = None
+    return {k for k, v in intents.items() if v in ITEM_BEARING} - roadmapped
 
 
 def load_intent_ids(path: Path) -> set:
@@ -229,23 +247,11 @@ def validate(roadmap: dict, intent_ids: set) -> list:
 
 # ORG_FILES is set by configure(): the space's org files plus 0-personal.
 
-THEMES = {
-    "packs / hub": r"\bpack|hub\b|marketplace|listing|seller",
-    "provenance / audit": r"provenance|lineage|tamper|signed|attest|audit chain",
-    "retrieval / recall": r"recall|retriev|rerank|embed|inject|bm25|vector|hybrid",
-    "scopes / permissions": r"scope|permission|acl|multi-tenant|rbac|tenant",
-    "enterprise delivery": r"enterprise|customer|deploy|onboard|install|docker|helm|runbook",
-    "integrator / channel": r"integrator|channel|partner|reseller|civo|stackit",
-    "geo / content": r"\bgeo\b|dev\.to|blog|share of voice|wikidata|seo|content|publish",
-    "benchmark": r"benchmark|longmemeval|locomo|bench\b|leaderboard",
-    "exchange / token": r"exchange|token|escrow|x402|verity|fee",
-    "spec / standard": r"\bspec\b|standard|capsule|schema|protocol",
-    "security / trust": r"security|vulnerab|trust page|soc2|dpa|secret|credential",
-    "agents / nightshift": r"nightshift|agent fleet|miles|cadence|prompt|orchestrat",
-    "verticals": r"vertical|clinical|medicine|health|legal|law",
-    "fundraising": r"fundrais|investor|seed|deck|cap table|round",
-    "infra / ops": r"\bci\b|workflow|backup|monitor|server|dns|smoke",
-}
+# The install's own taxonomy: `roadmap_themes` (else `themes`) in the gitignored
+# config/task-themes.local.yaml, over the neutral shipped task-themes.yaml.
+from task_triage import themes as _themes  # noqa: E402
+
+THEMES = _themes("roadmap_themes") or _themes()
 
 
 def report_orphans(roadmap):
@@ -327,7 +333,7 @@ def main():
     if args.coverage:
         intents = load_intents(INTENTS_ORG)
         served = {s for i in items for s in (i.get("serves") or [])}
-        bearing = {k for k, v in intents.items() if v in ITEM_BEARING}
+        bearing = item_bearing(INTENTS_ORG)
         covered = served & bearing
         print(f"item-bearing intents: {len(bearing)}   covered: {len(covered)}   "
               f"({100 * len(covered) // max(len(bearing), 1)}%)\n")

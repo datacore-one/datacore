@@ -59,19 +59,14 @@ Datacore combines established methodologies with AI augmentation:
 
 ## Spaces
 
-| Space | Purpose | Key Projects |
-|-------|---------|-------------|
-| **0-personal** | GTD, PKM, personal projects | Trading, health tracking |
-| **1-datafund** | Fair data economy, data tokenization | Verity (data marketplace), Santorio, Dubai pilot |
-| **2-datacore** | AI second brain system development | datacore-mcp, org-workspace, datacore-bench |
-| **3-fds** | Fair Data Society — data sovereignty building blocks | Fairdrop, FDS-ID, DataEscrow (FDS MCP) |
-| **4-forge** | Autonomous digital product business | Etsy products, AI-generated goods |
+Spaces are numbered folders at the root: `0-personal/` for one person's GTD and PKM, and `[N]-[name]/` team or venture spaces. The list of this installation's spaces and what each is for lives in the private layer (`CLAUDE.local.md`), never here.
 
 Each space is a separate git repo with its own CLAUDE.md, org files, knowledge base, and journal. When working in a space, its CLAUDE.md loads automatically with space-specific context.
 
 ### Personal (0-personal/)
 
 - `org/inbox.org` — single capture point (sacred — always return to clean)
+- **Parked or deferred work never goes into a new side file** (`*-parked.org`, a "Parked" heading left in a queue file) — nobody processes those. Not-now items go to `someday.org`, the GTD list (in a ledger space, set them DEFERRED in place). Work that waits for the owner's decision — e.g. tasks taken out of a nightshift queue — stays in `org/inbox.org`, marked `[NEEDS_REVIEW]` (gtd-inbox-processor spec).
 - `org/next_actions.org` — tasks with `:AI:` tags for overnight delegation
 - `notes/` — Obsidian PKM (journals, zettel, literature, pages)
 
@@ -83,14 +78,18 @@ GitHub Issues are source of truth. `org/` routes AI work only. `1-tracks/` organ
 
 ### Commands & Agents
 
-100+ agents and 40+ commands registered in `.datacore/registry/`. Don't memorize — look up:
+120+ agents and 110+ commands registered in `.datacore/registry/`. Don't memorize — look up:
 - `plur_recall_hybrid` — search by name or purpose
 - `datacore.modules.info <name>` — module capabilities, agents, commands
 - `.datacore/registry/agents.yaml` / `commands.yaml` — full registries
 
 Slash commands (`/today`, `/research`, `/wrap-up`) are multi-phase workflows. Conversational commands work naturally — "process inbox", "weekly review", "sync repos".
 
-**Invoking commands via MCP (any harness):** When the user types a slash command (e.g. `/today`, `/tomorrow`, `/wrap-up`, `/continue`, `/process-inbox`), call `datacore_command_run` with the command name. It returns the full workflow instructions — execute each step using your available tools and write output to the specified location. Call `datacore_command_list` to discover available commands. Similarly, `datacore_agent_list` and `datacore_agent_run` load agent prompt templates for task routing. This works identically in any MCP-compatible harness.
+**Invoking commands via MCP (any harness):** A slash shortcut is optional. For `/today` or ordinary text such as "run Datacore today", call `datacore_command_run` with the command name and any user-supplied `arguments` (the workflow's `$ARGUMENTS`). Call `datacore_command_list` when the name is unclear. The loader returns canonical instructions, not a completed execution: follow its execution guidance and carry out the workflow with the current client's tools. Resolve installation-relative paths from the returned working directory while retaining the user's original project and space. Do not evaluate arguments as shell code.
+
+For numbered workflows, use `datacore_command_steps`: `status` for a handed-off `run_id` and space (including runs from earlier days), otherwise `resume`, and `start` only when no unfinished run exists. Verify work before ticking steps. Keep required but unavailable steps pending and report the missing capability. Native task checklists may mirror the journal; they do not replace it.
+
+**Switching harnesses:** Claude Code, Codex, OpenCode and Cursor share Datacore files and MCP state, not chat history. Use the existing `/continue --save` workflow to save unfinished work, then `/continue <topic>` in the next client; plain-text "run Datacore continue with arguments …" works too. Save the objective, command arguments, original project, space, run ID, artifacts, validation results, blockers and next action in the continuation task. Load agent procedures with `datacore_agent_run`; loading a prompt does not spawn an agent. Execute locally only when delegation is optional; report an unavailable required independent reviewer. Preserve authorization requirements when moving clients.
 
 ### Knowledge Base
 
@@ -107,6 +106,8 @@ Don't start from scratch when context might already exist.
 Datacore is extensible via **modules** — self-contained packages that add agents, commands, tools, and context to specific domains. Each lives in `.datacore/modules/<name>/` with a `module.yaml` manifest.
 
 Modules hook into workflows (e.g., adding sections to `/today`), register their own agents, and provide MCP tools. Their CLAUDE.md loads on-demand when the domain is relevant.
+
+**Say when a module's instructions load.** Reading `.datacore/modules/<name>/CLAUDE.md` for a request means that module's instructions now steer your answer, and the owner wants to know what is steering it. So the reply includes one plain sentence naming the module and why it matched, e.g. "I used the crm module's instructions because you asked me to look up a contact." Every time, even for a one-line answer; a module used silently is a failure even when the answer is right.
 
 Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>` for details.
 
@@ -128,17 +129,22 @@ Use `datacore.modules.list` for installed modules, `datacore.modules.info <name>
 
 ## Credentials — NEVER search for them
 
-Do not grep `.env` files. Do not look on another host. Do not read `~/.hermes/.env`
-or any other copy you happen to find. **Searching is what creates the problem**: a
+Do not grep `.env` files. Do not read another host's files or env (`ssh host cat …`).
+Do not read an agent's own env file or any other copy you happen to find. **Searching is what creates the problem**: a
 search finds *a* value, and nothing about a found value says whether it is current
 or abandoned. That is how duplicates accumulate and how "the credential is missing"
 gets reported about a credential that is present and working.
 
-Ask the broker instead:
+Ask the broker instead, with the `creds` command (on PATH; `.datacore/bin/creds` where it is not):
 
 ```bash
-python3 .datacore/lib/creds.py get <id-or-VAR_NAME> --consumer <who-wants-it>
+creds get <id-or-VAR_NAME> --consumer <who-wants-it>
 ```
+
+Always write it as `creds …` — when running it and in every command you hand the owner.
+Never spell it `python3 .datacore/lib/creds.py …`.
+After `creds add`, run `creds sync` yourself before `creds get` — a new value is not
+served until the env is reassembled.
 
 It resolves the ONE declared location, prefers this host's own value over a
 fleet-wide one, verifies against the provider before returning, and prints the
@@ -149,6 +155,7 @@ refusal is the feature: add it with `creds add`. Do not go looking.
 | Need | Command |
 |------|---------|
 | Is it alive? | `creds doctor [--id X]` → `ok` / `FAIL` / `n-a` |
+| Same value on every host? | `creds compare X` → sha256 fingerprint per host, never a value |
 | Where does it live? | `creds show X` / `creds list` / `creds search X` |
 | Reassemble this host's env | `creds sync` |
 | Push to every host | `.datacore/secrets/scripts/distribute.sh` |
@@ -159,15 +166,19 @@ refusal is the feature: add it with `creds add`. Do not go looking.
 run `creds sync`. Never edit `.datacore/env/.env` — it is generated, says so in its
 own header, and your edit is silently lost on the next sync.
 
-**Before concluding a credential was revoked**, diff its value across every host.
-A rotation may have reached only one machine. On 2026-07-08 the @plur_ai X keys were
-rotated into one host's working tree and never committed; the canonical store served
-pre-rotation values for four months and a release published everywhere before failing
-to post. Sending someone to regenerate keys that are alive on another machine
+**Before concluding a credential was revoked**, compare its value across every host
+with `creds compare <id>` — the broker does the cross-host diff (fingerprints over
+ssh, read-only), so this is not "looking on another host". A `FAIL` from `get` or
+`doctor` is one host's copy: it names the other hosts the credential lives on. Until
+every host has been compared, say it cannot be told yet; never tell anyone to
+regenerate or rotate. A rotation may have reached only one machine, leaving the
+canonical store serving old values for months. Sending someone to regenerate keys that are alive on another machine
 destroys a working credential.
 
-Never print a secret value — compare truncated `sha256` instead. Rotation is the
-user's action: flag what needs rotating, do not rotate it.
+Never print a secret value — compare truncated `sha256` instead. Output that may
+carry one (configs, headers, env, curl -v, remote URLs) goes through
+`| python3 .datacore/lib/secret_redact.py`, never a hand-rolled sed mask. Rotation
+is the user's action: flag what needs rotating, do not rotate it.
 
 ## Conventions
 
@@ -218,16 +229,34 @@ When sessions start from `[space]/2-projects/[project]/`, focus mode activates a
 
 Detection: `python3 .datacore/lib/focus_mode.py detect`
 
+### Output from a session started at the Data root
+
+The Data root holds only the numbered spaces and system folders. A tool run from there (plans and specs, generated images, test caches) writes into the space the work is about: plans and specs to `<space>/1-tracks/dev/superpowers/`, media to `<space>/content/`. Never create a new folder at the root; the structure checker flags one even when git ignores it.
+
+### Archive
+
+`4-archive/` is each space's single exit folder (DIP-0017 as amended 2026-10-18). Finished work moves there under its original path. There is no `4-outbox/`.
+
 ### Bash
 
 - **Never multi-line Bash.** Chain with `&&`.
-- Use dedicated tools: `Glob` not `find`, `Read` not `cat`, `Grep` not `grep`.
+- Prefer your harness's dedicated file tools (read, search, glob) over shell equivalents when it has them.
+- A refused command refuses that command only, not the shell. Still run the specific command a task names (e.g. its calendar or broker command) before calling a tool unavailable; read files with the file tools, not `cat`.
+- A file named in a request is looked for in the working directory first (Glob). Never search the whole disk (`find /`, `find ~`): it takes minutes and can eat the run's time budget.
 
-> Detailed conventions are in engram memory (DIP pack, 747 engrams). Call `plur_recall_hybrid` for specifics.
+### Git — commit only your own change
+
+- **Commit with explicit paths:** `git commit -m "..." -- <your files>`. Never `git add <file> && git commit`, `git commit -a` or `git add .`: a bare commit takes everything already staged, and a change you did not make that is staged or edited in the working tree belongs to someone else. It stays pending exactly as you found it — not committed, not unstaged, not stashed.
+- Push only to a branch you made or one the owner named. Never force-push, rebase or otherwise rewrite shared history.
+- **A git problem is reported, not tidied.** When a pull, merge or push is blocked by changes you did not make, stop and say so. Never stash, `--autostash`, `reset`, `checkout <path>`, `restore` or `clean` to get past it, and never `stash drop`: those hide or discard another writer's work — an automated job once stashed ledger events that way.
+
+> Detailed conventions are in engram memory (DIP pack). Call `plur_recall_hybrid` for specifics.
 
 ## System Patterns (DIPs)
 
-Datacore Improvement Proposals define system patterns. 30+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution, learning architecture, reliability, egress enforcement. Located in `.datacore/dips/` (own repo). Governance note: `Implemented`/`Accepted` status requires owner ratification — auto-generated DIPs stay `Draft` until reviewed.
+**DIPs are the source of truth.** When CLAUDE.md, engrams, hooks, checkers or command files disagree with a DIP, or a convention is in doubt, follow the DIP and fix the other side. If the DIP itself is wrong, propose an amendment for the owner to ratify — never diverge silently.
+
+Datacore Improvement Proposals define system patterns. 45+ DIPs cover: contribution model, layered context, tag taxonomy, agent registry, knowledge management, GTD workflow, nightshift execution, learning architecture, reliability, egress enforcement. Located in `.datacore/dips/` (own repo). Governance note: `Implemented`/`Accepted` status requires owner ratification — auto-generated DIPs stay `Draft` until reviewed.
 
 All DIP content is in engram memory (dips-v1 pack). Call `plur_recall_hybrid` for quick lookups.
 
@@ -247,6 +276,66 @@ When the user corrects a recalled fact: call `plur_learn` immediately, then `plu
 
 ## Guardrails
 
+### How you work with the owner — every answer, every change
+- **Plain language, ids in brackets.** Say what a thing IS; an internal code or id
+  (a check number, a finding letter, an engram, DIP or promise id) never stands in for
+  its meaning. Write "the hourly inbox import check (R-018) is red", never "R-018 is
+  red" — even when the file you are summarising is written in ids and has a glossary.
+  Before you send, reread the reply: any code left outside brackets gets its meaning
+  written in its place, and the code moves into brackets or goes. A label in front
+  does not count: "engram ENG-2026-01-01-001" or "DIP-0099" is still a bare id. Say
+  what it holds — "the memory note on how releases are signed (ENG-2026-01-01-001)" —
+  or, when you do not know, what kind of thing it is: "the details are in a memory
+  note (ENG-2026-01-01-001)". The id itself is always inside the brackets.
+- **A report is saved before it is answered.** Any audit, review, report or hand-off
+  you produce is written to a file in the repository (or filed as an issue) in the
+  same turn, before you reply; the reply summarises it and names the path. A report
+  that exists only in the chat is lost. **Where:** the space it is about, in
+  `0-personal/content/reports/YYYY-MM-DD-<topic>-report.md` (GTD DIP), or in a team
+  space `<space>/1-tracks/<track>/reports/` (`content/` there is for generated media, DIP-0015); a
+  recurring report gets a subfolder (`content/reports/github-triage/`). Never `3-knowledge/pages/`
+  (lasting reference only) and never a top-level `reports/`. Overnight agent output
+  still lands in `0-inbox/` first (nightshift DIP).
+- **Done is written down first.** For anything bigger than a bug fix — a feature, a new
+  command, an upgrade — the FIRST edit is the task's `:DONE_WHEN:` property (in its org
+  task or issue): a check someone else could run. Only then write the test, then the code.
+- **Say when a module's instructions load.** If you read a module's instructions
+  (`.datacore/modules/<name>/CLAUDE.md`), they now steer your answer, so the reply
+  carries one sentence naming the module and why it matched: "I used the crm
+  module's instructions because you asked me to look up a contact." Check for that
+  sentence before you send — a short factual answer needs it too.
+- **Checked, or "not verified".** Never say something works, ran, passes or is done
+  unless you saw the real result in this session (the test output, the file, the
+  live response). When you could not check, write the words "not verified" and name
+  the check that would settle it. A hand calculation or a reading of the code is not
+  a check.
+- **Evidence before "overdue" or "not sent".** A date that has passed is not proof
+  that something was not done. Before calling a task overdue or an email unsent,
+  look for a record that it happened (the journal around and after its date, sent
+  mail, commits). A record found → report it as done and name the record. None found
+  → write "not recorded" on that same line, in the file or message itself, rather
+  than asserting it was not done.
+- **Tests before code; evals are never yours to edit.** An upgrade starts with a test
+  that covers the new behaviour and fails; the code changes after it. Never modify,
+  weaken, skip or delete a promise eval (`test_promise_*.py`, `agent_eval.py`,
+  `_audit_contract.py`, `_inbox_job_harness.py`) — if one looks wrong, stop and report it.
+
+### What always waits for the owner
+- **Irreversible steps get a one-item trial first.** Before deleting, force-pushing,
+  mass-cancelling or renaming many things, do ONE item, show the result, and ask
+  before the rest.
+- **Nothing is submitted to a government body or regulator** (Companies House, HMRC,
+  tax and business registers). Prepare every field; the owner presses the button.
+- **Agents never move money, trade, rotate credentials, delete data or merge a pull
+  request on their own.** Each space/project names its merge gate, the owner by
+  default. The unattended tool policy (`.datacore/config/tool_effects.yaml`) refuses
+  these calls; a refusal is not an obstacle to route around.
+- **A login that stopped working or a usage limit is reported, then you wait.** Say
+  which login or limit failed and that the work is not done. Never switch to a paid
+  key, another account or another provider to get it through, even when one is in
+  reach and the work is due today — that spends the owner's money without asking.
+  Do not open or print the paid key's file either; name it and leave it.
+
 ### Over-engineering check — the reuse ladder
 Before writing code, stop at the first rung that holds:
 
@@ -264,11 +353,11 @@ Then the maintenance question: will this create burden disproportionate to its v
 If a task can be done in <20 lines of shell, do that first. Propose the module/system
 version only if the user explicitly asks.
 
-Rung 2 is the one that pays and the one that gets skipped. Measured 2026-09-08 on a
-four-way run of the same issue: the issue said in as many words that a relevant module
-already existed and should be coordinated with rather than duplicated. **Three of four
-runs never opened it**; one wrote 404 lines into a file the issue never mentioned. The
-run that climbed the ladder was the only one that found it. Wrong-target work costs
+Rung 2 is the one that pays and the one that gets skipped. In a multi-run comparison
+of the same issue, where the issue said in as many words that a relevant module
+already existed and should be coordinated with rather than duplicated, **most runs
+never opened it**, and one wrote hundreds of lines into a file the issue never
+mentioned. The run that climbed the ladder was the only one that found it. Wrong-target work costs
 twice — once to write, once for a human to reject.
 
 Adapted from ponytail (DietrichGebert/ponytail, MIT). The ladder is adopted; the
@@ -297,15 +386,15 @@ Three red lines, no exceptions: **judgment stays with the human**; **responsibil
 does not transfer** (anything whose failure you cannot afford is not handed over
 automatically); and a **self-rewriting loop needs stricter review, not looser**.
 
-Adapted from ECC's `loop-design-check` (affaan-m/ECC, MIT). Failure mode 2 was live
-here until 2026-09-08: nightshift graded its own work against its own tests, through a
-gate that returned "passed" on every path including failure.
+Adapted from ECC's `loop-design-check` (affaan-m/ECC, MIT). Failure mode 2 is not
+hypothetical: an overnight runner once graded its own work against its own tests,
+through a gate that returned "passed" on every path including failure.
 
 ### Size the work before dispatching it
 Ask whether the task fits the budget it is being given, and decompose it if not. An
 agent stopped mid-flight by a turn cap returns nothing, having spent everything.
-Measured 2026-09-08: four runs, 324 turns, a full day's compute budget, zero
-completions — every one of them cut off by a cap nobody had checked the task against. This is the largest single source
+Several runs can spend a full day's compute budget with zero completions — every one
+of them cut off by a cap nobody had checked the task against. This is the largest single source
 of waste and it costs nothing to avoid.
 
 ### Tool Selection Discipline
@@ -329,6 +418,6 @@ Specific restrictions:
 
 ---
 
-<!-- TODO: Migrate engagement/XP tracking from legacy learning system to PLUR -->
+<!-- TODO: Move engagement/XP tracking from the old learning setup to PLUR. Hermes drops this whole file if an HTML comment holds one of the words its injection check looks for (see tools/threat_patterns.py there). -->
 
 **This is CLAUDE.base.md** — the PUBLIC layer. Customize with `CLAUDE.local.md` (gitignored).

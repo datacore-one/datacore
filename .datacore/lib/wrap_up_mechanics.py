@@ -11,21 +11,37 @@ WHAT MOVED HERE (spec sections it replaces):
               check, §10 artifact scan, plus the session archive
   meta      : §9 session meta-analysis counters, read from the archived meta.json
   finalize  : §13 push, across root, spaces and subproject repos
+  worktrees : §8b remove this session's own clean, pushed worktrees
   audit     : §16 completion verification and §18 self-audit
+  report    : §10 consolidated report, RENDERED from data (wrap_up_report.py)
+              — the model supplies judgement as JSON; the layout is code
 
 WHAT DELIBERATELY DID NOT MOVE: anything requiring judgement — the session
-summary, the continuation decision, task-completion matching, the consolidated
-report. A script that guessed at those would be confidently wrong, which is
+summary, the continuation decision, task-completion matching. The consolidated
+report's CONTENT is judgement; its LAYOUT is not, and is rendered by `report`. A script that guessed at those would be confidently wrong, which is
 worse than slow.
 
 Every subcommand prints JSON on stdout and is safe to re-run. `preflight`
 kills processes, so it honours --dry-run.
 
 Usage:
+  python3 .datacore/lib/wrap_up_mechanics.py files --add PATH [PATH ...]   (non-Claude harnesses)
   python3 .datacore/lib/wrap_up_mechanics.py preflight [--dry-run]
   python3 .datacore/lib/wrap_up_mechanics.py meta
   python3 .datacore/lib/wrap_up_mechanics.py finalize [--dry-run]
-  python3 .datacore/lib/wrap_up_mechanics.py audit
+  python3 .datacore/lib/wrap_up_mechanics.py worktrees [--dry-run]
+  python3 .datacore/lib/wrap_up_mechanics.py audit [--final]
+  python3 .datacore/lib/wrap_up_mechanics.py report --input narrative.json [--journal]
+
+Each step also saves its JSON under .datacore/state/wrap_up/<session>/ so
+`report` renders from what the steps measured instead of from the model's
+retelling. <session> is CLAUDE_CODE_SESSION_ID, else DATACORE_SESSION_ID, else
+CODEX_THREAD_ID, else `nosession-<date>` for harnesses that expose no id.
+
+ANY HARNESS. Only Claude Code leaves a transcript Datacore archives. Elsewhere the
+session's files come from `files --add` (the agent knows what it wrote), commits use
+those explicit paths, and a check that needs the transcript reads "not applicable
+here" (status n/a) — never a failure, and never counted as a pass.
 """
 from __future__ import annotations
 
@@ -42,6 +58,108 @@ from pathlib import Path
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 LIB = Path(__file__).resolve().parent
 ARCHIVE_DIR = DATACORE_ROOT / ".datacore" / "state" / "sessions" / "archive"
+STEP_STATE_DIR = DATACORE_ROOT / ".datacore" / "state" / "wrap_up"
+
+
+#: Where each harness puts its session id. Codex sets CODEX_THREAD_ID in every
+#: shell it runs (observed in Codex 0.159, 2026-09-30); any other harness sets
+#: DATACORE_SESSION_ID, or files under `nosession-<date>`.
+SESSION_ID_VARS = ("CLAUDE_CODE_SESSION_ID", "DATACORE_SESSION_ID", "CODEX_THREAD_ID")
+
+#: What `session_files` says when the harness cannot tell which files are this
+#: session's: no Claude transcript, and none recorded with `files --add`. Checks
+#: that depend on the list read "not applicable here" for it, never "fail".
+NO_FILE_LIST = ("cannot tell which files are this session's: this harness keeps no "
+                "transcript Datacore can read, and none were recorded — record them with "
+                "`wrap_up_mechanics.py files --add <path>...`")
+
+
+def session_key() -> str:
+    """The id this wrap-up is filed under, in any harness."""
+    for var in SESSION_ID_VARS:
+        sid = os.environ.get(var, "").strip()
+        if sid:
+            return sid
+    return f"nosession-{date.today().isoformat()}"
+
+
+def in_claude_code() -> bool:
+    """Claude Code is the only harness whose transcript Datacore archives. Every
+    step that needs that transcript is 'not applicable' anywhere else — never a
+    failure, and never a pass."""
+    return bool(os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip())
+
+
+def files_manifest() -> Path:
+    return STEP_STATE_DIR / session_key() / "files.json"
+
+
+def recorded_files() -> list[str]:
+    """Absolute paths the harness itself said this session wrote (`files --add`)."""
+    f = files_manifest()
+    try:
+        return [str(p) for p in json.loads(f.read_text())] if f.exists() else []
+    except (OSError, ValueError):
+        return []
+
+
+def cmd_files(add: list[str]) -> dict:
+    """Record the files this session wrote, for harnesses with no Claude transcript.
+
+    The agent knows what it changed; Claude Code's list comes from its transcript
+    instead. Relative paths are taken from the install root, else the current
+    directory. Appends, never replaces, so it can be called once per step.
+    """
+    have = recorded_files()
+    for p in add or []:
+        path = Path(p).expanduser()
+        if not path.is_absolute():
+            cand = DATACORE_ROOT / path
+            path = cand if cand.exists() or not (Path.cwd() / path).exists() else Path.cwd() / path
+        s = str(path)
+        if s not in have:
+            have.append(s)
+    if add:
+        f = files_manifest()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(have, indent=1))
+    return {"step": "files", "session": session_key(), "files": have, "count": len(have)}
+
+
+def save_step(result: dict) -> None:
+    d = STEP_STATE_DIR / session_key()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{result.get('step', 'unknown')}.json").write_text(json.dumps(result, indent=2, default=str))
+
+
+def load_steps() -> dict:
+    d = STEP_STATE_DIR / session_key()
+    steps = {}
+    for name in ("preflight", "meta", "finalize", "audit"):
+        f = d / f"{name}.json"
+        if f.exists():
+            try:
+                steps[name] = json.loads(f.read_text())
+            except ValueError:
+                steps[name] = {"error": f"{f.name} unreadable"}
+    sid = session_key()
+    hits = list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json"))
+    if hits:
+        try:
+            steps["archive_meta"] = json.loads(hits[0].read_text())
+        except ValueError:
+            pass
+    return steps
+
+
+def personal_journal() -> Path:
+    today = date.today().isoformat()
+    for p in (DATACORE_ROOT / "0-personal" / "notes" / "journals" / f"{today}.md",
+              DATACORE_ROOT / "0-personal" / "journal" / f"{today}.md"):
+        if p.exists():
+            return p
+    notes = DATACORE_ROOT / "0-personal" / "notes" / "journals"
+    return (notes if notes.is_dir() else DATACORE_ROOT / "0-personal" / "journal") / f"{today}.md"
 
 # Dev servers Claude starts for preview and never cleans up.
 DEV_SERVER_RE = re.compile(
@@ -134,24 +252,50 @@ def scan_processes() -> dict:
     if rc != 0:
         return {"error": "ps failed", "kill": [], "flag": []}
 
+    rows = []
     for line in out.splitlines()[1:]:
         parts = line.split(None, 3)
         if len(parts) < 4:
             continue
         pid, ppid, etime, cmd = parts
         try:
-            pid_i, ppid_i, age = int(pid), int(ppid), _etime_seconds(etime)
+            rows.append((int(pid), int(ppid), _etime_seconds(etime), cmd))
         except ValueError:
             continue
+    parent = {p: pp for p, pp, _, _ in rows}
+    command = {p: c for p, _, _, c in rows}
+
+    def ancestors(pid: int) -> list[int]:
+        chain, seen = [], set()
+        while pid in parent and pid not in seen and pid > 1:
+            seen.add(pid)
+            pid = parent[pid]
+            chain.append(pid)
+        return chain
+
+    # This session's own CLI: the nearest `claude` ancestor of this process.
+    # Two sessions on one machine share everything above their CLI, so a
+    # common ancestor alone proves nothing (2026-10-18: another session's
+    # vitest runs were killed as "this session's").
+    own_cli = next((a for a in ancestors(os.getpid())
+                    if re.search(r"(^|/)claude(\s|$)", command.get(a, ""))), None)
+
+    for pid_i, ppid_i, age, cmd in rows:
         if pid_i == os.getpid() or MCP_RE.search(cmd):
             continue
 
         rec = {"pid": pid_i, "ppid": ppid_i, "age_s": age, "command": cmd[:160]}
         if DEV_SERVER_RE.search(cmd):
-            # Orphans are always safe; live-parent ones belong to this session,
-            # which is ending anyway.
-            rec["reason"] = "orphaned dev server" if ppid_i == 1 else "dev server"
-            kill.append(rec)
+            if ppid_i == 1:
+                rec["reason"] = "orphaned dev server"
+                kill.append(rec)
+            elif own_cli is not None and own_cli in ancestors(pid_i):
+                # Under this session's own CLI, which is ending anyway.
+                rec["reason"] = "dev server"
+                kill.append(rec)
+            else:
+                rec["reason"] = "dev server of another live session — left running"
+                flag.append(rec)
         elif ppid_i == 1 and HOOK_WORKER_RE.search(cmd):
             rec["reason"] = "orphaned hook/CLI worker"
             kill.append(rec)
@@ -242,8 +386,10 @@ def cmd_preflight(dry_run: bool) -> dict:
     procs = scan_processes()
     killed = kill_processes(procs.get("kill", []), dry_run)
 
+    # --data-dir: the archival script defaults to ~/Data, not this install.
     rc, arch_out, arch_err = _run(
-        [sys.executable, str(LIB / "nightshift_archival.py"), "--all-spaces"], timeout=180)
+        [sys.executable, str(LIB / "nightshift_archival.py"), "--all-spaces",
+         "--data-dir", str(DATACORE_ROOT)] + (["--dry-run"] if dry_run else []), timeout=180)
     archival = {"ok": rc == 0, "output": (arch_out or arch_err)[-600:]}
     if rc == 127:
         archival["note"] = "nightshift_archival.py missing — reported, not skipped"
@@ -267,6 +413,86 @@ def cmd_preflight(dry_run: bool) -> dict:
 
 
 # --------------------------------------------------------------------------
+# worktrees  (§8b)
+# --------------------------------------------------------------------------
+
+def worktree_rows() -> list[dict]:
+    """Every linked worktree of the root, the spaces and the modules, once each.
+
+    `mine` is this session's: its path carries the session id (scratch
+    checkouts live under the session's own directory), or it holds a file this
+    session wrote. Nothing else is this session's to remove -- the runner
+    checkout and other sessions' worktrees look exactly as clean and pushed.
+    """
+    repos = [DATACORE_ROOT] + [s for s in spaces() if (s / ".git").exists()]
+    repos += [p.parent for p in DATACORE_ROOT.glob(".datacore/modules/*/.git")]
+    sid = session_key()
+    wrote, _err = session_files()
+    # Resolved ONCE: a long session wrote ~2,000 files, and resolving each of
+    # them again for every worktree of every module took minutes.
+    wrote = [os.path.realpath(f if os.path.isabs(f) else DATACORE_ROOT / f) for f in wrote]
+    seen, rows = set(), []
+    for repo in repos:
+        rc, out, _ = _run(["git", "worktree", "list", "--porcelain"], cwd=repo, timeout=30)
+        if rc != 0:
+            continue
+        blocks = [b for b in out.split("\n\n") if b.strip()]
+        for block in blocks[1:]:            # the first is the main checkout
+            fields = dict((l.split(" ", 1) + [""])[:2] for l in block.splitlines())
+            path = Path(fields.get("worktree", ""))
+            key = str(path.resolve()) if path.exists() else str(path)
+            if not fields.get("worktree") or key in seen:
+                continue
+            seen.add(key)
+            inside = any(f.startswith(key + os.sep) for f in wrote)
+            rows.append({"repo": str(repo), "path": str(path),
+                         "branch": fields.get("branch", "").replace("refs/heads/", "") or "(detached)",
+                         "locked": "locked" in fields, "missing": "prunable" in fields or not path.exists(),
+                         "mine": (sid and sid in str(path)) or inside})
+    return rows
+
+
+def cmd_worktrees(dry_run: bool) -> dict:
+    """Remove this session's own worktrees that lose nothing by going.
+
+    Removed only when clean (no change, no untracked file) and HEAD is on a
+    remote, with `git worktree remove` -- which itself refuses a dirty or
+    locked tree. Everything of this session's that stays is reported with its
+    reason; other sessions' worktrees are listed and never touched.
+    """
+    removed, kept, others = [], [], []
+    for row in worktree_rows():
+        path = row["path"]
+        if not row["mine"]:
+            others.append({"path": path, "branch": row["branch"]})
+            continue
+        if row["missing"]:
+            kept.append({**row, "reason": "directory is gone; `git worktree prune` in its repository clears the entry"})
+            continue
+        if row["locked"]:
+            kept.append({**row, "reason": "locked"})
+            continue
+        _, dirty, _ = _run(["git", "status", "--porcelain"], cwd=Path(path), timeout=30)
+        if dirty.strip():
+            kept.append({**row, "reason": f"uncommitted changes ({len(dirty.splitlines())} path(s))"})
+            continue
+        _, remotes, _ = _run(["git", "branch", "-r", "--contains", "HEAD"], cwd=Path(path), timeout=30)
+        if not remotes.strip():
+            kept.append({**row, "reason": "HEAD is not on any remote: push it, or remove it by hand"})
+            continue
+        if dry_run:
+            removed.append(row)
+            continue
+        rc, _, err = _run(["git", "worktree", "remove", path], cwd=Path(row["repo"]), timeout=60)
+        if rc == 0:
+            removed.append(row)
+        else:
+            kept.append({**row, "reason": f"git worktree remove refused: {err.strip()[:200]}"})
+    return {"step": "worktrees", "dry_run": dry_run, "removed": removed,
+            "kept": kept, "others": others}
+
+
+# --------------------------------------------------------------------------
 # meta  (§9)
 # --------------------------------------------------------------------------
 
@@ -277,12 +503,14 @@ def cmd_meta() -> dict:
     memory of a conversation it had partly compacted away. These come from the
     transcript, so they are right even when the session was long.
     """
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    meta_path = None
-    if sid:
-        hits = list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json"))
-        meta_path = hits[0] if hits else None
+    sid = session_key()
+    hits = list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json"))
+    meta_path = hits[0] if hits else None
     if not meta_path:
+        if not in_claude_code():
+            return {"step": "meta", "not_applicable": True,
+                    "error": "not applicable here — this harness keeps no transcript "
+                             "Datacore can count from"}
         return {"step": "meta", "error": "session not archived yet — run preflight first"}
 
     m = json.loads(meta_path.read_text())
@@ -295,6 +523,9 @@ def cmd_meta() -> dict:
         "date": m["date"],
         "turns": m.get("turns"),
         "user_turns": m.get("user_turns"),
+        # The §10 narrative's `phases` must cover every one of these days.
+        "owner_days": m.get("owner_days"),
+        "compactions": m.get("compactions"),
         "tool_calls": m.get("tool_call_total"),
         "tool_breakdown": dict(list((m.get("tool_calls") or {}).items())[:10]),
         "agents_spawned": m.get("agents_spawned"),
@@ -312,17 +543,48 @@ def cmd_meta() -> dict:
 # --------------------------------------------------------------------------
 
 def session_files() -> tuple[list[str], str | None]:
-    """Absolute paths this session wrote, from its archived meta (main + subagents)."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    if not sid:
-        return [], "no CLAUDE_CODE_SESSION_ID"
+    """Absolute paths this session wrote.
+
+    Two sources, either enough: the archived transcript's `files_modified` (Claude
+    Code: main thread and subagents), and the list the harness recorded itself
+    with `files --add` (every other harness, which has no transcript here). When
+    neither exists the answer is NO_FILE_LIST outside Claude Code — "cannot tell",
+    which the audit reports as not applicable — and still an error inside it,
+    where the transcript exists and a missing archive is a real failure.
+    """
+    recorded = recorded_files()
+    sid = session_key()
     hits = list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json"))
-    if not hits:
+    if hits:
+        try:
+            raw = json.loads(hits[0].read_text()).get("files_modified", [])
+        except (OSError, ValueError) as e:
+            return [], f"unreadable meta: {e}"
+        mine = [_anchor(f) for f in raw]
+        return mine + [f for f in recorded if f not in mine], None
+    if recorded:
+        return recorded, None
+    if in_claude_code():
         return [], "session not archived — run preflight first"
-    try:
-        return json.loads(hits[0].read_text()).get("files_modified", []), None
-    except (OSError, ValueError) as e:
-        return [], f"unreadable meta: {e}"
+    return [], NO_FILE_LIST
+
+
+def _anchor(f: str) -> str:
+    """Promote a relative write-target to the absolute path it names.
+
+    A session that edits through `cd ~/Data && sed -i ... .datacore/lib/x.py`
+    archives the target as written — relative. Every consumer here buckets by
+    absolute prefix, so such an entry matches no repo and lands in
+    `unversioned`: reported as "no push will ever carry this" about a file
+    sitting tracked and dirty in the root repo, which is precisely backwards.
+    Only promote when the path resolves to something that exists; a relative
+    entry that does not is left alone, so nothing that used to be reported
+    stops being reported.
+    """
+    if os.path.isabs(f):
+        return f
+    cand = DATACORE_ROOT / f
+    return str(cand) if cand.exists() else f
 
 
 def _default_branch_ok(repo: Path) -> tuple[bool, str]:
@@ -418,7 +680,26 @@ def finalize_session_scope(dry_run: bool, allow_journal_shrink: bool = False) ->
         }
         if not staged:
             entry["ok"] = None
-            entry["note"] = f"nothing of this session's is dirty here ({len(others)} other file(s) untouched)"
+            # DO NOT ASSERT ATTRIBUTION FROM AN EMPTY SET. When the session's
+            # file list is empty — which happens whenever its edits went through
+            # Bash rather than Edit/Write — every dirty file looks like somebody
+            # else's, and "nothing of this session's is dirty here" is emitted
+            # with total confidence while being exactly wrong. Observed
+            # 2026-09-21: this session's own journal and inbox were reported as
+            # left_for_other_sessions, minutes after it wrote them.
+            #
+            # A phrasing that reads as correct is worse than silence, because a
+            # reader has no reason to doubt it.
+            if not mine and others:
+                entry["note"] = (
+                    f"cannot determine which of {len(others)} dirty file(s) belong to "
+                    "this session — its file list is empty. Commit by hand after "
+                    "checking `git diff --numstat`."
+                )
+                entry["attribution"] = "unknown"
+            else:
+                entry["note"] = (f"nothing of this session's is dirty here "
+                                 f"({len(others)} other file(s) untouched)")
             results.append(entry)
             continue
 
@@ -538,11 +819,12 @@ def journal_damage_in_worktree(repo: Path, rel_paths: list[str]) -> list[str]:
                            cwd=repo, timeout=60, strip=False)
         if rc != 0 or not diff:
             continue
-        removed = [ln[1:].strip() for ln in diff.splitlines()
-                   if ln.startswith("-#") and not ln.startswith("---")]
-        added = {ln[1:].strip() for ln in diff.splitlines()
-                 if ln.startswith("+#") and not ln.startswith("+++")}
-        gone = [h for h in removed if h not in added]
+        _, before, _ = _run(["git", "show", f"HEAD:{rel}"], cwd=repo, timeout=60, strip=False)
+        try:
+            after = (repo / rel).read_text()
+        except OSError:
+            after = ""
+        gone = headings_lost(before, after)
         if gone:
             lost.append(f"{rel}: {len(gone)} heading(s) removed — {'; '.join(gone[:3])}")
             continue
@@ -671,7 +953,7 @@ def journal_sections_lost() -> list[str]:
     out: list[str] = []
     repos = [DATACORE_ROOT] + [s_ for s_ in spaces() if (s_ / ".git").exists()]
     for repo in repos:
-        rc, shas, _ = _run(["git", "log", "--since=midnight", "--format=%H", "--"]
+        rc, shas, _ = _run(["git", "log", "--no-merges", "--since=midnight", "--format=%H", "--"]
                            + paths, cwd=repo)
         if rc != 0 or not shas:
             continue
@@ -679,31 +961,65 @@ def journal_sections_lost() -> list[str]:
             sha = sha.strip()
             if not sha:
                 continue
-            rc2, diff, _ = _run(["git", "show", "--unified=0", "--format=", sha,
-                                 "--"] + paths, cwd=repo, strip=False)
+            rc2, names, _ = _run(["git", "show", "--name-only", "--format=", sha, "--"] + paths,
+                                 cwd=repo)
             if rc2 != 0:
                 continue
-            removed = [ln[1:].strip() for ln in diff.splitlines()
-                       if ln.startswith("-#") and not ln.startswith("---")]
-            added = {ln[1:].strip() for ln in diff.splitlines()
-                     if ln.startswith("+#") and not ln.startswith("+++")}
-            # Removed AND re-added is a rewrite in place, not a loss. The
-            # briefing splice replaces its own `## Daily Briefing` block on
-            # every run; scoring that as destruction would make this check
-            # fire every morning and be switched off within a week.
-            lost = [h for h in removed if h not in added]
+            lost: list[str] = []
+            for rel in [n for n in names.splitlines() if n.strip()]:
+                _, before, _ = _run(["git", "show", f"{sha}^:{rel}"], cwd=repo, strip=False)
+                _, after, _ = _run(["git", "show", f"{sha}:{rel}"], cwd=repo, strip=False)
+                lost += headings_lost(before, after)
             if lost:
                 out.append(f"{repo.name} {sha[:8]} removed "
                            f"{len(lost)} heading(s): {'; '.join(lost[:3])}")
     return out
 
 
-def cmd_audit() -> dict:
+#: Blocks whose owner replaces them whole, subsections included. The /today
+#: briefing is ONE `## Daily Briefing` section that is "replaced in-place with
+#: fresh content" (commands/today.md), and a stub briefing's parts (Facts,
+#: Actionable Mail) differ from a full one's (Good Morning, The World). Flagging
+#: those as lost scored a routine re-brief as destroyed work (2026-09-30).
+REGENERATED_BLOCKS = ("## Daily Briefing",)
+
+
+def headings_lost(before: str, after: str) -> list[str]:
+    """Headings in `before` that are gone from `after`: a section stopped existing.
+
+    Removed AND still present elsewhere is a rewrite in place, not a loss. A
+    subsection of a REGENERATED_BLOCKS block that is itself still there is that
+    block's owner rewriting it, not a loss either; losing the block itself is.
+    """
+    kept = {ln.strip() for ln in after.splitlines() if ln.startswith("#")}
+    lost, parent = [], None
+    for ln in before.splitlines():
+        if not ln.startswith("#"):
+            continue
+        h = ln.strip()
+        if h.startswith("## ") or h.startswith("# "):
+            parent = h
+        if h in kept:
+            continue
+        if parent in REGENERATED_BLOCKS and parent != h and parent in kept:
+            continue
+        lost.append(h)
+    return lost
+
+
+def cmd_audit(final: bool = False) -> dict:
     today = date.today().isoformat()
     checks = []
 
-    def check(name, ok, detail=""):
-        checks.append({"check": name, "pass": bool(ok), "detail": detail})
+    def check(name, ok, detail="", na=False):
+        """`na`: this check cannot be judged in this harness. It is reported as
+        'not applicable here' with its reason — neither a failure nor a pass."""
+        if na:
+            checks.append({"check": name, "pass": None, "status": "n/a",
+                           "detail": f"not applicable here — {detail}"})
+        else:
+            checks.append({"check": name, "pass": bool(ok),
+                           "status": "pass" if ok else "fail", "detail": detail})
 
     personal = DATACORE_ROOT / "0-personal" / "journal" / f"{today}.md"
     alt = DATACORE_ROOT / "0-personal" / "notes" / "journals" / f"{today}.md"
@@ -713,12 +1029,41 @@ def cmd_audit() -> dict:
     space_journals = [str(p.relative_to(DATACORE_ROOT))
                       for s in spaces()
                       for p in [s / "journal" / f"{today}.md"] if p.exists()]
-    check("space journals", True, f"{len(space_journals)} written: {space_journals}")
+    # Every space this session wrote to needs today's entry (DAY-8). Until
+    # 2026-09-27 this check passed unconditionally.
+    mine, err = session_files()
+    worked = set()
+    for f in mine:
+        try:
+            top = Path(f).resolve().relative_to(DATACORE_ROOT.resolve()).parts[:1]
+        except ValueError:
+            continue
+        if top and re.match(r"^\d+-", top[0]) and (DATACORE_ROOT / top[0]).is_dir():
+            worked.add(top[0])
+    unjournalled = sorted(
+        s for s in worked
+        if not any((DATACORE_ROOT / s / d / f"{today}.md").exists() for d in ("journal", "notes/journals")))
+    cannot_tell = err == NO_FILE_LIST
+    if cannot_tell:
+        check("space journals", None, f"{err}; {len(space_journals)} written: {space_journals}",
+              na=True)
+    elif err:
+        check("space journals", False, f"cannot tell which spaces this session worked in: {err}")
+    else:
+        check("space journals", not unjournalled,
+              f"no journal entry today in {', '.join(unjournalled)}" if unjournalled
+              else f"{len(space_journals)} written: {space_journals}")
 
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-    archived = bool(sid and list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json")))
-    check("session archived", archived,
-          "learning sweep will pick it up" if archived else "run preflight")
+    sid = session_key()
+    archived = bool(list(ARCHIVE_DIR.glob(f"*/{sid}/meta.json")))
+    if archived or in_claude_code():
+        check("session archived", archived,
+              "learning sweep will pick it up" if archived else "run preflight")
+    else:
+        # Only Claude Code's transcript is archived; elsewhere there is nothing to
+        # copy. Not a pass: the nightly learning sweep will not see this session.
+        check("session archived", None, "this harness keeps no transcript Datacore can "
+              "archive, so the nightly learning sweep will not see this session", na=True)
 
     # SESSION SCOPE, like finalize. "All repos pushed" and "no uncommitted
     # work" used to count every repo under the root, so a wrap-up that had
@@ -729,7 +1074,9 @@ def cmd_audit() -> dict:
     mine, err = session_files()
     repos = repo_status()
     own, others = session_scope_rows(mine, repos)
-    if err:
+    if cannot_tell:
+        check("session work committed and pushed", None, err, na=True)
+    elif err:
         check("session work committed and pushed", False, err)
     else:
         check("session work committed and pushed", own["ok"], own["detail"])
@@ -739,22 +1086,75 @@ def cmd_audit() -> dict:
     check("no journal section destroyed today", not lost,
           "; ".join(lost) if lost else "today's journal commits only added sections")
 
+    # SESSION SCOPE here too. A registry file another session is editing is that
+    # session's to rebuild context for; scoring it here failed a Codex wrap-up
+    # (2026-09-30) for a change it never made. Reported, not scored.
     cs = context_sync_check()
-    check("context in sync", not cs["registry_changed"], cs["action"])
+    changed = cs.get("changed_paths") or []
+    if not cs.get("registry_changed"):
+        check("context in sync", True, cs.get("action", ""))
+    else:
+        mine_rel = set()
+        for f in mine:
+            try:
+                mine_rel.add(str(Path(f).resolve().relative_to(DATACORE_ROOT.resolve())))
+            except ValueError:
+                pass
+        own_changes = [p for p in changed if p in mine_rel]
+        other_changes = [p for p in changed if p not in mine_rel]
+        if own_changes:
+            check("context in sync", False, f"{cs['action']} (this session changed {own_changes})")
+        elif err or not mine:
+            check("context in sync", None, f"cannot tell whose registry change this is "
+                  f"({changed}); if it is this session's: {cs['action']}", na=True)
+        else:
+            check("context in sync", True, f"this session changed no registry file; "
+                  f"other sessions' registry changes, not scored: {other_changes}")
 
+    left = [r for r in worktree_rows() if r["mine"] and not r["missing"]]
+    check("session worktrees removed", not left,
+          "left: " + ", ".join(r["path"] for r in left) + " (run `wrap_up_mechanics.py worktrees`)"
+          if left else "this session has no worktree left")
+
+    if final:
+        # Run after `report --journal`. These are file checks, so they hold in
+        # any harness — the PreToolUse hook that enforces the same thing exists
+        # only in Claude Code.
+        from wrap_up_report import MARKER
+        jp = personal_journal()
+        text = jp.read_text() if jp.exists() else ""
+        check("consolidated report in journal", MARKER.format(sid=session_key()) in text,
+              str(jp) if jp.exists() else "journal missing")
+        for sec in ("Wrap-up Checklist Audit", "Token Cost", "Session Meta-Analysis"):
+            check(f"journal has '{sec}'", sec in text, str(jp))
+
+    na = [c for c in checks if c["status"] == "n/a"]
     return {
         "step": "audit",
         "date": today,
+        "harness": "claude-code" if in_claude_code() else "other",
         "checks": checks,
-        "passed": sum(1 for c in checks if c["pass"]),
-        "total": len(checks),
-        "failed": [c for c in checks if not c["pass"]],
+        "passed": sum(1 for c in checks if c["status"] == "pass"),
+        # `total` counts the checks that apply here; the rest are listed, not hidden.
+        "total": len(checks) - len(na),
+        "failed": [c for c in checks if c["status"] == "fail"],
+        "not_applicable": na,
     }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("step", choices=["preflight", "meta", "finalize", "audit"])
+    ap.add_argument("step", choices=["files", "preflight", "meta", "finalize", "worktrees",
+                                    "audit", "report"])
+    ap.add_argument("--add", nargs="+", metavar="PATH",
+                    help="files only: record paths this session wrote (harnesses with no "
+                         "Claude transcript); without it, list what is recorded")
+    ap.add_argument("--final", action="store_true",
+                    help="audit only: also assert the rendered report and checklist reached "
+                         "today's journal (run after `report --journal`)")
+    ap.add_argument("--input", help="report only: narrative JSON file, or - for stdin")
+    ap.add_argument("--journal", action="store_true",
+                    help="report only: also append the journal form to today's personal journal")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--allow-journal-shrink", action="store_true",
                     help="finalize only: commit a journal that loses lines or a section "
@@ -767,16 +1167,64 @@ def main() -> int:
                          "everything dirty including other sessions' work")
     args = ap.parse_args()
 
+    if args.step == "report":
+        return cmd_report(args.input, args.journal)
+    if args.step == "files":
+        print(json.dumps(cmd_files(args.add or []), indent=2))
+        return 0
     if args.step == "preflight":
         result = cmd_preflight(args.dry_run)
     elif args.step == "meta":
         result = cmd_meta()
     elif args.step == "finalize":
         result = cmd_finalize(args.dry_run, args.scope, args.allow_journal_shrink)
+    elif args.step == "worktrees":
+        result = cmd_worktrees(args.dry_run)
     else:
-        result = cmd_audit()
+        result = cmd_audit(args.final)
 
+    save_step(result)
     print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def cmd_report(input_path: str | None, journal: bool) -> int:
+    """Print the §10 report exactly as the template, from saved steps + narrative JSON.
+
+    Prints the report text (not JSON) on stdout; journal status on stderr.
+    Exit 2 when the narrative is missing required fields — named, never padded.
+    """
+    from wrap_up_report import MARKER, ReportInputError, render, render_journal
+
+    if not input_path:
+        print("report needs --input <narrative.json> (or - for stdin)", file=sys.stderr)
+        return 2
+    raw = sys.stdin.read() if input_path == "-" else Path(input_path).read_text()
+    try:
+        narrative = json.loads(raw)
+    except ValueError as e:
+        print(f"narrative JSON unreadable: {e}", file=sys.stderr)
+        return 2
+    mech = load_steps()
+    try:
+        text = render(narrative, mech)
+    except ReportInputError as e:
+        print(f"REFUSED — narrative missing: {e}", file=sys.stderr)
+        return 2
+    print(text, end="")
+
+    if journal:
+        sid = session_key()
+        jp = personal_journal()
+        existing = jp.read_text() if jp.exists() else ""
+        if MARKER.format(sid=sid) in existing:
+            print(f"journal: report for {sid} already in {jp} — not appended twice", file=sys.stderr)
+            return 0
+        jp.parent.mkdir(parents=True, exist_ok=True)
+        with jp.open("a") as fh:
+            fh.write(("\n" if existing and not existing.endswith("\n") else "") + "\n"
+                     + render_journal(narrative, mech, sid))
+        print(f"journal: appended to {jp}", file=sys.stderr)
     return 0
 
 

@@ -16,6 +16,7 @@ suffix for this adapter.
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 import shutil
@@ -121,10 +122,24 @@ class HermesExecutor(Executor):
             raise RuntimeError("Hermes policy wrapper or interpreter is unavailable; install the configured Hermes runtime")
 
         text = result.stdout.strip()
+        # The wrapper reports what the provider charged (OpenRouter key usage
+        # before and after) as its own stderr line; keep it out of the error.
+        reported = None
+        stderr_lines = []
+        for line in (result.stderr or "").splitlines():
+            if line.startswith("hermes_oneshot: cost_usd="):
+                try:
+                    reported = float(line.split("=", 1)[1])
+                except ValueError:
+                    pass
+            else:
+                stderr_lines.append(line)
         if result.returncode != 0:
-            error = f"hermes exited {result.returncode}: {result.stderr.strip()}"
-            if not text:
+            error = f"hermes exited {result.returncode}: {chr(10).join(stderr_lines).strip()}"
+            if not text and reported is None:
                 raise RuntimeError(error)
+            # A paid run with nothing to show still spent: keep it as an
+            # in-band error so its cost reaches the ledger (2026-10-26).
             # An incomplete invocation may still have consumed tokens and
             # produced useful output. Preserve both without marking success.
             self._in_band_error = error
@@ -133,6 +148,10 @@ class HermesExecutor(Executor):
         # nothing else. Left as None deliberately -- see ExecResult.model. A
         # value invented from config here would be indistinguishable in the
         # ledger from one the transport actually confirmed.
+        if reported is not None:
+            # Rounded UP: a guard fed whole cents must never see a paid run as free.
+            self._cost_estimated = False
+            return text, math.ceil(round(reported * 100, 6))
         cost_cents = estimate_cost_cents(prompt, text)
         self._cost_estimated = True
         return text, cost_cents

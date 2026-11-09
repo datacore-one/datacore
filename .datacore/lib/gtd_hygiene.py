@@ -137,6 +137,9 @@ def main(argv=None) -> int:
                         help='Archive DONE tasks closed more than N days ago.')
     parser.add_argument('--data-dir', type=Path, default=DATA_DIR, help='Data to maintain; code stays in the installed core')
     parser.add_argument('--json', action='store_true', help='Return the maintenance result and actual written paths')
+    parser.add_argument('--inbox-only', action='store_true',
+                        help='Archive finished inbox entries only; leave next_actions.org alone '
+                             '(nightshift uses it on nights the ledger view stopped admission)')
     args = parser.parse_args(argv)
     DATA_DIR = args.data_dir.resolve()
 
@@ -144,7 +147,7 @@ def main(argv=None) -> int:
     for space in discover_spaces(DATA_DIR):
         space_dir = space.path
         org_file = space_dir / 'org' / 'next_actions.org'
-        if org_file.exists():
+        if org_file.exists() and not args.inbox_only:
             try:
                 spaces[space_dir.name] = process_space(
                     org_file, args.min_age, args.dry_run)

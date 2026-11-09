@@ -1,0 +1,13 @@
+# fixture for dayshift-phase1-cycle artifact[0]
+# producer artifact: ~/.datacore/state/phase1-cycle-status.txt on dayshift
+# harvested: 2026-10-29
+# regex under test: ^OK phase1-cycle
+# represents: SUCCESS (derived)
+# Not harvested from dayshift: fixtures are captured from local files only, and
+# the copy of this file on the mac read FAIL on 2026-10-29 (an ingest failure),
+# which is not success output. Derived from the line `finish` in
+# ledger_phase1_cycle.sh writes on rc=0 -- the same script and printf on every
+# host -- with the mac's real 2026-10-29 timestamp. Replace with a real harvest
+# (`fixtures.py --harvest --force`) from a host whose cycle is green.
+# ---
+OK phase1-cycle 2026-10-29T06:51:14Z rc=0

@@ -284,7 +284,34 @@ def main() -> int:
             print(f"  FAIL   chrome exit {r.returncode}: {r.stderr[-400:]}", file=sys.stderr)
             return 1
         print(f"  wrote  {pdf}  ({pdf.stat().st_size // 1024} KB)")
+        add_outline(pdf, chunks)
     return 0
+
+
+def add_outline(pdf: Path, chunks: list[str]) -> None:
+    """Bookmark every slide by its title, so PDF viewers show a clickable
+    table of contents (Preview: View > Table of Contents). Chrome's print
+    path writes no outline of its own. Optional: skipped without PyMuPDF."""
+    try:
+        import fitz
+    except ImportError:
+        print("  SKIP   outline: PyMuPDF not installed", file=sys.stderr)
+        return
+    doc = fitz.open(pdf)
+    if doc.page_count != len(chunks):
+        # A slide that overflowed onto two pages would shift every bookmark.
+        print(f"  SKIP   outline: {doc.page_count} pages for {len(chunks)} slides", file=sys.stderr)
+        return
+    toc = []
+    for n, c in enumerate(chunks, 1):
+        m = re.search(r"(?m)^#\s+(.+)$", c)
+        toc.append([1, f"{n}. {m.group(1).strip() if m else f'Slide {n}'}".replace("**", ""), n])
+    doc.set_toc(toc)
+    tmp = pdf.with_suffix(".outline.pdf")
+    doc.save(tmp, garbage=3, deflate=True)
+    doc.close()
+    tmp.replace(pdf)
+    print(f"  wrote  outline ({len(toc)} bookmarks)")
 
 
 if __name__ == "__main__":

@@ -19,25 +19,25 @@ from zettel_db import get_db_path
 
 QUERIES = [
     ("nightshift server deployment", "infrastructure"),
-    ("blackpi raspberry pi setup", "infrastructure"),
+    ("self-hosted git server setup", "infrastructure"),
     ("Fairdrop escrow architecture", "project"),
     ("ADE CLI commands", "project"),
     ("org-workspace library", "project"),
-    ("Verity data marketplace", "project"),
+    ("data marketplace design", "project"),
     ("why we chose Bun over Node", "decisions"),
     ("layered context DIP-0002", "architecture"),
     ("engram memory model", "architecture"),
-    ("Datafund team members", "people"),
+    ("team members and roles", "people"),
     ("Fair Data Society partners", "people"),
     ("SOL trading framework", "trading"),
     ("position health score calculation", "trading"),
     ("HRV trends and sleep", "health"),
     ("org-mode task tagging", "conventions"),
     ("zettelkasten note format", "conventions"),
-    ("megaphone SaaS deployment", "recent"),
+    ("website deployment pipeline", "recent"),
     ("datacore-bench benchmarking", "recent"),
-    ("Santorio project", "niche"),
-    ("Dubai pilot", "niche"),
+    ("partner project notes", "niche"),
+    ("regional pilot planning", "niche"),
 ]
 
 BASELINE = {

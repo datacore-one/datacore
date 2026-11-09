@@ -42,7 +42,28 @@ protected_repos:
   - datacore-one/datacore
   - datacore-one/datacore-dips
   - datacore-one/datacore-org
-  # Add more as needed: datafund/datacortex, datafund/Agent-Data-Exchange, etc.
+  # Public module repos. Added 2026-09-23: ten modules were public and none was
+  # listed, so every push to them skipped the content scan entirely -- the
+  # scanner said so on each one ("not a protected public repo -- policy check
+  # skipped") and nothing read it. Four of these were published on 2026-09-21
+  # precisely because they had been audited clean; the audit was a snapshot, and
+  # this list is what keeps it true.
+  - datacore-one/datacore-comms
+  - datacore-one/datacore-crm
+  - datacore-one/datacore-gigs
+  - datacore-one/datacore-gstack
+  - datacore-one/datacore-image-generation
+  - datacore-one/datacore-mail
+  - datacore-one/datacore-news
+  - datacore-one/datacore-slides
+  - datacore-one/datacore-tutor
+  # meetings was renamed module-meetings -> datacore-meetings; GitHub
+  # redirects, but this machine's remote still says the old name and the
+  # scanner matches on the remote slug. Both spellings, or the check
+  # silently skips depending on which checkout pushes.
+  - datacore-one/module-meetings
+  - datacore-one/datacore-meetings
+  - datafund/datacortex
   # Conservative: only repos we publish for end-users belong here.
 
 # Path patterns that must not exist on protected_repos.

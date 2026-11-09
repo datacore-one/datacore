@@ -32,6 +32,26 @@ if str(LIB / "jobs") not in sys.path:
 
 import fix_check  # noqa: E402
 
+#: Who lives where, for these tests (board D1, 2026-10-01): each machine's own
+#: agent repairs it, and a person's machine gets a task instead. Fake names: the
+#: install's real registry decides in production (INS-3).
+PRINCIPALS = """principals:
+  boss: {kind: human, decision: final, hosts: [mac]}
+  helper: {kind: agent, role: practice, hosts: [mac]}
+  cos: {kind: agent, role: chief of staff, hosts: [box]}
+  ops: {kind: agent, role: chief of operations, hosts: [nightshift]}
+  intel: {kind: agent, hosts: [hermes]}
+  comms: {kind: agent, hosts: [plur-claw]}
+"""
+
+
+@pytest.fixture(autouse=True)
+def _principals(tmp_path, monkeypatch):
+    import actor_identity
+    p = tmp_path / "principals-fixture.yaml"
+    p.write_text(PRINCIPALS)
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+
 FIX_CHECK = LIB / "jobs" / "fix_check.py"
 
 
@@ -222,3 +242,189 @@ def test_a_repair_in_flight_is_not_news(monkeypatch):
     now = 1_800_000_000_000.0
     autofix = _open_repair(monkeypatch, status="claimed", opened_h_ago=2, now=now)
     assert autofix.escalations(Path("/x"), now_ms=now) == []
+
+
+# ── refused up front: what the repairer cannot check, and what opts out ────────
+
+def _job(name="box-x", machine="box", delegate=True):
+    import types
+    return types.SimpleNamespace(name=name, machine=machine, delegate=delegate, cmd="x", schedule="x")
+
+
+def _roster(tmp_path):
+    p = tmp_path / "infrastructure.yaml"
+    p.write_text("servers:\n  winston: {manifest_machine: box, ledger_actors: [winston]}\n  nightshift: {ledger_actors: [nightshift, miles]}\n")
+    return p
+
+
+def test_a_job_whose_repository_cannot_be_named_is_refused_before_anything_is_written(tmp_path, monkeypatch):
+    """Two stages need a repository to merge into. Without one there is no
+    done-condition, and a delegation with no done-condition is what dead-lettered
+    every box and mac repair on 2026-09-21/22."""
+    import autofix
+    monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
+    monkeypatch.setattr(autofix, "repo_for", lambda job, root: None)
+    state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path),
+                                  assignee="miles")
+    assert state == "refused" and "cannot name the repository" in why
+    assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"
+
+
+def test_a_job_that_opts_out_is_refused(tmp_path):
+    import autofix
+    state, why = autofix.delegate(_job("box-autofix-escalation", "box", delegate=False), ["f"], {},
+                                  root=tmp_path, roster=_roster(tmp_path))
+    assert state == "refused" and "opts out" in why
+
+
+def test_a_job_on_the_repairers_own_host_is_still_delegated(tmp_path):
+    import autofix
+    state, why = autofix.delegate(_job("nightshift-x", "nightshift"), ["f"], {}, root=tmp_path,
+                                  roster=_roster(tmp_path), dry=True)
+    assert state == "refused" and "not in the manifest" in why, "reached the manifest check: host and opt-out passed"
+
+
+def test_the_delegation_machinery_opts_out_in_the_real_manifest():
+    import yaml
+    jobs = {j["name"]: j for j in yaml.safe_load((LIB / "jobs" / "manifest.yaml").read_text())["jobs"]}
+    for name in ("box-autofix-escalation", "box-delegation-canary", "nightshift-delegation-drill"):
+        assert jobs[name].get("delegate") is False, f"{name} would be handed to the agent it checks"
+
+
+# ── two stages when the repairer is elsewhere ─────────────────────────────────
+
+def _capture_delegation(monkeypatch, tmp_path, job, assignee=None):
+    """Run delegate() against fakes for the ledger, the actor, the repo and the manifest."""
+    import autofix
+    import ledger.policy
+    import actor_identity
+    captured = {}
+    monkeypatch.setattr(ledger.policy, "guarded_append", lambda log, kind, payload: captured.update(payload))
+    monkeypatch.setattr(actor_identity, "this_actor", lambda: "winston")
+    monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
+    monkeypatch.setattr(autofix, "repo_for", lambda job, root: "datacore-one/datacore")
+    roster = tmp_path / "infrastructure.yaml"
+    roster.write_text("servers:\n"
+                      "  winston: {manifest_machine: box, kind: server, ledger_actors: [winston], access: {actor: winston}}\n"
+                      "  nightshift: {kind: server, ledger_actors: [nightshift, miles], access: {actor: miles}}\n"
+                      "  mac: {kind: workstation, ledger_actors: [mac], access: {actor: mac}}\n")
+    from jobs import awake
+    monkeypatch.setattr(awake, "always_on", lambda m, r=None: m != "mac")
+    (tmp_path / "2-datacore" / ".datacore" / "events").mkdir(parents=True)
+    state, why = autofix.delegate(job, ["f"], {"first_failed": "2026-09-22"}, root=tmp_path, roster=roster,
+                                  assignee=assignee)
+    return state, why, captured
+
+
+def test_a_repairer_on_another_machine_opens_a_pull_request_and_the_owner_merges(tmp_path, monkeypatch):
+    """Owner, 2026-09-25: code changes are PRs, never merged by an agent; no follow-up
+    item, because nothing lands until the owner merges and the morning re-check verifies.
+    Since board D1 this is only for a repairer named explicitly: by default the
+    failing machine's own agent repairs it, on that machine."""
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("box-x", "box"), assignee="miles")
+    assert state == "delegated", why
+    assert "--stage merged" in p["check"] and "--repo datacore-one/datacore" in p["check"] and f"--item {p['id']}" in p["check"]
+    assert "do not merge" in p["body"] and "merge rights" not in p["body"]
+    assert "then" not in p
+
+
+def test_a_mac_job_is_the_owners_and_no_agent_is_handed_it(tmp_path, monkeypatch):
+    """Board D1, 2026-10-01: the owner's machine gets no automatic repair; the
+    failure is a task for the owner (job_verify files it), and nothing is
+    written to the ledger."""
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("mac-x", "mac"))
+    assert state == "owner", why
+    assert "boss" in why and "task" in why
+    assert p == {}, "an item was written for a job on the owner's machine"
+
+
+def test_a_nightshift_job_is_still_one_stage(tmp_path, monkeypatch):
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job("nightshift-x", "nightshift"))
+    assert state == "delegated" and "--stage" not in p["check"] and "then" not in p and p["stage"] == "verify"
+
+
+def test_roster_names_resolve_the_manifests_machine_names(tmp_path):
+    """The manifest says `box`; the roster says `winston` with manifest_machine: box."""
+    import autofix
+    r = _roster(tmp_path)
+    assert autofix.host_of("miles", r) == "nightshift"
+    assert autofix.host_of("winston", r) == "box"
+    assert autofix.actor_of("box", r) == "winston"
+
+
+def test_an_agent_may_open_a_repair_pr_only_in_the_core_repository(tmp_path, monkeypatch):
+    """The owner's boundary, 2026-09-22: 'this is only for datacore'. A module's
+    repository, or anything under another organisation, is refused whatever
+    push rights the account holds. No repository is one an agent merges into
+    (owner, 2026-09-25/26)."""
+    import autofix
+    assert autofix.PR_REPOS == frozenset({"datacore-one/datacore"})
+    assert not hasattr(autofix, "MERGE_REPOS")
+    monkeypatch.setattr(autofix, "contract_sha", lambda name, manifest: "abc")
+    for repo in ("datacore-one/datacore-nightshift", "plur-ai/plur", "plur9/module-personal-finance"):
+        monkeypatch.setattr(autofix, "repo_for", lambda job, root, r=repo: r)
+        state, why = autofix.delegate(_job("box-x", "box"), ["f"], {}, root=tmp_path, roster=_roster(tmp_path),
+                                      assignee="miles")
+        assert state == "refused" and repo in why and "owner's boundary" in why, repo
+    assert not (tmp_path / "2-datacore").exists()
+
+
+# ── an escalation clears when its job recovers ────────────────────────────────
+
+def _one_drop(monkeypatch, closed_ms):
+    import autofix
+    monkeypatch.setattr(autofix, "repairs", lambda root: [{
+        "id": "autofix-box-x-20260922", "status": "dismissed", "closed_kind": "dropped",
+        "closed_at": f"{closed_ms}.0000.miles", "closed_reason": "gave up after 3 failed attempts",
+        "job": "box-x", "assignee": "miles", "opened_at": None}])
+    monkeypatch.setattr(autofix, "_acked", lambda: set())
+
+
+def _verify_event(root, job, ok, ms):
+    import json
+    ev = root / "2-datacore" / ".datacore" / "events"; ev.mkdir(parents=True, exist_ok=True)
+    with (ev / "winston.jsonl").open("a") as fh:
+        fh.write(json.dumps({"actor": "winston", "hlc": f"{ms}.0000.winston",
+                             "payload": {"metric": "job.verify", "job": job, "ok": ok, "failures": []}}) + "\n")
+
+
+def test_a_dead_letter_whose_job_has_since_passed_is_history(tmp_path, monkeypatch):
+    import autofix
+    now = 1_790_000_000_000
+    _one_drop(monkeypatch, closed_ms=now - 3_600_000)
+    _verify_event(tmp_path, "box-x", ok=True, ms=now - 600_000)          # passed after the drop
+    assert autofix.escalations(tmp_path, now_ms=now) == []
+
+
+def test_a_pass_before_the_drop_does_not_count(tmp_path, monkeypatch):
+    import autofix
+    now = 1_790_000_000_000
+    _one_drop(monkeypatch, closed_ms=now - 3_600_000)
+    _verify_event(tmp_path, "box-x", ok=True, ms=now - 7_200_000)        # passed, then dropped
+    _verify_event(tmp_path, "box-x", ok=False, ms=now - 300_000)
+    out = autofix.escalations(tmp_path, now_ms=now)
+    assert len(out) == 1 and "gave up" in out[0]
+
+
+# ── who repairs is the install's own operations agent (INS-3) ─────────────────
+
+@pytest.mark.parametrize("machine,agent", [
+    ("box", "cos"), ("nightshift", "ops"), ("hermes", "intel"), ("plur-claw", "comms")])
+def test_each_machine_is_repaired_by_its_own_agent_on_that_machine(tmp_path, monkeypatch, machine, agent):
+    """Board D1, 2026-10-01 ("each box should have own repair agent"): the
+    repairer is the agent principal that lives on the failing machine, from
+    principals.yaml hosts -- no name in code (INS-3) -- and the repair is one
+    stage: the ordinary verification on that machine is the check."""
+    roster = tmp_path / "infrastructure.yaml"
+    state, why, p = _capture_delegation(monkeypatch, tmp_path, _job(f"{machine}-x", machine))
+    assert state == "delegated", why
+    assert p["assignee"] == agent
+    assert "--stage" not in p["check"] and p["stage"] == "verify" and "then" not in p
+
+
+def test_a_machine_no_agent_lives_on_is_refused_before_anything_is_written(tmp_path, monkeypatch):
+    import autofix
+    state, why = autofix.delegate(_job("elsewhere-x", "elsewhere"), ["f"], {}, root=tmp_path,
+                                  roster=_roster(tmp_path))
+    assert state == "refused" and "elsewhere" in why and "hosts" in why
+    assert not (tmp_path / "2-datacore").exists(), "a refusal must write nothing"

@@ -103,6 +103,16 @@ def find_duplicates(
     return duplicates
 
 
+def _is_duplicate(a: Dict, b: Dict, key_field: str, content_field: str,
+                  threshold: float) -> bool:
+    """The pair test find_duplicates reports on, for one pair."""
+    if (content_field and content_field in a and content_field in b
+            and content_hash(a[content_field]) == content_hash(b[content_field])):
+        return True
+    ta, tb = a.get(key_field, ""), b.get(key_field, "")
+    return bool(ta) and bool(tb) and title_similarity(ta, tb) >= threshold
+
+
 def deduplicate(
     items: List[Dict],
     key_field: str = "title",
@@ -111,15 +121,19 @@ def deduplicate(
 ) -> List[Dict]:
     """Return deduplicated list, keeping the first occurrence.
 
-    Uses find_duplicates internally. Items identified as duplicates
-    of an earlier item are removed.
+    Greedy keep-first: an item is dropped only when it duplicates an item that
+    is KEPT, earlier in the list. Title similarity is not transitive (A~B and
+    B~C do not give A~C), so "drop every item that duplicates any earlier item"
+    -- the rule before 2026-09-23 -- dropped C along with B when only B~C,
+    leaving C with no representative at all. Guarantees: no two kept items are
+    duplicates, and every dropped item duplicates an earlier kept one.
     """
-    dupes = find_duplicates(items, key_field, content_field, threshold)
-    # Collect indices to drop (always drop the later index)
-    drop = set()
-    for _, idx_b, _ in dupes:
-        drop.add(idx_b)
-    return [item for i, item in enumerate(items) if i not in drop]
+    kept: List[Dict] = []
+    for item in items:
+        if not any(_is_duplicate(k, item, key_field, content_field, threshold)
+                   for k in kept):
+            kept.append(item)
+    return kept
 
 
 def main():

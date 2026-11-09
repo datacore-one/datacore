@@ -1,0 +1,203 @@
+"""Which tests this checkout can run: the ones whose needs it has.
+
+Some tests check an INSTALLATION rather than the code: the install's principal
+registry, its fleet over ssh, a module repository that is not part of this one,
+the PLUR CLI, a real agent session. A bare checkout -- a CI runner -- has none
+of those, so those tests failed there on every pull request for reasons that
+said nothing about the change, and a red that is always red is read by nobody.
+
+`.datacore/config/test-needs.yaml` declares what such a test needs. A need is
+checked, never assumed: on a machine that has it (a full install), the test is
+collected exactly as before; only where the need is missing is it left out,
+and every run says what it left out and why. Nothing here judges a test's
+result, only whether this machine can run it.
+
+PROMISE_EVALS_ALL=1 (the promise scoreboard) collects everything regardless:
+the scoreboard is the authority and must see a missing need as a red.
+
+Need vocabulary:
+    module:<name>   .datacore/modules/<name> is installed (a separate repository)
+    file:<path>     that file or directory exists; relative to the repository
+                    root, or ~/... for this user's home (install-local state
+                    that never ships in the repository)
+    role:<role>/<path>  that path exists inside the space this install gives the
+                    role (install.yaml `roles:`); the space's folder is the
+                    install's own and never ships (INS-3)
+    cli:<name>      the command is on PATH
+    python:<module> an optional Python package is importable (one that the
+                    audited requirements deliberately leave out)
+    fleet           this machine reads the fleet over ssh: it is the machine the
+                    roster (infrastructure.yaml) names as `roles.console`. Having
+                    the roster is not enough -- the overnight host has it and
+                    cannot ssh to the others (2026-09-30); a roster that names
+                    no console declares no machine that reads the fleet
+    agent           real agent sessions are allowed (DATACORE_AGENT_EVALS=1)
+    machine:<name>  this machine is the roster's server <name> (by its declared
+                    actor): a check about one machine (the mac's launchd jobs, its
+                    transcript mirror) applies there only (owner, 2026-10-30: run
+                    only the promises relevant to each machine)
+    workstation     this machine is a roster server of kind `workstation`, where a
+                    person works: checks of the owner's interactive session set-up
+                    do not apply under an agent's account on a shared host
+"""
+from __future__ import annotations
+
+import os
+import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+DECLARED = ROOT / ".datacore" / "config" / "test-needs.yaml"
+KINDS = ("module", "file", "role", "cli", "python", "fleet", "agent", "machine", "workstation")
+
+
+def _sibling(name: str):
+    """A module from this directory, whatever sys.path holds. The conftest loads
+    this file by path, so pytest started outside .datacore/lib has no lib on its
+    import path, and a plain `import spaces` crashed collection there (fleet
+    week simulation, finding 9, 2026-09-30)."""
+    import importlib
+    import importlib.util
+    import sys
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        if exc.name != name:
+            raise
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return mod
+
+
+def load(path: Path = DECLARED) -> list[dict]:
+    """[{test, only: [names]?, needs: [..], why}] -- a missing file declares nothing."""
+    if not path.exists():
+        return []
+    import yaml
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return list(doc.get("tests") or [])
+
+
+def kind(need: str) -> str:
+    return str(need).split(":", 1)[0]
+
+
+def met(need: str, root: Path = ROOT, env=None) -> bool:
+    env = os.environ if env is None else env
+    k, _, arg = str(need).partition(":")
+    if k == "module":
+        return (root / ".datacore" / "modules" / arg).is_dir()
+    if k == "file":
+        p = Path(arg).expanduser() if arg.startswith("~") else root / arg
+        return p.exists()
+    if k == "role":
+        spaces = _sibling("spaces")
+        role, _, sub = arg.partition("/")
+        space = spaces.space_for(role, root=root)
+        return bool(space) and (root / space / sub).exists()
+    if k == "cli":
+        return shutil.which(arg) is not None
+    if k == "python":
+        import importlib.util
+        try:
+            return importlib.util.find_spec(arg) is not None
+        except (ImportError, ValueError):
+            return False
+    if k == "fleet":
+        return is_console(root, env)
+    if k == "agent":
+        return env.get("DATACORE_AGENT_EVALS") == "1"
+    if k == "machine":
+        return this_machine(root, env)[0] == arg
+    if k == "workstation":
+        return (this_machine(root, env)[1] or {}).get("kind") == "workstation"
+    raise ValueError(f"unknown need {need!r}; one of {', '.join(KINDS)}")
+
+
+def _roster(root: Path):
+    roster = root / ".datacore" / "registry" / "infrastructure.yaml"
+    try:
+        import yaml
+        doc = yaml.safe_load(roster.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 -- no readable roster: no machines declared
+        return roster, {}
+    return roster, doc if isinstance(doc, dict) else {}
+
+
+def this_machine(root: Path = ROOT, env=None) -> tuple[str | None, dict | None]:
+    """(roster server name, its entry) for the machine running this, by its declared
+    actor (DATACORE_ACTOR, else actor_identity: ~/.datacore/identity.env, then the
+    roster's hostname row); (None, None) when it cannot be told. Declared, never probed."""
+    env = os.environ if env is None else env
+    roster, doc = _roster(root)
+    servers = doc.get("servers") or {}
+    if not isinstance(servers, dict) or not servers:
+        return None, None
+    actor = str(env.get("DATACORE_ACTOR") or "").strip().lower()
+    if not actor:
+        try:
+            actor_identity = _sibling("actor_identity")
+            actor = str(actor_identity.resolve(infra=roster)[0] or "").lower()
+        except Exception:  # noqa: BLE001 -- an unknown machine is no machine
+            return None, None
+    if not actor:
+        return None, None
+    rows = [(str(n), c) for n, c in servers.items() if isinstance(c, dict)]
+    # A machine's own name or declared actor wins over a writer it merely hosts: the
+    # workstation lists miles among its ledger writers, but miles is the overnight host.
+    for name, cfg in rows:
+        if actor in {name.lower(), str((cfg.get("access") or {}).get("actor") or "").lower()} - {""}:
+            return name, cfg
+    for name, cfg in rows:
+        if actor in {str(a).lower() for a in cfg.get("ledger_actors") or []} - {""}:
+            return name, cfg
+    return None, None
+
+
+def is_console(root: Path = ROOT, env=None) -> bool:
+    """Is this machine the one the roster names as the fleet's console?
+
+    Declared, never probed: an ssh probe would turn a host that is really down
+    into "could not run" on the one machine whose job is to notice it, and one
+    host (box) answers a non-interactive ssh with an interactive check.
+    """
+    _roster_path, doc = _roster(root)
+    roles = doc.get("roles")
+    console = str((roles or {}).get("console") or "") if isinstance(roles, dict) else ""
+    return bool(console) and this_machine(root, env)[0] == console
+
+
+def unmet_by_test(root: Path = ROOT, env=None, entries=None) -> dict[str, list[str]]:
+    """{'<repo-relative file>[::<test name>]': [unmet needs]} for this machine.
+
+    Empty under PROMISE_EVALS_ALL=1: the scoreboard collects everything.
+    """
+    env = os.environ if env is None else env
+    if env.get("PROMISE_EVALS_ALL") == "1":
+        return {}
+    out: dict[str, list[str]] = {}
+    for e in (load() if entries is None else entries):
+        missing = [n for n in e.get("needs") or [] if not met(n, root, env)]
+        if missing:
+            for key in keys(e):
+                out[key] = missing
+    return out
+
+
+def keys(entry: dict) -> list[str]:
+    """An entry names a whole file, or (with `only:`) some tests in it."""
+    only = entry.get("only") or []
+    return [f"{entry['test']}::{name}" for name in only] if only else [str(entry["test"])]
+
+
+def matches(nodeid: str, declared: str) -> bool:
+    """A file entry covers every test in it; `file::name` covers that test and its parameters."""
+    if "::" not in declared:
+        return nodeid == declared or nodeid.startswith(declared + "::")
+    return nodeid == declared or nodeid.startswith(declared + "[") or nodeid.startswith(declared + "::")

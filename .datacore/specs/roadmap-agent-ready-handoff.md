@@ -9,8 +9,8 @@ Paste the section under **PROMPT** into the parallel session.
 
 ## PROMPT
 
-You are finishing a piece of work that is ~80% done. The PLUR roadmap is now
-agent-executable in principle — `5-plur/roadmap.yaml` is the single source, a
+You are finishing a piece of work that is ~80% done. A venture roadmap is now
+agent-executable in principle — `[N]-venture/roadmap.yaml` is the single source, a
 pre-commit hook validates it, `sprint_sync.py` projects an active sprint into
 the agent queue, and one queued task was executed end-to-end and closed. What
 remains is the part that makes it true on the machines that actually run.
@@ -111,9 +111,9 @@ Measured 2026-09-04, `:AI:` in TODO/NEXT:
 | space | executable | unexecutable |
 |---|---|---|
 | 0-personal | 4 | **186** |
-| 6-meridian | 1 | 27 |
-| 3-fds | 0 | 2 |
-| 9-practice | 0 | 1 |
+| a trading space | 1 | 27 |
+| a team space | 0 | 2 |
+| a venture space | 0 | 1 |
 | 2-datacore | 51 | 0 |
 
 For each: either give it `SURFACE` + `DONE_WHEN` (`ROADMAP` only where a

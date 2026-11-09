@@ -1,0 +1,43 @@
+# Fleet names and identities for this installation (gitignored: use fleet.local.yaml)
+# This file is NOT tracked. Copy it to fleet.local.yaml and customize for your install.
+#
+# Every name and path below replaces hardcoded defaults that would otherwise appear in deployed code.
+# Leave a section empty {} to use built-in defaults (if any exist).
+
+machines: {}
+  # SSH/SCP/RSYNC targets. Used in deploy scripts, remote checks, sync commands.
+  # primary: "YOUR_WORKSTATION_HOSTNAME"
+  # dayshift: "YOUR_DAY_HOST_HOSTNAME"    # optional: your day host (if different from primary)
+  # box: "CLUSTER_HOSTNAME"               # cluster management host
+  # pods:
+  #   winston: "BOX_POD_NAME@LOCATION"    # Chief of Staff pod identity
+  #   tris: "RESEARCH_POD_LOCATION"       # Research & memory pod host
+  #   data: "OPS_POD_LOCATION"            # Operations pod host
+
+users: {}
+  # Principals and actors in your install. Replaces hardcoded names in code.
+  # owner: "YOUR_FIRST_NAME"                       # the owner (appears in escalation)
+  # agents:
+  #   miles: "YOUR_NIGHTSHIFT_AGENT_ID"            # nightshift agent principal
+  #   tris: "YOUR_RESEARCH_AGENT_ID"               # research agent principal
+  #   data: "YOUR_OPS_AGENT_ID"                    # operations agent principal
+
+# paths: {}
+#   owner_home: "/home/YOUR_NAME"        # owner's home on boxes
+#   owner_data: "/home/YOUR_NAME/Data"   # owner's data directory
+#   root_data: "/root/Data"              # root-owned data (if applicable)
+
+# spaces: {}
+#   personal: "0-YOUR_SPACE_PREFIX"       # your personal space (usually 0-...)
+#   all:
+#     - "0-personal"
+#     - ...list your space IDs here...
+
+# These values are used by:
+# - fleet_dashboard.py (VESSELS, POD_DEPLOY, etc)
+# - deployment scripts (ssh targets, paths)
+# - orchestration (space listings)
+# - verification (roster validation)
+#
+# After creating this file: run `datacore doctor` to verify all names resolve correctly.
+# Note: Do not add this file to git (.gitignore blocks it automatically).

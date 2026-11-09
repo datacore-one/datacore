@@ -20,7 +20,7 @@ interface-locked plan and expanded into its own DIP at phase start.
 - P4: Grounded briefings — fact table + token contract + validator, wiring
   behind `COS_GROUNDED=1` (DIP-0037)
 - P5: Action loop + co-sign (DIP-0038)
-- P6: Server-first artifacts + live box deploy (DIP-0039)
+- P6: Server-first artifacts + live server deploy (DIP-0039)
 - P7: Agent consolidation — registry GC + evaluator personas-as-data
   (DIP-0040)
 - P8: Executor adapters + shadow accounting + this release (DIP-0041)
@@ -30,8 +30,8 @@ interface-locked plan and expanded into its own DIP at phase start.
 Recorded honestly as open, not claimed done:
 
 - 7-green-days retirement clock for `cos_verify_morning.sh` — 0/7 as of this
-  release (box verify cron running, `job_verify.py --machine box` green)
-- `answers.yaml`/`facts.json` producers absent on box (Phase 6 follow-up)
+  release (server verify cron running, `job_verify.py --machine <server>` green)
+- `answers.yaml`/`facts.json` producers absent on the server (Phase 6 follow-up)
 - Agent registry ≤60-active target: actual is 110 (`registry_gc.py --check`),
   down from 138 with 28 archived — further consolidation families are
   follow-up, not forced
@@ -88,7 +88,7 @@ First public release.
 - CRM: Network intelligence with relationship tracking (DIP-0012)
 - Meetings: Lifecycle management with transcription processing (DIP-0013)
 - Mail: Gmail integration with classification
-- 13 private modules available (comms, health, trading, forge, grants, slides, news, telegram, dev, image-generation, personal-finance, verity, whatsapp)
+- Further modules available separately; see `.datacore/CATALOG.md` for the public ones
 
 ### Infrastructure
 - MCP server with dynamic module tool loading (DIP-0022)

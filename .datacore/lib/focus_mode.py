@@ -75,6 +75,24 @@ def find_parent_space(datacore_root: Path) -> dict | None:
     }
 
 
+def _space_fields(datacore_root: Path) -> dict:
+    """The space the CWD is in (anywhere inside it), or {} outside every space."""
+    try:
+        parts = Path.cwd().resolve().relative_to(datacore_root).parts
+    except ValueError:
+        return {}
+    if not parts or not re.match(r"^\d+-", parts[0]) or not (datacore_root / parts[0]).is_dir():
+        return {}
+    space_path = datacore_root / parts[0]
+    return {
+        "space_dir": parts[0],
+        "space_name": re.sub(r"^\d+-", "", parts[0]),
+        "space_path": str(space_path),
+        "journal_path": str(space_path / "journal"),
+        "org_path": str(space_path / "org"),
+    }
+
+
 def get_contributor() -> str:
     """Get contributor name from git config."""
     try:
@@ -99,8 +117,12 @@ def detect() -> dict:
 
     space_info = find_parent_space(root)
     if space_info is None:
-        # Inside a space but not in 2-projects/ — full mode
-        return {"mode": "full", "datacore_root": str(root)}
+        # Inside a space but not in 2-projects/: full mode, but the session is
+        # still told its space, so its journal and tasks land there and not in
+        # personal (SPC-2).
+        info = {"mode": "full", "datacore_root": str(root)}
+        info.update(_space_fields(root))
+        return info
 
     space_info["contributor"] = get_contributor()
     return space_info

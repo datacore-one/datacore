@@ -55,13 +55,13 @@ def test_a_run_commits_its_input_so_the_check_can_read_it(tmp_path):
 
     tracked = subprocess.run(["git", "-C", str(space), "ls-files"],
                              capture_output=True, text=True).stdout
-    assert f"4-outbox/{canary.MARK}/input-" in tracked, tracked
+    assert f"4-archive/{canary.MARK}/input-" in tracked, tracked
 
 
 def test_the_artifact_lives_where_the_structure_hook_allows(tmp_path):
     title, check, src = canary._task("miles", "2026-09-19T0000")
-    assert src.startswith("4-outbox/"), src
-    assert "4-outbox/" in check
+    assert src.startswith("4-archive/"), src
+    assert "4-archive/" in check
 
 
 def test_an_unfinished_canary_inside_its_budget_does_not_page(tmp_path):
@@ -99,12 +99,17 @@ def test_a_host_that_has_never_run_one_is_not_a_failure(tmp_path):
     assert json.loads(canary.RESULT.read_text())["verdict"] == "unknown"
 
 
-def test_a_canary_that_could_not_publish_is_blocked_not_failed(tmp_path):
-    """An unreachable remote is a condition. Paging for a closed laptop is how
-    an alert stops being read."""
+def test_a_blocked_canary_ages_into_failed(tmp_path):
+    """Decision N5 (2026-09-23) reverses what this test used to pin ("blocked
+    99 h old still passes"). A short condition does not page; one that
+    outlasts BLOCKED_MAX_AGE_HOURS (48 h) is a broken loop."""
     space = _space(tmp_path)
     canary.RESULT.parent.mkdir(parents=True, exist_ok=True)
     canary.RESULT.write_text(json.dumps({"verdict": "blocked", "at": time.time() - 99 * 3600,
+                                         "detail": "offline"}))
+    assert canary.cmd_check(_args(space)) == 1
+    assert json.loads(canary.RESULT.read_text())["verdict"] == "failed"
+    canary.RESULT.write_text(json.dumps({"verdict": "blocked", "at": time.time() - 2 * 3600,
                                          "detail": "offline"}))
     assert canary.cmd_check(_args(space)) == 0
 
@@ -148,3 +153,23 @@ def test_the_run_after_a_failure_starts_fresh(tmp_path):
                                          "item": "canary-old"}))
     assert canary.cmd_run(_args(space)) == 0
     assert json.loads(canary.RESULT.read_text())["verdict"] == "dispatched"
+
+
+# ── the canary's addressee is the install's own operations agent (INS-3) ──────
+
+def test_the_default_assignee_is_the_installs_operations_agent(tmp_path, monkeypatch):
+    import roster
+    seen = {}
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: "ops" if role == "chief of operations" else None)
+    monkeypatch.setattr(canary, "cmd_run", lambda a: seen.setdefault("assignee", a.assignee) and 0)
+    canary.main(["--run", "--space", str(tmp_path)])
+    assert seen["assignee"] == "ops"
+
+
+def test_with_no_operations_agent_and_no_assignee_the_run_is_refused(tmp_path, monkeypatch):
+    import roster
+    monkeypatch.setattr(roster, "by_role", lambda role, path=None: None)
+    monkeypatch.setattr(canary, "cmd_run", lambda a: pytest.fail("seeded with no addressee"))
+    with pytest.raises(SystemExit) as e:
+        canary.main(["--run", "--space", str(tmp_path)])
+    assert e.value.code == 2

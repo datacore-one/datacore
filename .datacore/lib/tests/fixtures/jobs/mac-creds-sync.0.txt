@@ -1,0 +1,7 @@
+# fixture for mac-creds-sync artifact[0]
+# producer artifact: ~/Data/.datacore/state/logs/creds-sync.log on mac
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: ^exit=0 
+# represents: SUCCESS
+# ---
+exit=0 Sun Sep 27 08:07:03 CEST 2026

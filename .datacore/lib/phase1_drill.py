@@ -31,6 +31,7 @@ ledger; the file's own history does not.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -98,7 +99,8 @@ class Drill:
         gi.write_text(gi.read_text() + "org/next_actions.org\n")
         git(self.space, "rm", "-q", "--cached", "org/next_actions.org")
 
-        self.org.write_text(project(fold(read_events(self.space)), space=self.space.name).text)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        self.org.write_text(project(authoritative_state(self.space), space=self.space.name).text)
         git(self.space, "add", "-A")
         git(self.space, "commit", "-qm", "drill: flip to Phase 1")
 
@@ -158,6 +160,8 @@ def main() -> int:
     ap.add_argument("--keep", action="store_true", help="leave the scratch space in place")
     a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="phase1-drill-")
+    # It writes as `mac` in a scratch space, on agent hosts too (AGT-10).
+    os.environ["DATACORE_LEDGER_DRILL"] = "1"
     try:
         return Drill(Path(tmp)).run()
     finally:

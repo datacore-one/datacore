@@ -1,0 +1,243 @@
+{
+  "board": "core-verification",
+  "build": "d0fb31a85e890624112e5e95ee199998b783dd7ed71ce031018bf2517f01dc84",
+  "savedAt": "2026-09-23T12:32:34.982Z",
+  "decisions": {
+    "L1": {
+      "choice": "sequencer",
+      "note": ""
+    },
+    "L2": {
+      "choice": "exit2",
+      "note": ""
+    },
+    "L3": {
+      "choice": "toplevel",
+      "note": ""
+    },
+    "L4": {
+      "choice": "exact",
+      "note": ""
+    },
+    "L5": {
+      "choice": "export",
+      "note": ""
+    },
+    "L6": {
+      "choice": "perspace",
+      "note": ""
+    },
+    "L7": {
+      "choice": "strict",
+      "note": ""
+    },
+    "L8": {
+      "choice": "append",
+      "note": ""
+    },
+    "L9": {
+      "choice": "gate",
+      "note": ""
+    },
+    "L10": {
+      "choice": "strict",
+      "note": ""
+    },
+    "G1": {
+      "choice": "warn",
+      "note": ""
+    },
+    "G2": {
+      "choice": "allow",
+      "note": ""
+    },
+    "G3": {
+      "choice": "later",
+      "note": ""
+    },
+    "G4": {
+      "choice": "skip",
+      "note": ""
+    },
+    "G5": {
+      "choice": "fix",
+      "note": ""
+    },
+    "G6": {
+      "choice": "reuse",
+      "note": ""
+    },
+    "G7": {
+      "choice": "doc",
+      "note": ""
+    },
+    "G8": {
+      "choice": "live",
+      "note": ""
+    },
+    "G9": {
+      "choice": "dismiss",
+      "note": ""
+    },
+    "G10": {
+      "choice": "dismiss",
+      "note": ""
+    },
+    "G11": {
+      "choice": "skip",
+      "note": ""
+    },
+    "G12": {
+      "choice": "place",
+      "note": "a new heading should be created, don't put under random heading"
+    },
+    "N1": {
+      "choice": "escalate",
+      "note": ""
+    },
+    "N2": {
+      "choice": "reset",
+      "note": ""
+    },
+    "N3": {
+      "choice": "threshold",
+      "note": ""
+    },
+    "N4": {
+      "choice": "both",
+      "note": ""
+    },
+    "N5": {
+      "choice": "age",
+      "note": ""
+    },
+    "N6": {
+      "choice": "enforce",
+      "note": ""
+    },
+    "N7": {
+      "choice": "warn",
+      "note": ""
+    },
+    "N8": {
+      "choice": "executor",
+      "note": ""
+    },
+    "C1": {
+      "choice": "keep",
+      "note": ""
+    },
+    "C2": {
+      "choice": "last",
+      "note": ""
+    },
+    "C3": {
+      "choice": "lower",
+      "note": ""
+    },
+    "C4": {
+      "choice": "together",
+      "note": ""
+    },
+    "C5": {
+      "choice": "check",
+      "note": ""
+    },
+    "S1": {
+      "choice": "json",
+      "note": ""
+    },
+    "S2": {
+      "choice": "readonly",
+      "note": ""
+    },
+    "S3": {
+      "choice": "unpushed",
+      "note": ""
+    },
+    "S4": {
+      "choice": "refuse",
+      "note": ""
+    },
+    "S5": {
+      "choice": "code",
+      "note": ""
+    },
+    "S6": {
+      "choice": "both",
+      "note": ""
+    },
+    "S7": {
+      "choice": "keep",
+      "note": ""
+    },
+    "P1": {
+      "choice": "lock",
+      "note": ""
+    },
+    "P2": {
+      "choice": "refuse",
+      "note": ""
+    },
+    "P3": {
+      "choice": "keep",
+      "note": ""
+    },
+    "P4": {
+      "choice": "retain",
+      "note": ""
+    },
+    "P5": {
+      "choice": "require",
+      "note": ""
+    },
+    "P6": {
+      "choice": "cancel",
+      "note": ""
+    },
+    "P7": {
+      "choice": "remove",
+      "note": ""
+    },
+    "D1": {
+      "choice": "run",
+      "note": ""
+    },
+    "D2": {
+      "choice": "drop",
+      "note": ""
+    },
+    "D3": {
+      "choice": "strict",
+      "note": ""
+    },
+    "D4": {
+      "choice": "ack",
+      "note": ""
+    },
+    "D5": {
+      "choice": "strike",
+      "note": ""
+    },
+    "D6": {
+      "choice": "extend",
+      "note": ""
+    },
+    "D7": {
+      "choice": "no",
+      "note": ""
+    },
+    "D8": {
+      "choice": "always",
+      "note": ""
+    },
+    "D9": {
+      "choice": "move",
+      "note": ""
+    },
+    "D10": {
+      "choice": "keep",
+      "note": ""
+    }
+  }
+}

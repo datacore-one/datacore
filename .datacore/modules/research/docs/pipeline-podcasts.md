@@ -1,6 +1,6 @@
 # Research pipeline → evergreen podcasts
 
-Status: proposal, 2026-09-02. Decisions marked **[G]** were made by Gregor.
+Status: proposal, 2026-09-02. Decisions marked **[G]** were made by the founder.
 
 ## Where this came from
 
@@ -86,7 +86,7 @@ So there is **no programmatic way to hand a teammate a podcast**. The decision
 is to stay with NotebookLM and share notebooks by hand through the Workspace
 UI. What that commits to, stated plainly so it is chosen and not discovered:
 
-- every share is a manual step, per notebook, by Gregor
+- every share is a manual step, per notebook, by the founder
 - teammates need Google accounts on the Workspace
 - the pipeline can create and fill notebooks unattended, but the last hop to a
   human is always manual
@@ -107,7 +107,7 @@ anything else                                 → inbox.org
 Deliberately conservative. A wrong inbox item costs ten seconds; a wrong issue
 is visible to the team. Ambiguity resolves to inbox.
 
-Venture attribution (`plur`, `datafund`, `fds`, `datacore`, `meridian`) is
+Venture attribution (`plur`, `acme`, `fds`, `datacore`, `meridian`) is
 recorded separately from destination — an item can be attributed to PLUR and
 still be reading rather than work.
 

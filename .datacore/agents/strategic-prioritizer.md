@@ -64,8 +64,8 @@ sources, highest band wins:
 | 100 | `gtd/skills/intent-routing.md` | mission intents — why the work matters at all |
 
 Content is matched against title/tags; the space directory is matched only
-against venture layers. Merging them let priority 1's keyword `plur` match the
-path `5-plur/…` and flatten all 209 tasks in that space to one score.
+against venture layers. Merging them let a priority's keyword match the
+space path (`[N]-<keyword>/…`) and flatten every task in that space to one score.
 
 **Known limitation.** `task_queue.calculate_priority` weights intent at 0.10, so
 full priority alignment moves a task by only ~0.4 on a ~6-point scale. A

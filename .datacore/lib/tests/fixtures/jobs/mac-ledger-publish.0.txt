@@ -1,0 +1,7 @@
+# fixture for mac-ledger-publish artifact[0]
+# producer artifact: ~/.datacore/state/ledger-publish.log on mac
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: run complete
+# represents: SUCCESS
+# ---
+2026-09-27 10:05Z run complete: 1 space(s) published, rc=0

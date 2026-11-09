@@ -80,7 +80,10 @@ def _index() -> list[dict]:
     import yaml  # noqa: PLC0415 — optional at import time, required here
     if not INDEX.is_file():
         raise CredentialUnresolvable(f"no credential index at {INDEX}")
-    return (yaml.safe_load(INDEX.read_text()) or {}).get("credentials") or []
+    # libyaml's safe loader when present: same safety, and the pure-Python one
+    # was most of a warm `creds get` (the index is parsed several times a call).
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    return (yaml.load(INDEX.read_text(), Loader=loader) or {}).get("credentials") or []  # noqa: S506
 
 
 def _entry(name: str) -> dict:
@@ -164,7 +167,12 @@ def resolve(name: str) -> tuple[Path, str]:
     # only one made the other host report a working credential as unreadable.
     store = _store_for(c)
     if store:
-        return Path(store), f"storage={store} (declared, not assembled by sync)"
+        # A plain path store is expanded here, as the json: branch of
+        # get_value already did: `storage: ~/x.env` was read literally as a
+        # relative `~` directory and reported a present value unresolvable.
+        where = Path(store) if store.startswith(("keychain:", "json:")) \
+            else Path(store).expanduser()
+        return where, f"storage={store} (declared, not assembled by sync)"
 
     # ONE DESTINATION, WHATEVER THE SCOPE. `secrets/scripts/sync.sh` assembles
     # global + every permitted space + projects into a single output file:
@@ -282,20 +290,32 @@ def in_scope(entry: dict) -> bool | None:
 
 
 def _read_var(path: Path, var: str) -> str | None:
+    """The value of `var` in an env file: the LAST assignment wins.
+
+    Decision C2 (2026-09-23): every env parser in the installation --
+    this one, `_vars_in`, `env_utils.parse_env_file`, `config_plane.load` --
+    takes the last value for a duplicate key, as shell `source` and systemd
+    `EnvironmentFile` do. This one used to return the FIRST, so the broker
+    could serve a value no sourced shell ever saw. `creds doctor` lists
+    duplicated keys (`duplicate_keys`) so the ambiguity is visible, not
+    silently resolved. Proof that the parsers agree:
+    DatacoreSpec.Credentials.all_parsers_agree.
+    """
     try:
         text = path.read_text()
     except OSError:
         return None
+    found = None
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("export "):
             line = line[7:]
         if line.startswith(var + "="):
-            v = line.split("=", 1)[1].strip()
-            from env_utils import parse_env_value
-            v = parse_env_value(v)
-            return v
-    return None
+            found = line.split("=", 1)[1].strip()
+    if found is None:
+        return None
+    from env_utils import parse_env_value
+    return parse_env_value(found)
 
 
 def _read_keychain(service: str) -> str | None:
@@ -348,6 +368,44 @@ def replication_warning(entry: dict) -> str | None:
     return None
 
 
+#: Which (credential, consumer, value) reads were attested today, on this host.
+#: Short-lived scripts that fetch the same credential every few seconds wrote
+#: ~12,000 identical attestations a day and pushed a telemetry log past the
+#: 50 MB sharing limit (2026-10-24); the first read of the day answers the
+#: audit question, and a new consumer, value or day is attested again.
+READ_ATTEST_STATE = Path.home() / ".datacore" / "state" / "credential-read-attested.json"
+
+
+def _today() -> str:
+    import datetime as _dt
+    return _dt.date.today().isoformat()
+
+
+def _first_read_today(ref: str, consumer: str, fp: str) -> bool:
+    """True when this read must be attested; records it. Never blocks access:
+    an unreadable or unwritable record means attest."""
+    import json
+    key, today = f"{ref}|{consumer}|{fp}", _today()
+    try:
+        seen = json.loads(READ_ATTEST_STATE.read_text(encoding="utf-8"))
+        if not isinstance(seen, dict):
+            seen = {}
+    except (OSError, ValueError):
+        seen = {}
+    if seen.get(key) == today:
+        return False
+    seen = {k: v for k, v in seen.items() if v == today}
+    seen[key] = today
+    try:
+        READ_ATTEST_STATE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = READ_ATTEST_STATE.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(seen, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, READ_ATTEST_STATE)
+    except OSError:
+        pass
+    return True
+
+
 def get_value(name: str, *, consumer: str = "") -> str:
     """The value, attested. Raises rather than returning a value it guessed at."""
     c = _entry(name)
@@ -362,10 +420,10 @@ def get_value(name: str, *, consumer: str = "") -> str:
     else:
         value = _read_var(path, var)
 
-    attest("credential.read",
-           ref=str(c.get("id") or name),
-           detail=f"{var} from {path} ({why}) by {consumer or 'unspecified'} "
-                  f"-> {fingerprint(value or '')}")
+    ref, fp = str(c.get("id") or name), fingerprint(value or "")
+    if _first_read_today(ref, consumer or "unspecified", fp):
+        attest("credential.read", ref=ref,
+               detail=f"{var} from {path} ({why}) by {consumer or 'unspecified'} -> {fp}")
 
     if value is None:
         raise CredentialUnresolvable(
@@ -474,7 +532,48 @@ def _store_paths() -> list[Path]:
     return sorted({p for p in out if p.is_file()})
 
 
+def _env_keys(path: Path) -> list[str]:
+    """Every key assigned in an env file, in file order, repeats kept.
+    Key names only -- values are never returned."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return []
+    keys = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:]
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        keys.append(line.partition("=")[0].strip())
+    return keys
+
+
+def duplicate_keys(path: Path) -> list[str]:
+    """Keys assigned more than once inside ONE env file (sorted, names only).
+
+    Every parser takes the last of them (decision C2), so the earlier lines
+    are dead text -- and the next edit may land on the wrong one. `creds
+    doctor` warns with this list; it never prints a value.
+    """
+    from collections import Counter
+    return sorted(k for k, n in Counter(_env_keys(path)).items() if n > 1)
+
+
+def within_store_duplicates() -> list[tuple[Path, list[str]]]:
+    """(store, duplicated keys) for every Datacore-owned store that has any."""
+    out = []
+    for path in sorted(_expand(KNOWN_STORES())):
+        keys = duplicate_keys(path)
+        if keys:
+            out.append((path, keys))
+    return out
+
+
 def _vars_in(path: Path) -> dict[str, str]:
+    """Every assignment in an env file; a duplicate key takes the LAST value
+    (decision C2 -- the same rule as `_read_var` and every other parser)."""
     vals: dict[str, str] = {}
     try:
         text = path.read_text()
@@ -728,6 +827,14 @@ def _entry_verifier(entry: dict) -> tuple | None:
     installation. An entry declaring `api_base` gets a probe; one that does not
     reports n-a and says why, which is honest and portable.
     """
+    # A Telegram bot token has one universal, free, read-only probe (getMe),
+    # whatever the variable is called. Bots are one per agent, so their
+    # variables are named per agent; keyed on names alone, every new agent's
+    # bot read n-a (AGT-9, 2026-09-28). Only an entry that says it is a bot
+    # token: a chat id carries provider telegram too and is not a secret.
+    if ((entry or {}).get("provider") or "").lower() == "telegram" \
+            and ((entry or {}).get("type") or "").lower() == "bot_token":
+        return ("https://api.telegram.org/bot{v}/getMe", None, '"ok":true')
     base = (entry or {}).get("api_base")
     if not base:
         return None
@@ -835,13 +942,24 @@ def verify_value(var: str, value: str, timeout: int = 25,
         import shutil as _sh
         if not _sh.which("claude"):
             return "n-a", "claude CLI not on PATH on this host"
+        import tempfile  # noqa: PLC0415
+        # The probe proves one thing: the provider accepts THIS token. Loading
+        # the user's settings, hooks and every MCP server proved nothing more
+        # and cost ~36 s of a ~40 s probe (measured 2026-09-27), so none are
+        # loaded and it runs outside any project. Any other Anthropic auth in
+        # the environment is removed, so a good API key cannot answer for a
+        # dead OAuth token. A bad token still comes back is_error (401).
+        probe_env = {k: v for k, v in os.environ.items()
+                     if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        probe_env.update({"DATACORE_HEADLESS": "1", "CLAUDE_CODE_OAUTH_TOKEN": value})
         try:
             r = subprocess.run(
-                ["claude", "-p", "Reply with exactly: OK", "--output-format", "json"],
+                ["claude", "-p", "Reply with exactly: OK", "--output-format", "json",
+                 "--strict-mcp-config", "--setting-sources", "",
+                 "--no-session-persistence"],
                 capture_output=True, text=True, timeout=150,
-                stdin=subprocess.DEVNULL,
-                env={**os.environ, "DATACORE_HEADLESS": "1",
-                     "CLAUDE_CODE_OAUTH_TOKEN": value})
+                stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir(),
+                env=probe_env)
         except Exception as e:  # noqa: BLE001
             return "n-a", f"probe failed: {type(e).__name__}"
         raw = r.stdout or ""
@@ -946,15 +1064,276 @@ def test_divergent() -> int:
     return worst
 
 
+# --- Retirement (promise OPS-7) ----------------------------------------------
+#
+# A credential is retired by removing it from the central store. Distribution
+# then delivers a .env without it, but that alone left every other store on the
+# host holding the old value (OI-13: ANTHROPIC_API_KEY left global.env and
+# stayed in cos.env), and a daemon started earlier kept it in its environment.
+#
+# "Retired" is derived, never guessed: a variable the host was delivered LAST
+# time and is not delivered NOW. A host-local value that was never delivered is
+# not ours to remove, and app-owned (external) stores are never edited.
+
+SYSTEMD_UNIT_DIRS = {"user": ("{HOME}/.config/systemd/user",),
+                     "system": ("/etc/systemd/system",)}
+
+
+def _line_key(line: str) -> str | None:
+    s = line.strip()
+    if s.startswith("export "):
+        s = s[7:]
+    if not s or s.startswith("#") or "=" not in s:
+        return None
+    return s.partition("=")[0].strip()
+
+
+def _prune_file(path: Path, retired: set) -> list[str]:
+    """Drop every assignment of a retired variable; atomic, mode kept.
+    Returns the removed names. Raises OSError when the file cannot be rewritten."""
+    lines = path.read_text().splitlines(keepends=True)
+    keep, removed = [], []
+    for line in lines:
+        k = _line_key(line)
+        if k in retired:
+            removed.append(k)
+        else:
+            keep.append(line)
+    if not removed:
+        return []
+    mode = path.stat().st_mode & 0o777
+    tmp = path.with_name(f".{path.name}.retire-{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write("".join(keep))
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return sorted(set(removed))
+
+
+def _is_oneshot(unit: Path, text: str) -> bool:
+    """Type=oneshot in the unit or in any of its drop-ins (last one wins)."""
+    kind = None
+    texts = [text]
+    for conf in sorted(unit.parent.glob(f"{unit.name}.d/*.conf")):
+        try:
+            texts.append(conf.read_text())
+        except OSError:
+            continue
+    for t in texts:
+        for ln in t.splitlines():
+            ln = ln.replace(" ", "").strip()
+            if ln.startswith("Type="):
+                kind = ln.partition("=")[2]
+    return kind == "oneshot"
+
+
+def env_consumers_split(changed, unit_dirs: dict | None = None
+                        ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(restart, deferred): every systemd unit whose EnvironmentFile is a
+    changed file, split by whether a restart is safe.
+
+    A long-running daemon read its credentials once, at start, and keeps them
+    until restarted. A oneshot is a job: it reads the file at its next start,
+    and restarting a RUNNING one kills its in-flight work -- on 2026-10-01
+    `try-restart nightshift-overnight` killed two Fairdrive tasks 22 and 24
+    minutes in. So a oneshot is deferred, by name, never restarted. A cron that
+    sources the file re-reads it on its next run."""
+    home = str(Path.home())
+    targets = {os.path.realpath(str(p)) for p in changed}
+    if unit_dirs is None:
+        unit_dirs = {s: [Path(d.format(HOME=home)) for d in ds]
+                     for s, ds in SYSTEMD_UNIT_DIRS.items()}
+    restart, deferred = set(), set()
+    for scope, dirs in unit_dirs.items():
+        for d in dirs:
+            for unit in sorted(Path(d).glob("*.service")):
+                try:
+                    text = unit.read_text()
+                except OSError:
+                    continue
+                refs = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("EnvironmentFile="):
+                        refs.extend(line.partition("=")[2].split())
+                hit = any(os.path.realpath(os.path.expanduser(
+                    r.lstrip("-").replace("%h", home))) in targets for r in refs)
+                if not hit:
+                    continue
+                if _is_oneshot(unit, text):
+                    deferred.add((scope, unit.name))
+                    continue
+                # A template (worker@.service) cannot be restarted by name --
+                # systemctl refuses it, root or not. Its instances can:
+                # `try-restart 'worker@*.service'` restarts the running ones.
+                name = unit.name
+                if name.endswith("@.service"):
+                    name = name[:-len("@.service")] + "@*.service"
+                restart.add((scope, name))
+    return sorted(restart), sorted(deferred)
+
+
+def env_consumers(changed, unit_dirs: dict | None = None) -> list[tuple[str, str]]:
+    """The units to restart: env_consumers_split's first half."""
+    return env_consumers_split(changed, unit_dirs)[0]
+
+
+def retire_absent(previous_keys, *, env_replaced: bool = True,
+                  unit_dirs: dict | None = None) -> dict:
+    """Remove every variable delivered last time and not delivered now from
+    each Datacore-owned store on this host, and name the running consumers of
+    what changed. Names only; no value is returned or printed."""
+    assembled = ENV / ".env"
+    retired = sorted(set(previous_keys) - set(_env_keys(assembled)))
+    pruned, unwritable = [], []
+    if retired:
+        skip = {os.path.realpath(str(assembled))}
+        for path in sorted(_expand(KNOWN_STORES())):
+            if os.path.realpath(str(path)) in skip:
+                continue
+            try:
+                removed = _prune_file(path, set(retired))
+            except OSError:
+                held = sorted({k for k in _env_keys(path) if k in retired})
+                if held:
+                    unwritable.append((path, held))
+                continue
+            if removed:
+                pruned.append((path, removed))
+                attest("credential.retire", ref=str(path),
+                       detail=f"{','.join(removed)} removed (names only)")
+    changed = [p for p, _ in pruned] + ([assembled] if env_replaced else [])
+    restart, deferred = env_consumers_split(changed, unit_dirs) if changed else ([], [])
+    return {"retired": retired, "pruned": pruned, "unwritable": unwritable,
+            "consumers": restart, "deferred": deferred}
+
+
+def _cmd_retire(previous_keys_file: str, env_replaced: bool) -> int:
+    try:
+        prev = set(Path(previous_keys_file).read_text().split())
+    except OSError:
+        prev = set()          # first delivery: nothing was delivered before
+    out = retire_absent(prev, env_replaced=env_replaced)
+    if out["retired"]:
+        print(f"  retired: {', '.join(out['retired'])}")
+    for path, names in out["pruned"]:
+        print(f"  removed {', '.join(names)} from {path}")
+    for path, names in out["unwritable"]:
+        print(f"  CANNOT REMOVE {', '.join(names)} from {path} (not writable; needs its owner)")
+    for scope, unit in out["consumers"]:
+        print(f"restart {scope} {unit}")
+    for scope, unit in out["deferred"]:
+        print(f"  deferred: {unit} is a oneshot job; it reads the new env at its next start, never restarted mid-run")
+    return 1 if out["unwritable"] else 0
+
+
+# --- Cross-host parity (promise OPS-6) ----------------------------------------
+#
+# `duplicates()` catches two copies disagreeing on ONE host. It cannot see two
+# hosts disagreeing with each other: the 2026-07-08 X-key rotation reached one
+# host only, and each host was internally consistent. So each host reports a
+# fingerprint per credential, and the delivery step compares them.
+
+_CRED_WORDS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PAT", "CREDENTIAL")
+
+
+def host_fingerprints() -> dict[str, set]:
+    """{VAR: {fingerprint, ...}} over this host's Datacore-owned stores that are
+    meant to agree across the fleet. local.env is instance-local by declaration
+    and app-owned stores are another namespace, so neither is compared."""
+    local = os.path.realpath(str(ENV / "local.env"))
+    out: dict[str, set] = {}
+    for path in sorted(_expand(KNOWN_STORES())):
+        if os.path.realpath(str(path)) == local:
+            continue
+        for var, val in _vars_in(path).items():
+            if any(w in var.upper() for w in _CRED_WORDS):
+                out.setdefault(var, set()).add(fingerprint(val))
+    return out
+
+
+def host_scoped_vars(index: list[dict]) -> set[str]:
+    """Variables declared ONLY by index entries that name their hosts.
+
+    Such a credential is one machine's own (Winston's bot on the box), so a
+    different value elsewhere is a different credential, not drift. A variable
+    that any fleet-wide entry also declares stays compared."""
+    scoped, shared = set(), set()
+    for c in index:
+        names = {c.get("var_name")} | set(c.get("vars") or [])
+        (scoped if c.get("hosts") else shared).update(n for n in names if n)
+    return scoped - shared
+
+
+def cross_host_divergence(per_host: dict, skip=frozenset()) -> list[tuple[str, list]]:
+    """[(VAR, [(host, fingerprint), ...])] for every variable whose value is not
+    the same on every host that holds it. Variables in `skip` (host-scoped
+    credentials) are not compared."""
+    by_var: dict[str, list] = {}
+    for host, fps in sorted(per_host.items()):
+        for var, vals in fps.items():
+            if var in skip:
+                continue
+            for v in sorted(vals):
+                by_var.setdefault(var, []).append((host, v))
+    return [(var, rows) for var, rows in sorted(by_var.items())
+            if len({v for _, v in rows}) > 1]
+
+
+def _cmd_cross_host(path: str) -> int:
+    """Read `host VAR fingerprint` lines; report variables that disagree."""
+    per_host: dict[str, dict] = {}
+    for line in Path(path).read_text().splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            per_host.setdefault(parts[0], {}).setdefault(parts[1], set()).add(parts[2])
+    try:
+        skip = host_scoped_vars(_index())
+    except Exception:  # noqa: BLE001 -- no index: compare everything
+        skip = set()
+    div = cross_host_divergence(per_host, skip=skip)
+    held = sorted({v for fps in per_host.values() for v in fps} & skip)
+    if held:
+        print(f"  not compared (host-scoped in the index): {', '.join(held)}")
+    for var, rows in div:
+        print(f"  *** {var} differs between machines: "
+              + ", ".join(f"{h} {v}" for h, v in rows) + " ***")
+    if not div:
+        print(f"  every credential agrees across {len(per_host)} machine(s)")
+    return 1 if div else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates", "test-divergent"])
+    ap.add_argument("op", choices=["resolve", "get", "unindexed", "duplicates", "test-divergent",
+                                   "retire", "fingerprints", "cross-host"])
     ap.add_argument("name", nargs="?", default="")
     ap.add_argument("--consumer", default="cli")
+    ap.add_argument("--previous-keys", default="",
+                    help="retire: file of variable names delivered last time")
+    ap.add_argument("--env-replaced", action="store_true",
+                    help="retire: the assembled .env was replaced in this run")
     a = ap.parse_args()
 
     if a.op == "test-divergent":
         return test_divergent()
+
+    if a.op == "retire":
+        return _cmd_retire(a.previous_keys, a.env_replaced)
+
+    if a.op == "fingerprints":        # names and truncated fingerprints only
+        for var, fps in sorted(host_fingerprints().items()):
+            for f in sorted(fps):
+                print(f"FP {var} {f}")
+        return 0
+
+    if a.op == "cross-host":
+        return _cmd_cross_host(a.name)
 
     if a.op == "duplicates":
         div, red = duplicates()

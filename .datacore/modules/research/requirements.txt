@@ -16,3 +16,17 @@ claude-agent-sdk>=0.2.148
 
 # Security floor also applies when an older MCP dependency is already installed.
 mcp>=1.28.1
+
+# Gemini Notebook client (renamed from NotebookLM, July 2026).
+#
+# Replaces the `nlm` Go CLI, whose audio AND video creation RPCs have returned
+# "One or more arguments are invalid" for every argument combination since
+# ~2026-09 while its notebook/source calls still work — upstream last pushed
+# 2026-07-31 and has not followed Google's change. Verified 2026-09-22:
+# notebooklm-py generated an audio overview against the same account and
+# notebook where nlm failed.
+#
+# Install the CLI in its own environment, NOT with a system pip — PEP 668
+# blocks that on modern macOS and Debian:
+#   uv tool install 'notebooklm-py[browser]'   (or: pipx install ...)
+notebooklm-py>=0.8.2

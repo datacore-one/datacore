@@ -1,5 +1,5 @@
 # Outbox Routing Configuration
-# Place in [space]/4-outbox/_routing.yaml to customize routing for this space
+# Place in [space]/4-archive/_routing.yaml to customize routing for this space
 
 # Default routing rules
 routing:

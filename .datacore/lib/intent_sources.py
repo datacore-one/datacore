@@ -9,6 +9,15 @@ from space_catalog import catalog
 from yaml_safety import UniqueStringKeyLoader
 
 
+# DIP-0009 v2.0 task vocabulary: (todo class, done class). It equals
+# org-workspace >= 0.6.0 ``StateConfig.default().env_keys()``, pinned here so an
+# intent review reads the same file the same way on every host, whichever
+# org-workspace release is installed. The retired overlay states (QUEUED,
+# WORKING, FAILED) are tasks only in a file whose #+TODO/#+SEQ_TODO header
+# declares them; headerless, they are heading text.
+DIP0009_V2_KEYS = (('TODO', 'NEXT', 'WAITING', 'REVIEW'), ('DONE', 'DEFERRED', 'CANCELLED'))
+
+
 class IntentInputError(ValueError):
     """Incomplete or ambiguous evidence must not become an empty review."""
 
@@ -61,14 +70,14 @@ def org_nodes(root, path, *, required=False):
         return []
     from org_literal import require_resolved_source
     require_resolved_source(source)
-    # The declared parser's vocabulary remains the baseline; per-file headers
-    # extend it. Parse the bounded snapshot directly, without writing a copy or
-    # invoking OrgWorkspace's implicit in-memory duplicate-ID repair.
-    from org_workspace import StateConfig
+    # The DIP-0009 v2.0 vocabulary is the baseline; per-file headers extend it
+    # (a legacy header keeps QUEUED/WORKING/FAILED visible). Parse the bounded
+    # snapshot directly, without writing a copy or invoking OrgWorkspace's
+    # implicit in-memory duplicate-ID repair.
     from org_workspace._vendor.orgparse import loads
     from org_workspace._vendor.orgparse.node import OrgEnv
     env = OrgEnv(filename=str(path))
-    env.add_todo_keys(*StateConfig.default().env_keys())
+    env.add_todo_keys(*(list(keys) for keys in DIP0009_V2_KEYS))
     try:
         nodes = list(loads(source, filename=str(path), env=env)[1:])
     except (ValueError, TypeError, RecursionError):

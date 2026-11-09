@@ -142,3 +142,116 @@ class TestFindAllContexts:
         assert len(contexts) == 2
         paths = [str(p) for p, _ in contexts]
         assert any("sub" in p for p in paths)
+
+
+class TestEmitTargets:
+    """Other harnesses read AGENTS.md / GEMINI.md; they come from the same layers."""
+
+    def test_emit_writes_same_content_to_each_name(self, tmp_context):
+        _write(tmp_context, "CLAUDE", "base", "# Base\n\nCapture to inbox.org")
+        ok, warnings = rebuild_context(tmp_context, emit=["AGENTS", "GEMINI"])
+        assert ok, warnings
+        claude = (tmp_context / "CLAUDE.md").read_text()
+        assert (tmp_context / "AGENTS.md").read_text() == claude
+        assert (tmp_context / "GEMINI.md").read_text() == claude
+
+    def test_no_emit_writes_only_claude(self, tmp_context):
+        _write(tmp_context, "CLAUDE", "base", "# Base")
+        rebuild_context(tmp_context)
+        assert not (tmp_context / "AGENTS.md").exists()
+
+    def test_refusal_on_any_output_writes_none(self, tmp_context, monkeypatch):
+        import context_merge
+        _write(tmp_context, "CLAUDE", "base", "# Base")
+        _write(tmp_context, "CLAUDE", "local", "private")
+
+        def refuse(path):
+            return f"REFUSED: {path}" if path.name == "AGENTS.md" else None
+
+        monkeypatch.setattr(context_merge, "output_untracked_refusal", refuse)
+        ok, warnings = rebuild_context(tmp_context, emit=["AGENTS"])
+        assert not ok
+        assert any("AGENTS.md" in w for w in warnings)
+        assert not (tmp_context / "CLAUDE.md").exists()
+        assert not (tmp_context / "AGENTS.md").exists()
+
+    def test_emit_from_env(self, monkeypatch):
+        import context_merge
+        monkeypatch.setenv("DATACORE_CONTEXT_EMIT", "AGENTS, GEMINI")
+        assert context_merge.emit_targets_from_env() == ["AGENTS", "GEMINI"]
+        monkeypatch.setenv("DATACORE_CONTEXT_EMIT", "../evil")
+        assert context_merge.emit_targets_from_env() == []
+
+    def test_hand_written_twin_is_never_overwritten(self, tmp_context):
+        # 2-datacore/AGENTS.md is an OpenClaw workspace file written by hand.
+        _write(tmp_context, "CLAUDE", "base", "# Base")
+        (tmp_context / "AGENTS.md").write_text("This folder is home.\n")
+        ok, warnings = rebuild_context(tmp_context, emit=["AGENTS", "GEMINI"])
+        assert ok
+        assert (tmp_context / "AGENTS.md").read_text() == "This folder is home.\n"
+        assert (tmp_context / "GEMINI.md").exists()
+        assert any("AGENTS.md" in w and "not overwriting" in w for w in warnings)
+
+    def test_generated_twin_is_refreshed(self, tmp_context):
+        _write(tmp_context, "CLAUDE", "base", "# Old")
+        rebuild_context(tmp_context, emit=["AGENTS"])
+        _write(tmp_context, "CLAUDE", "base", "# New")
+        rebuild_context(tmp_context, emit=["AGENTS"])
+        assert "# New" in (tmp_context / "AGENTS.md").read_text()
+
+    def test_cli_exit_zero_when_only_a_twin_was_skipped(self, tmp_context):
+        import subprocess, sys
+        _write(tmp_context, "CLAUDE", "base", "# Base")
+        (tmp_context / "AGENTS.md").write_text("hand written\n")
+        script = Path(__file__).resolve().parents[1] / "context_merge.py"
+        for extra in ([], ["--all"]):
+            r = subprocess.run([sys.executable, str(script), "rebuild", "--path", str(tmp_context), "--emit", *extra],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, (extra, r.stdout, r.stderr)
+            assert "not overwriting" in r.stderr
+
+    def test_twin_not_written_where_git_would_track_it(self, tmp_context):
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(tmp_context)], check=True)
+        (tmp_context / ".gitignore").write_text("CLAUDE.md\nGEMINI.md\n")
+        _write(tmp_context, "CLAUDE", "base", "# Base")
+        ok, notes = rebuild_context(tmp_context, emit=["AGENTS", "GEMINI"])
+        assert ok
+        assert not (tmp_context / "AGENTS.md").exists()
+        assert (tmp_context / "GEMINI.md").exists()
+        assert any("AGENTS.md" in n and ".gitignore" in n for n in notes)
+
+
+class TestRegistryDrift:
+    """The root CLAUDE.md also carries tables generated from .datacore/registry/.
+
+    On 2026-10-25 a server was added to infrastructure.yaml after the root
+    CLAUDE.md had last been rebuilt (10-23). Only the layer files' mtimes were
+    compared, so the composed file was called "hand-edited", which the
+    SessionStart `check --fix` hook only reports -- and the stale table stayed.
+    """
+
+    def _component(self, root):
+        import time
+        (root / ".datacore" / "registry").mkdir(parents=True)
+        infra = root / ".datacore" / "registry" / "infrastructure.yaml"
+        infra.write_text("servers:\n  alpha:\n    purpose: first host\n")
+        _write(root, "CLAUDE", "base", "# Base\n\n<!-- REGISTRY:infrastructure -->\n")
+        ok, msgs = rebuild_context(root, "CLAUDE")
+        assert ok, msgs
+        infra.write_text("servers:\n  alpha:\n    purpose: first host\n"
+                         "  beta:\n    purpose: second host\n")
+        later = time.time() + 5
+        os.utime(infra, (later, later))
+        return root
+
+    def test_a_changed_registry_makes_the_composed_file_stale_not_hand_edited(self, tmp_path):
+        from context_merge import composed_drift
+        drift = composed_drift(self._component(tmp_path))
+        assert drift and " is stale" in drift, drift
+
+    def test_check_fix_rebuilds_after_a_registry_change(self, tmp_path):
+        from context_merge import check_installation
+        root = self._component(tmp_path)
+        assert check_installation(root, fix=True) == []
+        assert "beta" in (root / "CLAUDE.md").read_text()

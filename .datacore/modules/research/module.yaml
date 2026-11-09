@@ -30,6 +30,10 @@ provides:
     - podcast-creator
   commands:
     - research-daily
+    - create-podcast
+    - nightshift-hook
+    - research-status
+    - today-hook
 
 dependencies:
   - core@>=1.0.0
@@ -45,8 +49,11 @@ settings:
   enabled:
     description: "Enable research module"
     default: true
+  notebooklm_path:
+    description: "Path to the notebooklm CLI (notebooklm-py). null = detect from PATH"
+    default: null
   nlm_path:
-    description: "Path to nlm CLI binary (null = detect from PATH)"
+    description: "DEPRECATED: the legacy nlm Go CLI. Its audio RPC stopped working ~2026-09; kept only so an unmigrated host still creates notebooks and uploads sources."
     default: null
   podcast_output_dir:
     description: "Directory for generated podcasts"
@@ -113,3 +120,11 @@ exempt:
     reason: read-only — archive.org fallback
   - fn: "lib/research_orchestrator.py:send_telegram_summary"
     reason: operator summary to the configured chat
+  - fn: "lib/research_orchestrator.py:_post_telegram"
+    reason: failure alert to the operator's own group -- same channel as send_telegram_summary
+
+# MOD-3: the scheduled jobs this module owns. Their full entries (machine, schedule,
+# cmd, artifact) live in .datacore/lib/jobs/manifest.yaml, which the installer and
+# verifier read; `module_remove.py research` takes these out of it with the module.
+schedules:
+  - name: mac-nlm-auth-sync

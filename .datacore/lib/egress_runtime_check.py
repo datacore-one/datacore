@@ -22,6 +22,13 @@ An unimportable module is an unknown, and the whole point of the three-state
 convention is that unknowns do not read as fine.
 
     egress_runtime_check.py [--module NAME] [--functional]
+
+Exit codes (decision S5, 2026-09-23):
+    0  at least one function verified in force, none broken
+    1  a function is broken, or --functional failed
+    3  nothing could be checked: every row is n-a (or there were no rows).
+       Until then this exited 0, so `$?` read an all-unknown run as a pass
+       (DatacoreSpec/Guards.lean `runtime_exit_zero_means_something_verified`).
 """
 from __future__ import annotations
 
@@ -202,7 +209,7 @@ def functional() -> tuple[bool, str]:
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        (root / "1-datafund" / ".datacore" / "events").mkdir(parents=True)
+        (root / "1-myteam" / ".datacore" / "events").mkdir(parents=True)
         os.environ["DATACORE_ROOT"] = str(root)
         os.environ["DATACORE_ACTOR"] = "mac"
         for m in [k for k in sys.modules if k.startswith("ledger")]:
@@ -219,7 +226,7 @@ def functional() -> tuple[bool, str]:
 
         sys.path.insert(0, str(LIB))
         from ledger.log import read_events
-        events = [e for e in read_events(root / "1-datafund")
+        events = [e for e in read_events(root / "1-myteam")
                   if e.type == "artifact.attest"]
         if not events:
             return False, "decorator ran but no artifact.attest reached the ledger"
@@ -250,7 +257,12 @@ def main() -> int:
         print(f"  {'ok  ' if good else 'FAIL'} functional: {detail}")
         if not good:
             return 1
-    return 1 if bad else 0
+    if bad:
+        return 1
+    if ok == 0:
+        print("  nothing could be checked: every row is n-a (exit 3)")
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

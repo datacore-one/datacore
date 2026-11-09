@@ -78,6 +78,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,7 +117,11 @@ class Policy:
     #: Per-principal limits (product description, stage 4): `never_effects`
     #: (refused outright, no grant can allow them), `cosign_effects` (added to
     #: the global set for this principal), `may_delegate_to` (who this
-    #: principal may address an item to), `max_creates_per_day`, `max_hops`.
+    #: principal may address an item to), `max_creates_per_day`, `max_hops`,
+    #: `own_repos` (the principal's own repositories, by push URL: a push that
+    #: provably lands in one is not a shared push -- tool_policy.decide),
+    #: `standing_grants` (one co-signed effect released for the shell commands
+    #: a regex names -- tool_policy.decide).
     #: None means the file declares no principals section; claim_gate applies
     #: its documented defaults then.
     principals: dict | None = None
@@ -128,6 +133,37 @@ class Policy:
         """The closed effects vocabulary to validate `item.create` effects
         against: `known_effects` when set, else `cosign_effects`."""
         return self.known_effects if self.known_effects is not None else self.cosign_effects
+
+
+def _with_local_overlay(path: Path, data: dict) -> dict:
+    """Merge the install's own principals over the shipped, neutral ones.
+
+    The tracked policy cannot name this install's people and agents (INS-3:
+    a fresh install names nothing of ours), so they live in the gitignored
+    `<stem>.local.yaml` beside it. A local `principals` entry replaces the
+    tracked entry of that name and new names are added; a local
+    `arbitration` replaces the tracked order. Nothing else overlays. The
+    merged mapping then goes through the same validation as one file, so a
+    malformed local entry is refused, never skipped -- skipping would switch
+    a principal's limits off.
+    """
+    local = path.with_name(path.stem + ".local.yaml")
+    if not local.exists() and not local.is_symlink():
+        return data
+    from yaml_safety import UniqueStringKeyLoader
+    try:
+        extra = yaml.load(local.read_text(encoding="utf-8"), Loader=UniqueStringKeyLoader) or {}
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        raise PolicyError('local approvals policy is unreadable or ambiguous') from None
+    if not isinstance(extra, dict) or not isinstance(extra.get("principals", {}), dict):
+        raise PolicyError(f"approvals policy {local}: 'principals' must be a mapping of name -> limits")
+    merged = dict(data)
+    if "principals" in extra:
+        base = data.get("principals") if isinstance(data.get("principals"), dict) else {}
+        merged["principals"] = {**base, **extra["principals"]}
+    if "arbitration" in extra:
+        merged["arbitration"] = extra["arbitration"]
+    return merged
 
 
 def load_policy(path: Path | None = None) -> Policy:
@@ -180,6 +216,7 @@ def load_policy(path: Path | None = None) -> Policy:
         raise PolicyError(
             f"approvals policy {path}: root must be a mapping (got {type(data).__name__})"
         )
+    data = _with_local_overlay(path, data)
 
     errors: list[str] = []
 
@@ -237,7 +274,43 @@ def load_policy(path: Path | None = None) -> Policy:
                     v = lim.get(k)
                     if v is not None and not (type(v) is int and v >= 0):
                         errors.append(f"{path}: principals entry '{k}' must be a non-negative integer")
-                unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to", "max_creates_per_day", "max_hops"})
+                # own_repos: regexes over a push destination's URL naming the
+                # principal's own repositories; tool_policy releases push.shared
+                # (only that) for a push that provably lands in one of them.
+                v = lim.get("own_repos")
+                if v is not None:
+                    if not (isinstance(v, list) and all(isinstance(e, str) and e for e in v)):
+                        errors.append(f"{path}: principals entry 'own_repos' must be a list of non-empty strings")
+                    else:
+                        for rx in v:
+                            try:
+                                re.compile(rx)
+                            except re.error:
+                                errors.append(f"{path}: principals entry 'own_repos' has an invalid pattern")
+                # standing_grants: [{effect, command, why?}] -- one co-signed
+                # effect released for the shell commands `command` (a regex)
+                # names; tool_policy judges it per command, never for a
+                # never-effect or a per-transaction one.
+                v = lim.get("standing_grants")
+                if v is not None:
+                    if not isinstance(v, list):
+                        errors.append(f"{path}: principals entry 'standing_grants' must be a list")
+                    else:
+                        for g in v:
+                            if not (isinstance(g, dict) and set(g) <= {"effect", "command", "why"}
+                                    and isinstance(g.get("effect"), str) and g["effect"]
+                                    and isinstance(g.get("command"), str) and g["command"]
+                                    and isinstance(g.get("why", ""), str)):
+                                errors.append(f"{path}: principals entry 'standing_grants' items must be "
+                                              f"{{effect, command, why?}} with non-empty strings")
+                                continue
+                            try:
+                                re.compile(g["command"])
+                            except re.error:
+                                errors.append(f"{path}: principals entry 'standing_grants' has an invalid pattern")
+                unknown = sorted(set(lim) - {"never_effects", "cosign_effects", "may_delegate_to",
+                                             "max_creates_per_day", "max_hops", "own_repos",
+                                             "standing_grants"})
                 if unknown:
                     errors.append(f"{path}: principals entry has unknown key(s)")
                 principals[str(name)] = dict(lim)
@@ -326,8 +399,10 @@ def _guarded_append_locked(
     previously_approved = False
     if type in {"item.claim", "item.update"}:
         from .fold import fold
-        events = read_events(space_dir)
-        item = fold(events).items.get(payload.get("id"))
+        from .hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
+        # The approval scan below reads the same admitted events (round 6).
+        events, _ = authoritative_events(space_dir, read_events(space_dir))
+        item = authoritative_state(space_dir, events).items.get(payload.get("id"))
         if item is None:
             raise PolicyError("item does not exist")
         if item.edit_conflicts:
@@ -337,8 +412,14 @@ def _guarded_append_locked(
                     or not all(isinstance(key, str) for key in resolution['resolves'])
                     or not set(item.edit_conflicts).issubset(resolution.get('resolves', []))):
                 raise PolicyError('unresolved replicated edits require explicit reconciliation')
-        previously_approved = any(e.type == "item.create" and e.payload.get("id") == item.id
-                                  and e.payload.get("approval_ref") for e in events)
+        # APPROVED ONCE, APPROVED FOR GOOD -- however the approval arrived. An
+        # approval can be attached by a guarded update as well as at creation;
+        # looking at creates alone let create(no effects) -> granted update
+        # (payment) -> unguarded update (effects: []) claim with no valid grant.
+        # (Lean: DatacoreSpec.LedgerPolicy.Approval.claim_keeps_approval.)
+        previously_approved = bool(item.payload.get("approval_ref")) or any(
+            e.type in {"item.create", "item.update"} and (e.payload or {}).get("id") == item.id
+            and (e.payload or {}).get("approval_ref") for e in events)
         if type == "item.update":
             if item.status != "created":
                 raise PolicyError("item content cannot change after execution has started")
@@ -360,7 +441,8 @@ def _guarded_append_locked(
     if type == "item.claim":
         from .fold import fold
         from claim_gate import check_claim
-        item = fold(read_events(space_dir)).items.get(payload.get("id"))
+        from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space_dir).items.get(payload.get("id"))
         if item is None or item.status != "created":
             raise PolicyError("item is missing or no longer available to claim")
         current_hash = approval_payload_hash(item.payload)
@@ -383,7 +465,24 @@ def _guarded_append_locked(
         who = getattr(log, "actor", None) or ""
         if who != policy.approver:
             raise PolicyError(f"{type} refused for {who!r}: only the approver ({policy.approver}) may grant")
-    if type in ("item.dismiss", "item.release", "owner.set") and policy is not None and getattr(policy, "arbitration", None):
+    if type == "item.release":
+        # ONLY THE CLAIMANT RELEASES (Phase 5A, 2026-10-04; rogue-agent fleet
+        # simulation F33). The fold has always ignored a release by anyone but
+        # the claim's holder; the write accepted it -- from an arbiter agent,
+        # or from another writer of the same principal -- so the log said
+        # "released" while the state said "claimed". Refused here, with any
+        # policy or none, so the record and the state agree. The owner frees a
+        # stuck claim through the reconcile tool, not by releasing it.
+        sd = space_dir or getattr(log, "space_dir", None)
+        if sd is not None:
+            from .fold import fold
+            from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            held = authoritative_state(Path(sd)).items.get(payload.get("id"))
+            who = getattr(log, "actor", None) or ""
+            if held is not None and held.status == "claimed" and held.owner and held.owner != who:
+                raise PolicyError(f"item.release refused for {who!r}: the claim is {held.owner!r}'s, "
+                                  f"and only the claimant may release it")
+    if type in ("item.dismiss", "item.release", "owner.set", "item.archive", "item.reopen") and policy is not None and getattr(policy, "arbitration", None):
         # Stage 5: closing, releasing or reassigning ANOTHER principal's item is
         # arbitration, and the order in the policy file decides who may.
         who = getattr(log, "actor", None) or ""
@@ -469,7 +568,15 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
             "cosign but payload is missing 'approval_ref'"
         )
 
-    events = read_events(space_dir)
+    from .hub import authoritative_events
+    # A hub space: a grant counts only as admission lets it in (round 6).
+    events, kw = authoritative_events(space_dir, read_events(space_dir))
+    # ... and through the ONE correction rule (Codex final audit, F5): a
+    # rejected or reversed grant authorises nothing. (An approval is a control
+    # record and is never reversible, owner round 7; the filter keeps this
+    # reader in step with `ledger.finality` whatever its allow-list says.)
+    from .finality import effective_events
+    events = effective_events(events, kw)
 
     grant = next((e for e in events if e.hash == approval_ref), None)
     if grant is None:
@@ -487,9 +594,9 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
         )
 
     if getattr(log, "sign", False):
-        from .events import body_dict, canonical_bytes, compute_hash
+        from .events import canonical_bytes, compute_hash, event_body
         from .keys import verify
-        body = body_dict(grant.seq, grant.hlc, grant.actor, grant.type, grant.payload, grant.prev)
+        body = event_body(grant)
         if grant.hash != compute_hash(body) or not grant.sig or not verify(
                 grant.actor, canonical_bytes(body), grant.sig, registry_path=log.registry_path):
             raise PolicyError("approval grant signature could not be verified")

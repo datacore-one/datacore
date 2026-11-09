@@ -50,9 +50,10 @@ from pathlib import Path
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
+import ledger_transport as transport  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space  # noqa: E402
-from ledger.log import read_events  # noqa: E402
+from ledger.log import TELEMETRY_SUFFIX, read_events  # noqa: E402
 from ledger.projector import _clean_title_and_tags, _org_stamp, project, projected_items  # noqa: E402
 
 # The projector's own notion of live. Since 2026-09-06 `completed` is live
@@ -191,7 +192,7 @@ def _fingerprint(state, space_filetags: set | None = None,
         # 0-personal as "altered" by a restore that preserved them exactly
         # (2026-08-30), the same false-alarm class as the timestamp and
         # filetag asymmetries above. A missing state MEANS TODO here.
-        rendered_state = "REVIEW" if item.status == "completed" else (p.get("state") or "TODO")
+        rendered_state = "REVIEW" if item.status in ("completed", "submitted") else (p.get("state") or "TODO")
         org = p.get('org') or {}
         created = org.get('created')
         genesis = p.get('genesis') or {}
@@ -215,12 +216,19 @@ def write(space: Path) -> Path:
     durably published in the recoverable filesystem transaction.
     """
     from ledger.events import to_line
+    from ledger.verify import verify_space
     events = read_events(space)
-    state = fold(events)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space, events)    # the snapshot below still keeps every event
     text = project(state, space=space.name).text
     dest, snapshot_path = checkpoint_paths(space)
+    # Telemetry chains stay out (LED-8): the fold ignores them and git already
+    # tracks .datacore/telemetry/ itself. Copying them made 1-datafund's
+    # snapshot 101 MB (2026-10-21), past what sync will share.
     chains = {}
     for event in events:
+        if event.log.endswith(TELEMETRY_SUFFIX):
+            continue
         chains.setdefault(event.log + '.jsonl', []).append(event)
     chains = {name: ''.join(to_line(event) + '\n' for event in sorted(chain, key=lambda e: e.seq))
               for name, chain in chains.items()}
@@ -229,14 +237,25 @@ def write(space: Path) -> Path:
     saved = watch_file(snapshot_path)['before']
     previous_org = watch_file(dest)['before']
     legacy_org = watch_file(space / CHECKPOINT_REL)['before']
+    superseded = None
     if saved is not None:
         previous = json.loads(saved)
-        _restore(previous, space.name)
+        try:
+            _restore(previous, space.name, source_space=space)
+        except StateRootMismatch:
+            # Its chains verified; only the root it recorded is stale -- the fold
+            # rules changed since (the 2026-09-23 formal-verification fixes made
+            # 0-personal's 05:35 checkpoint unreplaceable forever). The history
+            # it holds is still checked below to be a prefix of the live chains;
+            # it is kept beside the new one, never discarded.
+            superseded = saved
         if previous_org is None or hashlib.sha256(previous_org.encode()).hexdigest() != previous['org_sha256']:
             raise ValueError('previous checkpoint was changed; preserve and reconcile it before replacement')
         # Append-only history cannot shrink. A lost/rewound live log must not
         # replace the last good backup with the damaged state.
         for filename, old_chain in previous['chains'].items():
+            if filename.endswith(TELEMETRY_SUFFIX + '.jsonl'):
+                continue            # written before telemetry was left out
             if not chains.get(filename, '').startswith(old_chain):
                 raise ValueError('live ledger lost or replaced saved history; refusing checkpoint replacement')
     elif previous_org is not None or legacy_org is not None:
@@ -249,21 +268,49 @@ def write(space: Path) -> Path:
             raise ValueError('legacy checkpoint archive conflicts')
         if before_archive is None:
             write_org_text(archive, previous_org)
+    # A restore point is taken from a ledger the one verifier calls sound
+    # (Phase 2 V2). A damaged log reads as its clean prefix, so checking only
+    # the saved copy would call it fine; the previous checkpoint is kept.
+    live = verify_space(space)
+    if live.verdict == 'broken':
+        named = sorted({log.shown for log in live.logs if log.verdict == 'broken'})
+        raise ValueError(f'live ledger fails verification ({", ".join(named)}); '
+                         'previous checkpoint kept -- see: ledger_cli.py verify --space')
     # Test the saved representation before replacing the previous checkpoint.
-    _restore(document, space.name)
+    _restore(document, space.name, source_space=space)
+    if superseded is not None:
+        old_root = json.loads(superseded)['state_root']
+        archive = snapshot_path.with_name(f'superseded-{old_root[:16]}.json')
+        if watch_file(archive)['before'] not in (None, superseded):
+            raise ValueError('superseded checkpoint archive conflicts')
+        write_org_text(archive, superseded)
+    snapshot_text = json.dumps(document, sort_keys=True) + '\n'
+    cap = transport.MAX_SHARED_BYTES
+    for label, content in (("org checkpoint", text), ("ledger snapshot", snapshot_text)):
+        size = len(content.encode('utf-8'))
+        if size >= cap:
+            raise ValueError(
+                f"{label} is too large to share: {size:,} bytes >= {cap:,} bytes share cap "
+                f"({size / 1048576:.1f} MB); the sync would hold it back")
     write_org_text(dest, text)
-    write_org_text(snapshot_path, json.dumps(document, sort_keys=True) + '\n')
+    write_org_text(snapshot_path, snapshot_text)
     return dest
 
 
-def _restore(document, name):
+class StateRootMismatch(ValueError):
+    """The saved chains verify, but fold to a different root than was recorded."""
+
+
+def _restore(document, name, source_space: Path | None = None):
     """Actually restore a saved snapshot in disposable storage and verify it.
 
     These are integrity checks, not independent signer authentication. The
     checkpoint must be obtained from the deployment's trusted backup source.
+    If source_space is provided, its hub config is copied to support hub-enabled
+    restoration with the same admission and policy logic used to compute the
+    original state root.
     """
-    from ledger.events import body_dict, compute_hash, from_line
-    from ledger.exceptions import is_recorded
+    from ledger.verify import chain_problems
     if (not isinstance(document, dict) or document.get('version') != 1
             or not isinstance(document.get('chains'), dict)
             or not isinstance(document.get('state_root'), str)
@@ -273,30 +320,35 @@ def _restore(document, name):
         scratch = Path(temporary) / name
         folder = scratch / '.datacore/events'
         folder.mkdir(parents=True)
+        # Copy hub config if available, to restore with the same admission logic
+        if source_space is not None:
+            hub_config = source_space / '.datacore' / 'ledger-hub.json'
+            if hub_config.is_file():
+                hub_dest = scratch / '.datacore' / 'ledger-hub.json'
+                hub_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(hub_config, hub_dest)
         for filename, text in document['chains'].items():
             if (not isinstance(filename, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.jsonl', filename)
                     or not isinstance(text, str) or not text.endswith('\n')):
                 raise ValueError('invalid saved chain')
-            previous = 'GENESIS'
-            for sequence, line in enumerate(text.splitlines()):
-                event = from_line(line)
-                computed = compute_hash(body_dict(event.seq, event.hlc, event.actor,
-                                                  event.type, event.payload, event.prev))
-                if event.seq != sequence or event.prev != previous:
-                    raise ValueError('saved event chain fails integrity verification')
-                if event.hash != computed and not is_recorded(
-                        name, filename, event.seq, event.hash, computed):
-                    # Refusing the whole space over one already-written event
-                    # left it with NO restore point, forever -- the opposite of
-                    # what this check is for. A reviewed exception pins both
-                    # hashes, so it excuses only that event exactly as written;
-                    # any edit to it, and every other mismatch, still fails here.
-                    raise ValueError('saved event chain fails integrity verification')
-                previous = event.hash
             (folder / filename).write_text(text, encoding='utf-8')
-        restored = fold(read_events(scratch))
+        # The one verifier (ledger.verify, Phase 2 V2): the saved chains are
+        # judged exactly as the CLI, the health check and the relay judge the
+        # live ones. A stored-hash mismatch is accepted only when an authorised
+        # in-ledger `ledger.void` in the SAVED chains names that exact event and
+        # pins the hash its body produces (owner decision 6: no side list of
+        # excuses); a signature that is not the writer's is refused here too.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')            # a damaged saved line is refused below
+            events = read_events(scratch)
+        saved = sum(len(text.splitlines()) for text in document['chains'].values())
+        if len(events) != saved or chain_problems(events):
+            raise ValueError('saved event chain fails integrity verification')
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        restored = authoritative_state(scratch, events)
         if restored.state_root() != document['state_root']:
-            raise ValueError('restored state differs from saved state root')
+            raise StateRootMismatch('restored state differs from saved state root')
         return restored
 
 
@@ -333,7 +385,8 @@ def round_trip(state, space_name: str, space_ft: set | None = None):
         (scratch / "org").mkdir()
         (scratch / "org" / "next_actions.org").write_text(fresh, encoding="utf-8")
         import_space(scratch, org_file=scratch / "org" / "next_actions.org")
-        restored = _fingerprint(fold(read_events(scratch)), space_ft, space=space_name)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        restored = _fingerprint(authoritative_state(scratch), space_ft, space=space_name)
     return live, restored, fresh
 
 
@@ -363,13 +416,14 @@ def verify(space: Path) -> tuple[bool, str]:
         document = json.loads(snapshot_path.read_text(encoding='utf-8'))
         if hashlib.sha256(cp.read_bytes()).hexdigest() != document.get('org_sha256'):
             return False, 'saved Org checkpoint differs from its snapshot checksum'
-        restored = _restore(document, space.name)
+        restored = _restore(document, space.name, source_space=space)
     except FileNotFoundError:
         return False, 'legacy Org-only checkpoint has no complete ledger snapshot; write a new checkpoint'
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         return False, f'saved checkpoint cannot be restored ({type(exc).__name__})'
     detail = f'{len(restored.items)} item(s), including full payloads and history, restored from saved checkpoint'
-    if restored.state_root() != fold(read_events(space)).state_root():
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    if restored.state_root() != authoritative_state(space).state_root():
         detail += ' [valid older restore point; current ledger has changed — run: write]'
     return True, detail
 

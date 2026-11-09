@@ -13,6 +13,14 @@
 #   tool_patterns  regexes on the tool name (MCP tools carry the verb there)
 #   patterns       regexes (case-insensitive) on the call's text: a Bash
 #                  command, a URL, a file path, or the JSON of an MCP input
+#                  (the JSON always follows, keys sorted; a pattern anchored on
+#                  '"file_path": "' or '"command": "' reads that one field, so
+#                  a file whose CONTENT quotes a command is not that command)
+#   per_transaction  (payment) a bare grant of the effect covers only a call
+#                  matching one of `approved`; any other call needs the grant
+#                  `<effect>@<fingerprint>` of that exact call (tool_policy
+#                  .fingerprint) -- MEM-04, "approved that exact transaction"
+#   approved       regexes naming approved destinations (per_transaction)
 #
 # Public file — generic providers and verbs only, never a customer host.
 # Missing an effect here fails OPEN for that call: the outer controls (egress
@@ -20,27 +28,32 @@
 # that is too broad fails CLOSED on a legitimate call, which the refusal on
 # the ledger makes visible the next morning; loosen it here, not in code.
 version: 1
-# Only tools that can ACT are classified. Read, Grep, Glob, Edit and Write
-# cannot send, pay or deploy by themselves — reading deploy.sh is not a
-# deployment — so they are never an effect; the outer file-level guards
-# (org_guard, restricted paths) own those.
+# Only tools that can ACT are classified for sending, paying and deploying.
+# Read, Grep, Glob, Edit and Write cannot send, pay or deploy by themselves —
+# reading deploy.sh is not a deployment. Four effects are about files, and
+# name the file tools themselves: secret.search (Read/Grep of a secret store),
+# guard.disable (Edit/Write of a guard or of the settings wiring it),
+# ledger.forge (a hand-written line in an event log). Before these existed, an
+# agent could read another agent's own env file or stub out its own guard
+# unrefused.
 # Every tool that can reach the world, across the runtimes the fleet runs:
 # Claude Code / the SDK (Bash, WebFetch, mcp__*) and Hermes (terminal,
 # execute_code, write_file, patch, web_extract, browser_*, computer_use,
 # delegate_task, cronjob). A tool absent from this list is invisible to the
-# classifier, which is why Winston — a Hermes agent — was ungoverned until
-# 2026-09-07 while nightshift and Miles were not.
+# classifier, which is how an agent on the Hermes runtime once went ungoverned
+# while the Claude Code agents were governed.
 acting_tools: &acting
   ["Bash", "WebFetch", "mcp__*",
    "terminal", "execute_code", "write_file", "patch", "web_extract",
    "browser_*", "computer_use", "delegate_task", "cronjob"]
+# The file tools of both runtimes (Claude Code; Hermes read_file/search_files).
+file_writers: &writers ["Edit", "Write", "MultiEdit", "NotebookEdit", "write_file", "patch"]
 effects:
   email.send:
     tools: *acting
     tool_patterns:
       - 'send_?(e?mail|message)'
     patterns:
-      - '\bwinston_send\.py\b'
       - '\bsendmail\b'
       - '\bmail\s+-s\b'
       - '\bmutt\s'
@@ -48,8 +61,80 @@ effects:
       - 'gmail/v1/users/[^/\s]+/(messages|drafts)/send'
       - 'api\.(sendgrid|mailgun|resend|postmarkapp|sparkpost)\.'
       - '\bgmail_send\b'
+  # A message to the owner's own chat (the chief-of-staff agent's Telegram
+  # sender). Not e-mail
+  # and not public: agents may propose it, a grant releases it (AGT-1, MOD6).
+  #
+  # OpenClaw's own senders (the OpenClaw agent, by owner decision):
+  # `message` acts in a chat channel, `conversations_send` delivers to an
+  # external conversation. The OpenClaw gate (openclaw_plugin/gate.py) names a
+  # `message` call `openclaw_message.<action>` (no action = send), so only its
+  # reading actions stay open. Until then both passed the gate unchecked.
+  message.send:
+    tools: ["Bash", "WebFetch", "mcp__*",
+            "terminal", "execute_code", "write_file", "patch", "web_extract",
+            "browser_*", "computer_use", "delegate_task", "cronjob",
+            "openclaw_message.*", "conversations_send"]
+    tool_patterns:
+      - '^openclaw_message\.(?!(?:reactions|read|list-pins|permissions|thread-list|search|sticker-search|member-info|role-info|emoji-list|channel-info|channel-list|voice-status|event-list|download-file)$)'
+      - '^conversations_send$'
+    patterns:
+      - '\bwinston_send\.py\b'
+  # Speaking in public: a post, a tweet, a channel message. One agent's lane --
+  # never for the others, and a grant even for that one (AGT-1).
+  public.post:
+    tools: *acting
+    tool_patterns:
+      - '(create|post|publish)_?(tweet|post|status)'
+    # Posting scripts are judged by what a shell command DOES with them, not
+    # by being named (task W5; on 2026-10-22 `sed -n 1,40p lib/x_poster.py`
+    # was refused as a post). In a shell command (Bash, exec, terminal):
+    # reading the script (cat, head, sed -n, grep, git log/show ...) is not a
+    # post; running it with nothing but its `read_only_flags` (flag: how many
+    # values it takes) is not a post; every other use is one -- the posting
+    # flag, an abbreviation, an unknown flag, a positional, `python3 -c` or a
+    # heredoc that imports it, a wrapper or substitution the classifier does
+    # not read (fail closed). Any other tool, or any other field of the call,
+    # that names a script (with or without `.py`) counts as a post.
+    scripts:
+      x_poster.py:
+        read_only_flags: {--account: 1, --whoami: 0, --recent: 1}
+      x_post.py: {}
+      engagement_post.py: {}
+      chrome_poster.py: {}
+      autonomous_poster.py: {}
+      post_today_thread.py: {}
+    patterns:
+      - '(-X\s*POST|--request\s+POST|--data\b|\s-d\s)[^\n]*api\.(x|twitter)\.com/(2/tweets|1\.1/statuses/update)'
+      - 'api\.(x|twitter)\.com/(2/tweets|1\.1/statuses/update)\b[^\n]*(-X\s*POST|--request\s+POST|--data\b|\s-d\s)'
+      - 'api\.linkedin\.com/(v2/ugcPosts|rest/posts)'
+      - 'com\.atproto\.repo\.createRecord'
+      - 'api\.telegram\.org/bot[^\s]*/send\w*[^\n]*chat_id["=:\s]*@\w'
+  # A work product put on a hosted page or a shared link (MEM-17): it stays
+  # local until the owner says so. Artifact publishes by default -- an
+  # Artifact call is a publish unless its action only reads or shows.
+  page.publish:
+    tools: ["Artifact", "Bash", "WebFetch", "mcp__*",
+            "terminal", "execute_code", "write_file", "patch", "web_extract",
+            "browser_*", "computer_use", "delegate_task", "cronjob"]
+    patterns:
+      - '"action":\s*"publish"'
+      - '^(?![\s\S]*"(action|command|url|pattern)":)[\s\S]*"(file_path|file_paths|type_url)":'
+      - '\bgh\s+gist\s+create\b'
+      - '\bsurge\b[^\n]*\.surge\.sh\b'
+      - '\bnpx\s+surge\b'
+      - '\bnetlify\s+deploy\b'
+      - '\bvercel\b[^\n]*(--prod\b|\bdeploy\b)'
+      - '\bgh-pages\s+-d\b'
+      - '\bfirebase\s+deploy\b'
+      - '\bwrangler\s+pages\s+deploy\b'
   payment:
     tools: *acting
+    # MEM-04: one approval is one transaction. `approved` is the owner's list
+    # of destinations a bare `payment` grant may reach (empty: none, so every
+    # payment needs the grant of its own fingerprint). Owner-maintained.
+    per_transaction: true
+    approved: []
     tool_patterns:
       - '(create_)?(charge|payment|payout|transfer)'
       - 'place_?order'
@@ -62,13 +147,42 @@ effects:
       - '/(spot|futures|delivery|options)/[^\s]*orders\b'
       - 'hyperliquid[^\s]*/exchange\b'
       - '\b(eth|usdc|usdt|btc|bzz|icp)\b[^\n]{0,40}\b(send|transfer)\b'
+      # Any on-chain send, whatever the token: foundry `cast send`, a
+      # `--value`, an ERC-20 transfer call (AGT-7, MEM-04).
+      - '\bcast\s+send\b'
+      - '\bcast\s+[^\n]*--value\b'
+      - '\btransfer(From)?\(address,\s*uint256\)'
+      - '\b(send|transfer)\b[^\n]{0,40}\b(eth|usdc|usdt|btc|bzz|icp|sol|xdai)\b'
       - '\bdfx\s+(ledger\s+transfer|canister\s+call\s+\S+\s+(transfer|icrc1_transfer))'
+  agent.hire:
+    # Creating, changing or retiring an agent in the fleet (k3s): the hire
+    # controller and helm. An agent may PROPOSE a hire (`fleet-hire propose`);
+    # carrying one out waits for the owner's grant. The kill switch (fleetctl
+    # stop-all, a scale to zero) is deliberately not here: stopping never waits.
+    tools: ["Bash", "terminal", "execute_code", "delegate_task", "cronjob"]
+    patterns:
+      - '\bfleet-hire\s+(hire|retire)\b'
+      - '\bhelm\s+(install|upgrade|uninstall|rollback)\b'
   prod.deploy:
-    tools: *acting
+    # + OpenClaw's `gateway` tool updating its own runtime (update.run), which
+    # the gate names `openclaw_gateway.<action>`; reading config stays open.
+    tools: ["Bash", "WebFetch", "mcp__*",
+            "terminal", "execute_code", "write_file", "patch", "web_extract",
+            "browser_*", "computer_use", "delegate_task", "cronjob",
+            "openclaw_gateway.*"]
+    tool_patterns:
+      - '^openclaw_gateway\.update\.run$'
     patterns:
       - '\bgh\s+release\s+(create|upload)\b'
       - '\bnpm\s+publish\b'
+      - '\b(pnpm|yarn)\b[^\n;&|]*\bpublish\b'
+      - '\bcargo\s+publish\b'
+      - '\bchangeset\s+publish\b'
       - '\btwine\s+upload\b'
+      # a version tag is what fires a release workflow (MEM-54)
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(--tags|--follow-tags)(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(\+?refs/tags/\S+|\+?v\d+(\.\d+)+\S*)(\s|$)'
+      - '\bgh\s+workflow\s+run\s+[^\n;&|]*release'
       - '\bdocker\s+push\b'
       - '\bkubectl\s+(apply|rollout|delete|scale)\b'
       - '\bterraform\s+(apply|destroy)\b'
@@ -77,3 +191,206 @@ effects:
       - '\bdeploy\.sh\b'
       - '\bagent_update\.py\b[^\n]*--apply'
       - '\bdistribute\.sh\b'
+  # ── agents never; they wait for the owner (AGT-7, MEM-03..11, AGT-5, AGT-10) ──
+  trading:
+    tools: *acting
+    tool_patterns:
+      - '(cancel|amend)_?orders?|swap|withdraw'   # place_order is payment already
+    patterns:
+      # a trading-module script that acts: buys, sells, swaps, trims, withdraws,
+      # starts or stops a bot -- or any trading script run with --live/--side
+      - 'modules/trading/\S*\b(sell|buy|swap|withdraw|kill_switch|trim|ladder_trader|accumulator|hyperliquid_executor|bzz_coordinator|portfolio_manager|single_writer)\w*\.(py|sh)\b'
+      - 'modules/trading/\S*\b(stop|start|restart)_\w*bots?\w*\.(py|sh)\b'
+      - 'modules/trading/\S+\.(py|sh)\b[^\n]*\s--(live|side|execute|confirm)\b'
+      - 'api\.gateio\.ws/[^\s"]*/(orders|price_orders|withdrawals)'
+  credential.rotate:
+    tools: *acting
+    patterns:
+      - '\bgh\s+secret\s+(set|delete|remove)\b'
+      - '\b(create|delete|update)-access-key\b'
+      - '\bgcloud\s+iam\s+service-accounts\s+keys\s+(create|delete)\b'
+      - '\bssh-keygen\b[^\n]*\s-f\s'
+      - '\bcreds(\.py)?\s+(set|remove|delete)\b'   # `creds rotate` is a read-only checklist
+      - '\bdistribute\.sh\b'
+      - '\bsecurity\s+(add|delete)-(generic|internet)-password\b'
+  gov.submit:
+    tools: *acting
+    patterns:
+      # filing endpoints and filing CLIs; reading a public gov page is not one
+      - 'xmlgw\.companieshouse\.gov\.uk'
+      - 'api\.company-information\.service\.gov\.uk/[^\s"]*/(filings?|transactions)\b'
+      - '(test-)?api\.service\.hmrc\.gov\.uk'
+      - '\bedavki\.durs\.si'
+      - '\bajpes\.si/[^\s"]*(oddaj|submit|vloga)'
+      - '\bchfile\s+submit\b'
+      - '\buk_ltd\.py\b[^\n]*\s--submit\b'
+      # a browser click on a submit control of a government site
+      - '"selector":\s*"[^"]*(submit|file|send|confirm)[^"]*"[^\n]*\.(gov\.uk|gov\.si|durs\.si|ajpes\.si)\b'
+  code.merge:
+    tools: *acting
+    tool_patterns:
+      - 'merge_pull_request|merge_pr\b'
+    patterns:
+      - '\bgh\s+pr\s+merge\b'
+      - '/pulls/\d+/merge\b'
+  secret.search:
+    tools: ["Bash", "Read", "Grep", "read_file", "search_files", "terminal", "execute_code", "mcp__*"]
+    patterns:
+      # reading a secret store: an env file, the secrets tree, a key file
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*(^|/|\w)\.env(\.(?!example|sample|template|dist)\w+)?"'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/(\.datacore/secrets|\.ssh)(/|")'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.(pem|p12|key)"'
+      # grepping a whole home, a Data root or env files for secret names
+      - '(?s)^(?=.*"pattern":\s*"[^"]*(API_KEY|TOKEN|SECRET|PASSW|PRIVATE_KEY|CREDENTIAL))(?=.*("path":\s*"(~|/Users/[^/"]+|/home/[^/"]+|/root|/srv/[^/"]+)(/Data)?/?"|"glob":\s*"[^"]*env|"path":\s*"[^"]*(\.env|/secrets)))'
+      # a shell reader over an env file, locally or through ssh
+      - '"command":\s*"(?:[^"\\]|\\.)*\b(cat|less|more|head|tail|grep|egrep|rg|ag|awk|sed|strings|source|xxd|bat|cp|scp|base64)\b(?:[^"\\]|\\.)*(\w|/|\*)\.env\b(?![.-]?(example|sample|template))'
+      - '"command":\s*"(?:[^"\\]|\\.)*\b(grep|egrep|rg|ag)\b(?:[^"\\]|\\.)*(API_KEY|_TOKEN|\bTOKEN\b|SECRET|PASSW|PRIVATE_KEY)(?:[^"\\]|\\.)*\s(~|\$HOME|/Users/\w+|/home/\w+)(/Data)?/?(\s|\\"|$)'
+      # the keychain and other password stores
+      - '\bsecurity\s+(find-(generic|internet)-password|dump-keychain)\b'
+      - '\bsecret-tool\s+lookup\b'
+      - '\bpass\s+show\b'
+      - '\bop\s+(read|item\s+get)\b'
+  guard.disable:
+    tools: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "terminal", "execute_code", "write_file", "patch"]
+    patterns:
+      # a git guard bypassed
+      - '"command":\s*"(?:[^"\\]|\\.)*\bSKIP_PRE_PUSH='
+      - '"command":\s*"(?:[^"\\]|\\.)*--no-verify\b'
+      - '"command":\s*"(?:[^"\\]|\\.)*\bcore\.hooksPath\b'
+      - '"command":\s*"(?:[^"\\]|\\.)*\bgit\s+commit\b(?:[^"\\]|\\.)*\s-n\b'
+      # the harness settings that wire the guards, the guards, the policy
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/\.claude/settings(\.local)?\.json"'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/\.datacore/(lib/hooks|githooks)/'
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*/\.datacore/(config/(tool_effects|approvals_policy)\.yaml|lib/tool_policy\.py)"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\brm\b|\bchmod\b)(?:[^"\\]|\\.)*(\.claude/settings(\.local)?\.json|\.datacore/(lib/hooks|githooks)/|tool_effects\.yaml|approvals_policy\.yaml)'
+  ledger.forge:
+    tools: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "terminal", "execute_code", "write_file", "patch"]
+    patterns:
+      # only the ledger library writes an event log (AGT-10): no hand edit,
+      # no shell redirect, in anyone's name
+      - '"(file_path|path)":\s*"(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[^"/]+\.jsonl"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>>?|\btee\b(\s+-a)?|\bsed\s+-i\b|\btruncate\b)(?:[^"\\]|\\.)*\.datacore/(events|telemetry)/[\w.-]+\.jsonl'
+      # nobody goes past the ledger (owner decision): no override
+      # flag (there is none left to honour, and setting one is the intent),
+      # and no delete, move or rewrite of a sequence witness or stop record.
+      # An unattended job once did `echo N >`, `rm` and the override on a
+      # server and forked a log. Reading a mark stays open.
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*DATACORE_HWM_OVERRIDE\s*='
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*\b(environ|putenv|setenv)\b(?:[^"\\]|\\.){0,16}DATACORE_HWM_OVERRIDE'
+      - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*\.datacore/state/seq-hwm(/|")'
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*((?<![\w.-])(rm|mv|cp|unlink|truncate|shred|tee|ln|install|rsync|rename)\b|\bsed\s+-i|\bperl\s+-\w*i|(?<![0-9&>-])>{1,2}(?!&|\s*/dev/null)|\s-delete\b|\.(unlink|rename|replace|write_text|write_bytes|touch)\(|\bos\.(remove|unlink|rename|replace)\b|\bshutil\.)(?:[^"\\]|\\.)*seq-hwm'
+      - '"(command|code)":\s*"(?:[^"\\]|\\.)*seq-hwm(?:[^"\\]|\\.)*((?<![\w.-])(rm|mv|cp|unlink|truncate|shred|tee|ln|install|rsync|rename)\b|\bsed\s+-i|\bperl\s+-\w*i|(?<![0-9&>-])>{1,2}(?!&|\s*/dev/null)|\s-delete\b|\.(unlink|rename|replace|write_text|write_bytes|touch)\(|\bos\.(remove|unlink|rename|replace)\b|\bshutil\.)'
+  calendar.respond:
+    tools: *acting
+    tool_patterns:
+      - 'respond_to_event|rsvp'
+    patterns:
+      - '"responseStatus"'
+      - '"sendUpdates":\s*"(all|externalOnly)"'
+      - '\bgcalcli\s+(respond|agenda\b[^\n]*--respond)\b'
+  data.egress:
+    tools: *acting
+    patterns:
+      # Data leaving to a destination no list approves (MEM-04). The approved
+      # destinations are the install's own hosts: {fleet_hosts} is filled from
+      # its machine roster (registry/infrastructure.yaml: names and ssh
+      # aliases, plus localhost) by tool_policy.load_effects -- never a list
+      # of ours written here (INS-3).
+      - '\bcurl\b[^\n]*(--upload-file|\s-T\s)'
+      - '\b(transfer\.sh|file\.io|0x0\.st|bashupload|termbin|paste\.rs|pastebin\.com)\b'
+      - '\baws\s+s3\s+(cp|sync|mv)\b[^\n]*\ss3://'
+      - '\bgsutil\s+(-m\s+)?(cp|rsync|mv)\b[^\n]*\sgs://'
+      - '\brclone\s+(copy|copyto|sync|move|moveto)\b'
+      - '\b(scp|rsync)\b[^\n;&|]*\s(?:[\w.-]+@)?(?!(?:{fleet_hosts})\b)[\w.-]+:(?!//)'
+  history.rewrite:
+    tools: *acting
+    patterns:
+      # a force push rewrites whatever it lands on (MEM-10)
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(-f|--force|--force-with-lease(=\S*)?|--mirror|--delete|-d)(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s\+[\w/.:-]+'
+  # ── the audit only reads (AUD-2, spec .datacore/specs/cross-model-audit.md) ──
+  # `write` is any change: a file tool on anything but an audit's own findings
+  # file (<system space>/1-tracks/dev/audits/nightly/<date>/<agent>.yaml, no `..`;
+  # {audit_agents} is filled by tool_policy from principals.yaml cross_model_audit.agents),
+  # a shell command that is not one read-only command (or a pipe/&& chain of
+  # them, no redirection, no substitution), code execution, and an MCP tool
+  # whose name is a verb of change. Every principal's call is classified; only
+  # the `auditor` principal lists it in never_effects, so it binds nobody else.
+  write:
+    tools: ["Bash", "terminal", "execute_code", "Edit", "Write", "MultiEdit", "NotebookEdit",
+            "write_file", "patch", "mcp__*", "cronjob", "delegate_task", "computer_use"]
+    tool_patterns:
+      - '^(execute_code|NotebookEdit|cronjob|delegate_task|computer_use)$'
+      - '^mcp__.*(add|create|update|delete|remove|set|write|send|mark|complete|capture|archive|move|edit|post|merge|comment|trigger|pause|resume|decide|submit|learn|forget|promote|ingest|navigate|refresh|escalate|delegate)'
+    patterns:
+      - '"(file_path|notebook_path|path)":\s*"(?!(?![^"]*\.\./)(?:[^"\\]*/)?1-tracks/dev/audits/nightly/\d{4}-\d{2}-\d{2}/(?:{audit_agents})\.yaml")'
+      - '"command":\s*"(?!\s*(?:git(?:\s+-C\s+[^\s;&|<>"\\]+)?\s+(?:log|show|diff|blame|grep|ls-files|ls-tree|rev-parse|cat-file|status|shortlog|describe|rev-list|merge-base)|cat|head|tail|grep|egrep|rg|ls|wc|find|sed\s+-n|sort|uniq|stat|nl|cut|tr|pwd|date|echo|jq|diff|comm|file|basename|dirname|realpath|tree|column)\b(?:(?!\s-(?:delete|exec|execdir|ok|okdir|fprint\w*|fls)\b)[^;&|<>`$"\\]|\\[^n\\]|2>&1|2>/dev/null)*(?:\s*(?:\||&&)\s*(?:git(?:\s+-C\s+[^\s;&|<>"\\]+)?\s+(?:log|show|diff|blame|grep|ls-files|ls-tree|rev-parse|cat-file|status|shortlog|describe|rev-list|merge-base)|cat|head|tail|grep|egrep|rg|ls|wc|find|sed\s+-n|sort|uniq|stat|nl|cut|tr|pwd|date|echo|jq|diff|comm|file|basename|dirname|realpath|tree|column)\b(?:(?!\s-(?:delete|exec|execdir|ok|okdir|fprint\w*|fls)\b)[^;&|<>`$"\\]|\\[^n\\]|2>&1|2>/dev/null)*)*\s*\")'
+  # ── agents wait for a grant: a trial item first, then the owner's go (MEM-02) ──
+  push.shared:
+    tools: *acting
+    patterns:
+      # a push to a shared branch, or into another branch by refspec; an
+      # agent pushes the branch it made (nightshift/..., autofix...)
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s(\+?(HEAD:)?(refs/heads/)?(main|master|develop|production|releases?(/\S+)?))(\s|$)'
+      - '\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*\s[^\s:]*:(?!(refs/heads/)?(nightshift|autofix|agent)[/-])\S+'
+  data.delete:
+    tools: *acting
+    patterns:
+      # recursive delete of anything but a temp or build directory
+      - '\brm\s+(?:-\w+\s+)*-\w*[rR]\w*(?:\s+-\w+)*\s+(?!(/tmp/|/private/tmp/|/var/folders/|\\?"?\$\{?TMPDIR|\./?)?(node_modules|dist|build|__pycache__|\.pytest_cache|\.venv|target|\.cache|\.next)(/|\s|$))(?!/tmp/|/private/tmp/|/var/folders/|\\?"?\$\{?TMPDIR)'
+      - '\bfind\b[^\n]*\s-delete\b'
+      - '\bfind\b[^\n]*-exec\s+rm\b'
+      - '\bgit\b[^\n;&|]*\bbranch\s+(-D|--delete\s+--force|-d\s+-f)\b'
+      - '\bgit\b[^\n;&|]*\breset\s+--hard\b'
+      - '\bgit\b[^\n;&|]*\bclean\s+-\w*f'
+      - '\bgh\s+(issue|repo|release)\s+delete\b'
+  bulk.change:
+    tools: *acting
+    patterns:
+      # closing, cancelling or renaming many things in one step
+      - '\b(for|while|xargs)\b[^\n]*\bgh\s+(issue|pr)\s+(close|edit|lock)\b'
+      - '\bfind\b[^\n]*-exec\s+(rename|mv)\b'
+      - '\brename\s+(-\w+\s+)*[''"]?s/'
+      - '\bxargs\b[^\n]*\b(mv|rename)\b'
+      - '\bfor\b[^\n]*;\s*do\b[^\n]*\b(git\s+)?mv\b'
+  # ── agents never: the judge is not the defendant (MEM-30) ──
+  eval.edit:
+    # A promise eval and the harness it runs on are written by the eval
+    # author and changed only with the owner; a builder never edits its own
+    # judge. Reading and running them stays open.
+    tools: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "terminal", "execute_code", "write_file", "patch"]
+    patterns:
+      - '"(file_path|path|notebook_path)":\s*"(?:[^"\\]|\\.)*/(test_promise_[^"/]*|agent_eval|_audit_contract|_inbox_job_harness)\.py"'
+      - '"command":\s*"(?:[^"\\]|\\.)*(>(?!&)|\btee\b|\bsed\s+-i|\bperl\s+-\w*i|\bmv\b|\bcp\b|\brm\b|\bgit\s+(rm|mv|checkout)\b|\btruncate\b|\bchmod\b)(?:[^"\\]|\\.)*\b(test_promise_\w*|agent_eval|_audit_contract|_inbox_job_harness)\.py\b'
+  # ── agents never: uncommitted work belongs to other writers ──
+  # A nightly inbox job's agent once ran `git stash` in the personal space to
+  # get a pull through; the stash swallowed five uncommitted events of another
+  # agent's log, the ledger (correctly) refused the rewound log and
+  # the hash-chain check went red. In a ledger space the working tree holds
+  # other writers' event logs, and the ledger's rule is "commit, never stash"
+  # (ledger_transport.py). So no agent hides or discards uncommitted work, in
+  # any form: stash (even `list`: the verb is the intent), reset, checkout or
+  # restore of paths, a forced checkout/switch, clean. A git problem is
+  # reported, not tidied. `git checkout <branch>`, `-b`, add, commit -- <paths>,
+  # pull, push and every read stay open. Matched on the git subcommand after
+  # any global options (-C <dir>, -c k=v), and on an argv list in code.
+  worktree.discard:
+    tools: *acting
+    patterns:
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--(?:git-dir|work-tree|namespace)(?:=\S+|[ \t]+\S+)|--?[\w-]+(?:=\S+)?))*[ \t]+(?:stash|reset|restore|clean)\b'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout\b[^\n;&|]*[ \t]--(?=[ \t"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout\b[^\n;&|]*[ \t](?:-f|--force|-p|--patch|--ours|--theirs|-m|--merge)(?=[ \t"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout[ \t]+(?:[^\s;&|"-][^\s;&|"]*[ \t]+)*(?:\.|\./[^\s;&|"]*|[^\s;&|"]*\.[A-Za-z]\w{0,5}|[^\s;&|"]*[*?][^\s;&|"]*)(?=[ \t;&|"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+checkout[ \t]+[^\s;&|"-][^\s;&|"]*[ \t]+[^\s;&|"-]'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+switch\b[^\n;&|]*[ \t](?:-f|--force|--discard-changes)(?=[ \t"]|$)'
+      # the same verbs as an argv list in code: subprocess.run(["git", "stash"])
+      - '\\?["'']git\\?["''](?:\s*,\s*\\?["''][^"''\\]*\\?["''])*\s*,\s*\\?["''](?:stash|reset|restore|clean)\\?["'']'
+      # A pull, rebase or merge that stashes by itself (owner decision,
+      # OPS-10): when the stash does not re-apply, the work stays
+      # set aside -- the incident in one command. The flag, the one-call `-c`
+      # config (a bare key means true), setting that config, and argv in code.
+      # `--no-autostash` and `autoStash=false` stay open.
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+(?:pull|rebase|merge)\b[^\n;&|]*[ \t]--autostash(?=[ \t"]|$)'
+      - '\bgit\b[^\n;&|]*[ \t]-c[ \t]*(?:rebase|merge)\.autostash(?:=["'']?(?:true|yes|on|1)["'']?)?(?=[ \t"]|$)'
+      - '\bgit(?:[ \t]+(?:-[Cc][ \t]+\S+|--?[\w-]+(?:=\S+)?))*[ \t]+config\b[^\n;&|]*[ \t](?:rebase|merge)\.autostash[ \t]+["'']?(?:true|yes|on|1)\b'
+      - '\\?["'']git\\?["''](?:\s*,\s*\\?["''][^"''\\]*\\?["''])*\s*,\s*\\?["'']--autostash\\?["'']'

@@ -154,7 +154,9 @@ def _collect_active(
 
     Raises GenError on a name active in more than one requested section.
     """
-    data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    registry_path.read_text(encoding="utf-8")  # a missing registry still raises here
+    from registry_overlay import load_registry_file  # + the private agents.local.yaml
+    data = load_registry_file(registry_path)
 
     name_sections: Dict[str, List[str]] = {}
     rendered: Dict[str, str] = {}

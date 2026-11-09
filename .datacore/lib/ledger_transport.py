@@ -41,6 +41,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -87,6 +88,32 @@ def _net_env() -> dict:
     return env
 
 
+def _repair_weekdays(space: Path) -> list[str]:
+    """Fix wrong day names in staged .org/.md files; return the paths repaired.
+
+    Uses validate_org_dates -- the pre-commit hook's own validator -- so the
+    two can never disagree about what is wrong, and its `_fix_file`, which
+    rewrites under the org lock. Files it cannot read are left to the hook.
+    """
+    try:
+        import validate_org_dates as dates
+    except ImportError:
+        return []
+    rc, out, _ = _git(space, "diff", "--cached", "--name-only", "--diff-filter=ACM")
+    repaired = []
+    for rel in (out or "").splitlines() if rc == 0 else []:
+        if not rel.endswith((".org", ".md")) or dates.is_archived(rel):
+            continue
+        path = space / rel
+        if not path.is_file():
+            continue
+        result = dates._fix_file(path)
+        if result and result[1]:
+            _git(space, "add", "--", rel)
+            repaired.append(rel)
+    return repaired
+
+
 def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
     try:
         r = subprocess.run(["git", *args], cwd=repo, capture_output=True,
@@ -100,8 +127,9 @@ def _git(repo: Path, *args: str, timeout: int = 120) -> tuple[int, str, str]:
 _WRITER_LOG = re.compile(r"\.datacore/events/[^/]+\.jsonl")
 
 
-def _merge(space: Path, ref: str) -> tuple[bool, str, list[str]]:
-    """Merge `ref`. (ok, detail, writer logs resolved as prefix extensions).
+def _merge(space: Path, ref: str, *, keep_both: bool = False) -> tuple[bool, str, list[str], list[dict]]:
+    """Merge `ref`. (ok, detail, writer logs resolved as prefix extensions,
+    content conflicts kept for a person).
 
     A per-writer log is append-only, so when both sides appended to it after a
     common base and one copy is an exact prefix of the other, git reports a
@@ -115,41 +143,399 @@ def _merge(space: Path, ref: str) -> tuple[bool, str, list[str]]:
     prefix-proven, working copy checked against both stages) -- and only when
     EVERY conflicted path is a writer log it accepts. Anything else, a fork
     included, aborts the whole merge exactly as before: nothing half-merged.
+
+    `keep_both` (the default branch's merge only, SYN-9): every other conflicted
+    file is resolved by `_keep_both` and the merge completes, so one file
+    waiting for a person no longer stops the whole space. A writer log that is
+    not a prefix extension is a fork and still aborts everything.
     """
     rc, mout, err = _git(space, "merge", "--no-edit", ref)
     if rc == 0:
-        return True, "", []
+        return True, "", [], []
     # BOTH streams. git reports conflicts on STDOUT ("CONFLICT (content):
     # Merge conflict in ...") and leaves stderr empty, so capturing only
     # stderr yields a failure with a blank reason — the identical defect
     # that hid a nine-day auth outage behind `claude -p failed: `.
     detail = "\n".join(x for x in (mout.strip(), err.strip()) if x)
+    ok, detail, logs, kept = resolve_in_progress(space, detail, keep_both=keep_both)
+    if ok:
+        return True, detail, logs, kept
+    _git(space, "merge", "--abort")
+    return False, detail, [], []
+
+
+def resolve_in_progress(space: Path, detail: str = "", *, keep_both: bool = False
+                        ) -> tuple[bool, str, list[str], list[dict]]:
+    """Finish a merge git stopped on, if every conflict has a lossless answer.
+
+    (ok, detail, writer logs resolved, conflicts kept for a person). On ok the
+    merge is committed; otherwise the caller runs `git merge --abort`, which
+    undoes anything this wrote, and nothing is half-merged.
+    Shared by converge and the fleet sweep (git_fleet_sync), so both answer a
+    conflict the same way.
+    """
     from resolve_ledger_conflicts import resolve_file, unmerged
     try:
         names = unmerged(space)
-        if names and all(_WRITER_LOG.fullmatch(n) for n in names):
-            for name in names:
-                resolve_file(space, name)
-            rc, aout, aerr = _git(space, "add", "--", *names)
-            if rc == 0 and not unmerged(space):
-                rc, cout, cerr = _git(space, "commit", "--no-edit", "-q")
-                if rc == 0:
-                    return True, detail, names
-                detail += "\n" + (cout + cerr).strip()
+        if not names:
+            return False, detail, [], []
+        logs = [n for n in names if _WRITER_LOG.fullmatch(n)]
+        rest = [n for n in names if n not in logs]
+        if rest and (not keep_both or any(n.startswith(".datacore/events/") for n in rest)):
+            return False, detail, [], []
+        stages = _unmerged_stages(space) if rest else {}
+        if rest and any(1 not in s and (2 not in s or 3 not in s) for s in stages.values()):
+            # Added on one side only yet unmerged: a rename/directory case this
+            # does not guess at.
+            return False, detail, [], []
+        for name in logs:
+            resolve_file(space, name)
+        if logs:
+            rc, aout, aerr = _git(space, "add", "--", *logs)
+            if rc != 0:
+                return False, detail + "\n" + (aout + aerr).strip(), [], []
+        done = [_keep_both(space, name, stages[name]) for name in rest]
+        if unmerged(space):
+            return False, detail, [], []
+        # A .org file merged task by task with nothing left to decide needs no
+        # person: it is named in the merge commit, and no task is filed for it.
+        kept = [k for k in done if k.get("needs_person", True)]
+        settled = [k for k in done if not k.get("needs_person", True)]
+        msg = []
+        if settled:
+            msg += ["-m", f"sync: merge; {', '.join(k['path'] for k in settled)} merged task by "
+                          f"task on :ID: (nothing left for a person)"]
+        if kept:
+            # The commit itself is the record of what waits: one trailer per
+            # file, read back by waiting_conflicts on every later sync.
+            for k in kept:
+                k["task"] = _conflict_item_id(space, k)
+            msg += ["-m", f"sync: merge; conflict in {', '.join(k['path'] for k in kept)} "
+                          f"kept for a person (a task names what to settle)",
+                    "-m", "\n".join(f"{CONFLICT_TRAILER}: {k['task']} {k['path']}" for k in kept)]
+        msg = msg or ["--no-edit"]
+        rc, cout, cerr = _git(space, "commit", "-q", *msg)
+        if rc != 0:
+            return False, detail + "\n" + (cout + cerr).strip(), [], []
+        _, merge, _ = _git(space, "rev-parse", "HEAD")
+        for k in kept:
+            k["merge"] = merge.strip()
+            _, blob, _ = _git(space, "rev-parse", f"HEAD:{k['path']}")
+            k["blob"] = blob.strip()
+        return True, detail, logs, kept
     except (OSError, ValueError, TypeError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        detail += f"\nnot a prefix extension: {exc}"
-    _git(space, "merge", "--abort")
-    return False, detail, []
+        return False, detail + f"\nnot a prefix extension: {exc}", [], []
+
+
+# ── a content conflict waits for a person; the rest of the space flows ─────
+#
+# SYN-9, and the owner's decision of 2026-09-30: "let's avoid creating multiple
+# copies and excessive backups. If there are conflicting files, the conflict
+# should be resolved. It can be a task on its own, even."
+#
+# So a conflicted file is resolved IN PLACE and the merge completes: no copy
+# files, no side branch, no parallel commit. A text file takes git's `union`
+# resolution -- both sides' lines, no markers -- which is what the fleet's
+# .gitattributes already does for journals (deployed 2026-09-02); each side's
+# version also stays in history. A file union cannot hold (binary) keeps this
+# host's copy; a file one side deleted keeps the surviving edit. Then ONE
+# ledger task, addressed to the owner, names the space, the file and both
+# commits, and every sync names the file again until someone edits it or
+# closes the task.
+
+CONFLICT_KEY = "sync_conflict"
+CONFLICT_TRAILER = "Sync-Conflict"
+#: Days a conflict task has before it is due; after that the overdue reports own it.
+CONFLICT_DUE_DAYS = 7
+
+
+def _note_line(n: dict) -> str:
+    """One line of the conflict task for one thing the merge decided."""
+    what = f"task {n['id']} ({n.get('task') or ''})" if n.get("id") else "the file"
+    field_ = n.get("field", "")
+    if n.get("theirs") and n.get("ours") and n["ours"] != n["theirs"]:
+        return (f"{what}: {field_}: this host's value kept ({n['ours'][:160]!r}); "
+                f"the other host had {n['theirs'][:160]!r}")
+    return f"{what}: {field_}" + (f" ({n['theirs'][:160]})" if n.get("theirs") else "")
+
+
+def _unmerged_stages(space: Path) -> dict[str, dict[int, str]]:
+    """{path: {stage: blob}} for every unmerged path."""
+    rc, out, _ = _git(space, "ls-files", "-u", "-z")
+    stages: dict[str, dict[int, str]] = {}
+    for row in out.split("\0"):
+        if not row.strip():
+            continue
+        meta, _, path = row.partition("\t")
+        _mode, blob, stage = meta.split()
+        stages.setdefault(path, {})[int(stage)] = blob
+    return stages
+
+
+def _blob(space: Path, sha: str) -> bytes:
+    return subprocess.run(["git", "-C", str(space), "cat-file", "blob", sha],
+                          capture_output=True, timeout=60, check=True).stdout
+
+
+def _keep_both(space: Path, path: str, stages: dict[int, str]) -> dict:
+    """Resolve one conflicted path without losing either side; stage it."""
+    import tempfile
+    how, notes, needs_person = "union", [], True
+    if 2 not in stages or 3 not in stages:
+        merged, how = _blob(space, stages.get(2) or stages[3]), "kept the surviving edit"
+    else:
+        ours, theirs = _blob(space, stages[2]), _blob(space, stages[3])
+        base = _blob(space, stages[1]) if 1 in stages else b""
+        org = None
+        if path.endswith(".org") and not any(b"\0" in x for x in (ours, theirs, base)):
+            # Owner, 2026-09-30: "merge by task ID, that's why we have
+            # org-workspace". One task per :ID:, never a doubled one; a person
+            # is asked only for what the merge had to decide (org_sync_merge).
+            try:
+                from org_sync_merge import merge3
+                org = merge3(base.decode(), ours.decode(), theirs.decode())
+            except (UnicodeDecodeError, ImportError):
+                org = None
+        if org is not None:
+            merged, how = org.text.encode(), org.how
+            notes, needs_person = org.notes, org.needs_person
+        elif b"\0" in ours or b"\0" in theirs or b"\0" in base:
+            merged, how = ours, "binary: kept this host's copy"
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                files = []
+                for name, data in (("ours", ours), ("base", base), ("theirs", theirs)):
+                    f = Path(tmp) / name
+                    f.write_bytes(data)
+                    files.append(str(f))
+                merged = subprocess.run(["git", "merge-file", "-p", "--union", *files],
+                                        capture_output=True, timeout=60).stdout
+    (space / path).write_bytes(merged)
+    rc, out, err = _git(space, "add", "--", path)
+    if rc != 0:
+        raise RuntimeError(f"could not stage {path}: {(out + err).strip()}")
+    # The commit on each side that last wrote this file: the two versions.
+    _, head, _ = _git(space, "log", "-1", "--format=%H", "HEAD", "--", path)
+    _, other, _ = _git(space, "log", "-1", "--format=%H", "MERGE_HEAD", "--", path)
+    return {"path": path, "how": how, "ours": head.strip(), "theirs": other.strip(),
+            "notes": notes, "needs_person": needs_person}
+
+
+def _conflict_item_id(space: Path, k: dict) -> str:
+    import hashlib
+    key = f"{Path(space).name}|{k['path']}|{k['ours']}|{k['theirs']}"
+    return "sync-conflict-" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def file_conflict_tasks(space: Path, kept: list[dict]) -> list[str]:
+    """One ledger task per kept conflict, filed once, committed (not pushed).
+
+    Deduplicated by an id derived from space, file and both commits, checked
+    against the fold before appending -- the same rule jobs/autofix.py uses, so
+    a repeat never spends the writer's daily creation allowance. Returns what
+    each conflict is known by: the task id, or why no task could be filed (the
+    sync report still names the file either way).
+    """
+    if not kept:
+        return []
+    from datetime import datetime, timedelta, timezone
+    from actor_identity import this_actor
+    from ledger.fold import fold
+    from ledger.log import read_events
+    from ledger.policy import guarded_append
+    import roster
+    out, filed = [], []
+    try:
+        actor = this_actor()
+        log = EventLog(space, actor)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        known = authoritative_state(space).items if (space / ".datacore" / "events").is_dir() else {}
+    except Exception as exc:  # noqa: BLE001 -- the report still names the file
+        return [f"no task filed: {type(exc).__name__}: {exc}"[:200] for _ in kept]
+    owner = roster.owner()
+    for k in kept:
+        iid = _conflict_item_id(space, k)
+        k["task"] = iid
+        if iid in known:
+            out.append(iid)
+            continue
+        where = f"{Path(space).name}/{k['path']}"
+        decided = "".join(f"\n- {_note_line(n)}" for n in (k.get("notes") or [])[:20])
+        body = (f"Syncing {Path(space).name} met a content conflict in {k['path']}.\n"
+                f"- this host's commit: {k['ours']}\n- the other side's commit: {k['theirs']}\n"
+                f"- merged in: {k.get('merge', '?')} ({k['how']})\n"
+                + (f"What the merge decided or kept twice:{decided}\n" if decided else "")
+                + f"Both versions are in git history (git show <commit>:{k['path']}). "
+                f"Edit the file into the version that should stand and commit, or close this "
+                f"task if the merge is right; the rest of the space kept syncing, and every "
+                f"sync names the file (without a new alert) until then.")
+        # A deadline hands a conflict nobody settles to the ordinary overdue
+        # machinery (owner, 2026-09-30: alert once, then quiet; no new loop).
+        due = (datetime.now(timezone.utc) + timedelta(days=CONFLICT_DUE_DAYS)).date().isoformat()
+        payload = {"id": iid, "title": f"Resolve the sync conflict in {where}", "body": body,
+                   "state": "TODO", "deadline": due,
+                   CONFLICT_KEY: {kk: k.get(kk) for kk in
+                                  ("path", "ours", "theirs", "merge", "blob", "how")}}
+        if owner:
+            payload["assignee"] = owner
+        try:
+            guarded_append(log, "item.create", payload)
+        except Exception as exc:  # noqa: BLE001 -- the report still names the file
+            out.append(f"no task filed: {type(exc).__name__}: {exc}"[:200])
+            continue
+        filed.append(log.path_for("item.create", payload).relative_to(space).as_posix())
+        out.append(iid)
+    if filed:
+        rels = sorted(set(filed))
+        _git(space, "add", "--", *rels)
+        _git(space, "commit", "-q", "-m", "ledger: task for a sync conflict", "--only", "--", *rels)
+    return out
+
+
+def waiting_conflicts(space: Path) -> list[tuple[str, str]]:
+    """[(path, task id)] for conflicts still waiting for a person.
+
+    The record is the merge commit that kept the conflict (its Sync-Conflict
+    trailers), so this holds even when no task could be filed. A file waits
+    while it is still exactly what that merge wrote and its task, if the
+    ledger has it, is not closed. Most recent merge wins for a path.
+    """
+    return [(p, i) for p, i, _ in _waiting(space)]
+
+
+def split_waiting(space: Path, fresh=()) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(alert, handled): the waiting conflicts, split by whether to alert.
+
+    Owner, 2026-09-30: "alert once, then quiet". A conflict is ALERTED by the
+    sync that meets it (its path is in `fresh`: this sync merged around it and
+    filed the task). After that, while its task is open in the ledger, it is
+    HANDLED: every sync still names it, but it is not a failure and not a new
+    alert; if nobody settles it, the task's deadline hands it to the ordinary
+    overdue reports. A conflict with no task in this ledger (none could be
+    filed, or it has not arrived) stays an alert: nothing else tells a person.
+    """
+    alert, handled = [], []
+    for path, iid, filed in _waiting(space):
+        (handled if filed and path not in set(fresh) else alert).append((path, iid))
+    return alert, handled
+
+
+#: The one record, per host, of which conflict tasks a person has been alerted
+#: about. The box's cos_sync (shell, same path) and the fleet sync both read
+#: and write it, so whichever meets a conflict second says "already reported"
+#: (2026-10-01: sync-conflict-2df1b09a1f01 alerted from both).
+ALERTED_DIR = ("~", ".datacore", "state", "sync-conflict-alerted")
+_CONFLICT_ID = re.compile(r"sync-conflict-[0-9a-f]{12}")
+
+
+def _alerted_marker(task: str) -> Path | None:
+    if not isinstance(task, str) or not _CONFLICT_ID.fullmatch(task):
+        return None
+    return Path(os.path.expanduser(os.path.join(*ALERTED_DIR))) / task
+
+
+def conflict_already_alerted(task: str) -> bool:
+    marker = _alerted_marker(task)
+    return marker is not None and marker.exists()
+
+
+def mark_conflict_alerted(task: str) -> None:
+    marker = _alerted_marker(task)
+    if marker is None:
+        return
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+
+
+def _waiting(space: Path) -> list[tuple[str, str, bool]]:
+    """[(path, task id, the task is open in this ledger)], see waiting_conflicts."""
+    rc, out, _ = _git(space, "log", "--merges", "-F", f"--grep={CONFLICT_TRAILER}: ",
+                      "--format=%H%x00%B%x01", "HEAD")
+    if rc != 0 or not out.strip():
+        return []
+    seen, candidates = set(), []
+    for record in out.split("\x01"):
+        sha, _, body = record.strip().partition("\0")
+        for line in body.splitlines():
+            if not line.startswith(f"{CONFLICT_TRAILER}: "):
+                continue
+            iid, _, path = line[len(CONFLICT_TRAILER) + 2:].strip().partition(" ")
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            rc1, now, _ = _git(space, "rev-parse", f"HEAD:{path}")
+            rc2, then, _ = _git(space, "rev-parse", f"{sha}:{path}")
+            if rc1 == 0 and rc2 == 0 and now.strip() == then.strip():
+                candidates.append((path, iid))
+    if not candidates:
+        return []
+    try:
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        items = authoritative_state(space).items if (Path(space) / ".datacore" / "events").is_dir() else {}
+    except Exception:  # noqa: BLE001 -- an unreadable ledger cannot close anything
+        items = {}
+    closed = ("completed", "verified", "dismissed")
+    return sorted((p, i, i in items) for p, i in candidates
+                  if not (i in items and items[i].status in closed))
+
+
+_REPO_LOCK_TIMEOUT = 120
+
+
+def _lock_name(space: Path) -> str:
+    """One name per REPOSITORY, not per path: the resolved git-common-dir.
+
+    The publication record lives in the git-common-dir, which every linked
+    worktree shares, so a lock keyed by the path's basename let a publication
+    reserved from `worktree-7` interleave with the autosave in `0-personal`
+    (DatacoreSpec/Publication.lean, `basename_key_not_exclusive`). For the main
+    checkout this is still its basename, so existing lock names/inodes and
+    cooperating older processes are unchanged. A path git cannot resolve keeps
+    the old name.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE')}
+    try:
+        r = subprocess.run(['git', '-C', str(space), 'rev-parse', '--path-format=absolute',
+                            '--git-common-dir'], capture_output=True, text=True, timeout=30, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return space.name
+    if r.returncode or not r.stdout.strip():
+        return space.name
+    common = Path(r.stdout.strip()).resolve()
+    return common.parent.name if common.name == '.git' else common.name
+
+
+_HELD = threading.local()
+
 
 @contextmanager
 def _repo_lock(space: Path):
-    """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring."""
+    """Exclusive, per-repo, SAME-MACHINE ONLY. See the module docstring.
+
+    Re-entrant for the thread that already holds it: with one key per
+    repository, a nested acquisition from another checkout of the same
+    repository (formerly a different key) would otherwise wait out its own
+    deadline. Other threads and processes still block (flock is per open file).
+    """
     lock_dir = private_state_directory('locks')
-    lock = lock_dir / f"{space.name}.lock"
+    lock = lock_dir / f"{_lock_name(Path(space))}.lock"
+    held = getattr(_HELD, 'names', None)
+    if held is None:
+        held = _HELD.names = set()
+    if lock in held:
+        yield
+        return
     # Retain the existing lock name/inode for cooperating callers. Opening a
     # lock never truncates it or follows an alias; contention has a deadline.
-    with file_lock(lock, lock_path=lock, timeout=120):
-        yield
+    with file_lock(lock, lock_path=lock, timeout=_REPO_LOCK_TIMEOUT):
+        held.add(lock)
+        try:
+            yield
+        finally:
+            held.discard(lock)
 
 
 SHIPPED_REGISTRY = Path(__file__).resolve().parents[2] / ".datacore" / "registry" / "repositories.yaml"
@@ -161,16 +547,15 @@ def _data_root() -> Path:
 
 
 def _registry(root: Path) -> dict:
-    """The repository registry: the root's own copy, else the one that ships
-    with this code tree.
+    """The repository registry: the root's own copy, else the copy beside this
+    code tree.
 
-    A host whose code lives outside its data root (hermes: the runner clone
-    holds the code, `~/Data` there is a plain directory of space clones) has no
-    `.datacore/registry` under `--root`. Until 2026-09-06 `sync` globbed the
-    spaces and classified each against the code tree's registry; the
-    registry-driven sync that replaced it read `root/.datacore/registry` only
-    and raised FileNotFoundError twice a day on hermes (datacore-fleet-sync,
-    from 18:10 UTC 2026-09-06) — a traceback where an outcome belonged."""
+    `repositories.yaml` is installation-private and gitignored; the tracked
+    `repositories.yaml.example` is only a template and is never read here. A
+    host whose code lives outside its data root (a separate runner clone, with
+    the data root a plain directory of space clones) has no
+    `.datacore/registry` under `--root`, so the copy beside the code is the
+    fallback rather than a traceback."""
     import yaml
 
     class UniqueKeysLoader(yaml.SafeLoader):
@@ -187,6 +572,13 @@ def _registry(root: Path) -> dict:
     p = root / ".datacore" / "registry" / "repositories.yaml"
     if not p.exists() and not p.is_symlink() and SHIPPED_REGISTRY.exists():
         p = SHIPPED_REGISTRY
+    # NO REGISTRY AT ALL IS AN EMPTY ONE (ledger upgrade Phase 3, audit C12). A
+    # team's install has none of this installation's tracked list; its spaces
+    # declare themselves by marker (classify, SPC-9). Refusing everything here
+    # meant the marker was never read. A file that exists and is invalid still
+    # refuses below, and a repo neither registered nor marked is still refused.
+    if not p.exists() and not p.is_symlink():
+        return {}
     try:
         with p.open('rb') as source:
             raw = source.read(1_048_577)
@@ -205,6 +597,17 @@ def _registry(root: Path) -> dict:
         return entries
     except (OSError, UnicodeError, yaml.YAMLError, TypeError, ValueError):
         raise ValueError('repository registry is unavailable or invalid') from None
+
+
+def _marker_space(space: Path, root: Path) -> bool:
+    """Is `space` a top-level space under `root` that declares itself by marker?"""
+    try:
+        if Path(space).resolve().parent != Path(root).resolve():
+            return False
+        from spaces import read_marker
+        return read_marker(Path(space)) is not None
+    except (OSError, ValueError, RuntimeError, ImportError):
+        return False
 
 
 def classify(space: Path, root: Path | None = None) -> Result:
@@ -238,6 +641,15 @@ def classify(space: Path, root: Path | None = None) -> Result:
             import re as _re
             name = _re.sub(r"\.git$", "", out.strip().rstrip("/").split("/")[-1])
             entry = next((v for v in reg.values() if isinstance(v, dict) and v.get("repo") == name), None)
+
+    # A SPACE IS REGISTERED BY ITS MARKER (SPC-9). A new top-level space
+    # declares itself in `<space>/.datacore/config.yaml`, which discovery,
+    # context and the ledger already read; demanding a second entry in the
+    # tracked registry meant a new space silently never synced (audit C12).
+    # A space is knowledge by definition. Only a direct child of the data root:
+    # a nested (client) space keeps needing an explicit registry entry.
+    if not entry and _marker_space(space, root):
+        entry = {"category": "knowledge", "via": "space marker"}
 
     if not entry:
         return Result(False, "repository not in registry/repositories.yaml",
@@ -340,6 +752,46 @@ def foreign_writer_logs(space: Path) -> list[tuple[str, str, str]]:
     return out
 
 
+def _follow_origin_untrack(space: Path, ref: str) -> list[str]:
+    """Untrack here (working copy kept) what `ref` stopped tracking and ignores.
+
+    A generated file -- 5-plur's org/next_actions.org projection -- was tracked
+    again by an agent's commit and untracked on origin the same day. The host
+    still tracking it regenerates it every hour, so the merge met a dirty file
+    origin deletes and git refused it ("would be overwritten by merge") every
+    cycle from 2026-10-29. Only paths origin deleted since the merge base AND
+    lists in its own .gitignore: a deliberate untrack, never a lost file.
+    """
+    import tempfile
+    rc, base, _ = _git(space, "merge-base", "HEAD", ref)
+    if rc != 0 or not base.strip():
+        return []
+    rc, out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--name-only",
+                      "--diff-filter=D", base.strip(), ref)
+    gone = [p for p in out.splitlines() if p.strip()]
+    if not gone:
+        return []
+    rc, ignore, _ = _git(space, "show", f"{ref}:.gitignore")
+    if rc != 0 or not ignore.strip():
+        return []
+    _, tracked, _ = _git(space, "-c", "core.quotepath=off", "ls-files", "--", *gone)
+    tracked_set = set(tracked.splitlines())
+    gone = [p for p in gone if p in tracked_set]
+    if not gone:
+        return []
+    with tempfile.NamedTemporaryFile("w", suffix=".gitignore", delete=False) as fh:
+        fh.write(ignore)
+    try:
+        _, ign, _ = _git(space, "-c", f"core.excludesFile={fh.name}", "-c", "core.quotepath=off",
+                         "check-ignore", "--no-index", "--", *gone)
+    finally:
+        os.unlink(fh.name)
+    paths = [p for p in ign.splitlines() if p.strip()]
+    for p in paths:
+        _git(space, "rm", "-q", "--cached", "--", p)
+    return paths
+
+
 def converge(space: Path, *, root: Path | None = None) -> Result:
     """Apply the registered category at every entry point, including direct calls."""
     cat = classify(space, root)
@@ -354,12 +806,21 @@ def converge(space: Path, *, root: Path | None = None) -> Result:
         return _converge_locked(space)
 
 
-def _fetch_reason(err: str) -> str:
+def _fetch_reason(err: str, space: Path | None = None) -> str:
     """Name the failure the operator has to act on.
 
     Ordered most-specific first: a denied key and an unknown host both mention
     the host, so matching on the host alone would swallow the auth case.
+    A FULL DISK FIRST (fleet sim 2026-10-03, break 4): git cannot write its
+    temporary pack, the fetch fails, and "offline?" sent the owner to look at
+    the network of a host whose disk was 100% used. Its reason carries neither
+    "offline" nor "fetch failed", so the sweep reads it as blocked.
     """
+    from check_diagnosis import disk_full
+    full = disk_full(space, err) if any(
+        m in (err or "") for m in ("No space left on device", "Disk quota exceeded")) else None
+    if full:
+        return f"{full}: git could not write"
     e = err.lower()
     if "permission denied" in e or "authentication failed" in e:
         # "check your key OR your route": a VPN or exit node can put a different
@@ -371,7 +832,155 @@ def _fetch_reason(err: str) -> str:
         return "host key not trusted"
     if "repository not found" in e or "does not appear to be a git repo" in e:
         return "remote repo missing"
-    return "fetch failed (offline?)"
+    # Keep git's own words: "offline?" alone is a guess, and a guess that reads
+    # like a diagnosis sends the reader to the wrong place.
+    lines = [l.strip() for l in (err or "").splitlines() if l.strip()]
+    fatal = [l for l in lines if l.startswith(("fatal:", "error:"))]
+    said = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]*@", r"\1***@",
+                  (fatal or lines or [""])[0 if fatal else -1])[:200]
+    return "fetch failed (offline?)" + (f" -- git said: {said}" if said else "")
+
+
+#: A file this large is never shared (GitHub refuses 100 MB; the fleet's own
+#: limit, as in git_fleet_sync, is 50 MB). Same threshold everywhere (SYN-3).
+MAX_SHARED_BYTES = 50 * 1024 * 1024
+
+
+def unshareable(space: Path, paths: list[str] | None = None) -> dict[str, str]:
+    """Staged paths that must never reach the shared copy, with why (SYN-3).
+
+    Conflict markers (`git diff --cached --check` sees an UNTRACKED file once
+    `add -A` staged it, which the working-tree check before the autosave
+    cannot) and files of MAX_SHARED_BYTES or more. `paths` limits the check.
+    """
+    bad: dict[str, str] = {}
+    _, out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--cached", "--check",
+                     "--", *(paths or []))
+    for line in out.splitlines():
+        if "leftover conflict marker" in line:
+            bad.setdefault(line.split(":", 1)[0], "conflict markers")
+    _, names, _ = _git(space, "-c", "core.quotepath=off", "diff", "--cached", "--name-only",
+                       "--diff-filter=AM", "--", *(paths or []))
+    for rel in names.splitlines():
+        try:
+            size = (space / rel).stat().st_size
+        except OSError:
+            continue
+        if size >= MAX_SHARED_BYTES:
+            bad.setdefault(rel, f"too large to share ({size / 1048576:.0f} MB ≥ 50 MB)")
+    return bad
+
+
+def refused_by_hook(repo: Path, paths: list[str]) -> tuple[list[str], str]:
+    """Which of `paths` the pre-commit hook refuses, and what it said (SYN-8).
+
+    A hook refuses a COMMIT, not a file, so ask it about subsets: stage a
+    subset in a scratch index (the real index is not touched), run the hook
+    against it, and bisect. One refused inbox capture then holds back that
+    file alone instead of the whole space (2-datacore, 2026-09-26). If no
+    subset is refused on its own -- a hook that objects to a combination, or
+    to something other than the files -- every path is reported refused,
+    which is the old whole-stop behaviour.
+    """
+    import tempfile
+    rc, hook, _ = _git(repo, "rev-parse", "--git-path", "hooks/pre-commit")
+    hook_path = Path(hook.strip()) if rc == 0 and hook.strip() else None
+    if hook_path is not None and not hook_path.is_absolute():
+        hook_path = repo / hook_path
+    if hook_path is None or not os.access(hook_path, os.X_OK):
+        return list(paths), ""
+    said: list[str] = []
+
+    def refuses(subset: list[str]) -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**_net_env(), "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            try:
+                subprocess.run(["git", "read-tree", "HEAD"], cwd=repo, env=env,
+                               capture_output=True, timeout=60, check=True)
+                subprocess.run(["git", "add", "-A", "--", *subset], cwd=repo, env=env,
+                               capture_output=True, timeout=120, check=True)
+                r = subprocess.run([str(hook_path)], cwd=repo, env=env, capture_output=True,
+                                   text=True, timeout=300)
+            except (OSError, subprocess.SubprocessError):
+                return True
+            if r.returncode != 0:
+                said.append(((r.stdout or "") + (r.stderr or "")).strip())
+            return r.returncode != 0
+
+    def bisect(subset: list[str]) -> list[str]:
+        if not refuses(subset):
+            return []
+        if len(subset) == 1:
+            return subset
+        mid = len(subset) // 2
+        return bisect(subset[:mid]) + bisect(subset[mid:])
+
+    refused = bisect(list(paths))
+    return (refused or list(paths)), "\n".join(dict.fromkeys(x for x in said if x))
+
+
+def _incoming_rewrites(space: Path, ref: str) -> list[str]:
+    """Would merging `ref` change or remove history this machine already holds?
+
+    A three-way merge takes the incoming copy of a log WHOLE when this side
+    never touched it since the merge base. So an origin commit that edited
+    event 0 and re-chained the rest (audit A#2), truncated a log or deleted it,
+    arrives as a clean fast-forward and silently replaces the held history
+    (LED-2). Every log `ref` changed since the merge base must extend its
+    base copy byte for byte -- the append-only rule the write gate applies to
+    a push (hooks/ledger_write_gate.check_change), applied here to what we
+    receive. [] means the incoming side only appended.
+    """
+    rc, base, _ = _git(space, "merge-base", "HEAD", ref)
+    if rc != 0 or not base.strip():
+        return []                           # nothing held in common yet
+    base = base.strip()
+    hooks = str(Path(__file__).resolve().parent / "hooks")
+    if hooks not in sys.path:
+        sys.path.insert(0, hooks)
+    from ledger_write_gate import PATHSPEC, check_change
+    rc, out, err = _git(space, "diff", "--no-renames", "--name-only", base, ref, "--", PATHSPEC)
+    if rc != 0:
+        return [f"incoming ledger changes could not be listed: {err.strip()[:120]}"]
+
+    def blob(rev: str, rel: str) -> bytes | None:
+        try:
+            r = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=space,
+                               capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return r.stdout if r.returncode == 0 else None
+
+    bad = []
+    for rel in (x.strip() for x in out.splitlines()):
+        if not rel.endswith(".jsonl"):
+            continue
+        old = blob(base, rel)
+        if not old:
+            continue                        # a new log: nothing held to lose
+        bad += [e for e in check_change(rel, old, blob(ref, rel)) if "append-only" in e]
+    return bad
+
+
+def _private_context_staged(space: Path) -> list[str]:
+    """Staged paths that are private context (context_merge.private_context_reason)."""
+    from context_merge import private_context_reason
+    rc, out, _ = _git(space, "diff", "--cached", "--name-status", "--no-renames")
+    found = []
+    for line in (out or "").splitlines() if rc == 0 else []:
+        status, _, path = line.partition("\t")
+        if path and status != "D" and private_context_reason(space / path, tracked=status != "A"):
+            found.append(path)
+    return found
+
+
+def _rewrite_refusal(db: str, ref: str, rewrites: list[str], autosaved: bool) -> Result:
+    return Result(False,
+                  f"refused: {ref} rewrites ledger history this machine holds — "
+                  f"{'; '.join(rewrites)[:240]}. Nothing was merged; history is never "
+                  f"rewritten (a bad record is voided in-ledger). A human must find who "
+                  f"published it",
+                  {"branch": db, "ref": ref, "autosaved": autosaved, "ledger_rewrite": rewrites})
 
 
 def _converge_locked(space: Path, *, publish: bool = True) -> Result:
@@ -384,6 +993,13 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     on the first end-to-end smoke test and had to be killed, which is a better
     place to find it than a nightly run.
     """
+    # ONE HOST, NO REMOTE (profile A, audit C12): there is nothing to converge
+    # with. Said as a mode, not reported as "fetch failed (offline?)" on every
+    # cycle forever; and nothing is touched -- no autosave commit, no fetch.
+    rc, _, _ = _git(space, "remote", "get-url", "origin")
+    if rc != 0:
+        return Result(True, "single host: no remote configured, nothing to converge (add an "
+                            "'origin' remote to share this space)", {"single_host": True})
     rc, _, err = _git(space, "fetch", "--prune", "origin")
     if rc != 0:
         # Offline is not an error state — it is a condition. Report it and
@@ -397,8 +1013,30 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # rejecting the Mac's ed25519 key mid-afternoon and all four Gitea
         # spaces reported `offline` — indistinguishable, in a sweep summary,
         # from a closed laptop lid.
-        return Result(False, _fetch_reason(err), {"stderr": err.strip()[:200]})
+        return Result(False, _fetch_reason(err, space), {"stderr": err.strip()[:200]})
     db = default_branch(space)
+
+    # A REMOTE WITH NO BRANCH IS EMPTY, NOT IN CONFLICT (found running the
+    # profile A runbook, 2026-10-04: a team's first converge said "merge conflict
+    # -- human needed"). An empty remote holds nothing to fork against or
+    # overwrite, so the first converge publishes the committed branch. A remote
+    # that has branches, just not this one, is never given a new default branch.
+    rc, _, _ = _git(space, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{db}")
+    if rc != 0:
+        _, heads, _ = _git(space, "for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes/origin/")
+        others = [h for h in heads.split() if h and h != "HEAD"]
+        if others:
+            return Result(False, f"origin has no {db} branch (it has: {', '.join(others[:5])}); set this "
+                                 f"space's branch or the remote's default by hand, then converge",
+                          {"branch": db, "remote_branches": others[:20]})
+        _, cur, _ = _git(space, "branch", "--show-current")
+        if cur.strip() != db:
+            return Result(False, f"the remote is empty and this space is on {cur.strip() or 'no branch'}, "
+                                 f"not {db}: switch to {db}, then converge", {"branch": db})
+        rc, _, err = _git(space, "push", "-u", "origin", db)
+        if rc != 0:
+            return Result(False, _fetch_reason(err, space), {"branch": db, "stderr": err.strip()[:200]})
+        return Result(True, f"first publish: the remote was empty; pushed {db}", {"branch": db, "published": True})
 
     # Never autosave a half-finished merge. A converge that reaches a repo
     # whose previous merge stopped on a conflict — markers in the tree,
@@ -411,6 +1049,8 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         return Result(False, f"{busy} in progress — finish or abort it by hand, then converge",
                       {"branch": db, "in_progress": busy})
 
+    untracked_like_origin = _follow_origin_untrack(space, f"origin/{db}")
+
     # Autosave BEFORE merging. A dirty working file makes git refuse the
     # merge, and refusing forever means never converging — 2-datacore was
     # 45 behind when this was written. Commit, never stash: ENG-2026-0729-009
@@ -418,8 +1058,29 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     # while a commit is on a branch, findable and pushable.
     rc, out, _ = _git(space, "status", "--porcelain")
     autosaved = bool(out.strip())
+    held_back: dict[str, str] = {}
+    hook_detail = ""
     if autosaved:
         _git(space, "add", "-A")
+        # NEVER AUTOSAVE A DELETION (MEM-61). `add -A` stages a locally-absent
+        # tracked file as a deletion. A missing file on one machine is almost
+        # always a local defect — an incomplete checkout, a crashed agent — not
+        # work to broadcast fleet-wide. caa7d58 wiped 110 files from
+        # datafund-space by this path on 2026-07-21. Checked immediately after
+        # `add -A` and before `git rm --cached` for intentional untracks, so
+        # intentional removals (untracked_like_origin) are never confused with
+        # accidental deletions.
+        rc, del_names, _ = _git(space, "-c", "core.quotepath=off", "diff",
+                                "--cached", "--name-only", "--diff-filter=D")
+        for _path in (del_names or "").splitlines():
+            _path = _path.strip()
+            if _path:
+                _git(space, "restore", "--staged", "--", _path)
+                held_back[_path] = "deletion — not auto-committed (needs a human)"
+        # `add -A` re-stages what origin untracked: this host's .gitignore does
+        # not list it until the merge brings origin's.
+        for path in untracked_like_origin:
+            _git(space, "rm", "-q", "--cached", "--", path)
         # NEVER autosave a submodule pointer. `add -A` stages a changed
         # gitlink, so an unattended converge would silently move `.datacore/dips`
         # to whatever commit happens to be checked out locally — publishing a
@@ -446,6 +1107,13 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
                 if path:
                     _git(space, "restore", "--staged", "--", path)
 
+        # NEVER AUTOSAVE PRIVATE CONTEXT (SPC-3). `add -A` stages whatever the
+        # space's .gitignore fails to list, and a hand-made or fresh space may
+        # list nothing -- so CLAUDE.local.md, or a composed CLAUDE.md holding
+        # it, was committed and pushed. Judge the file, not the .gitignore.
+        for path in _private_context_staged(space):
+            _git(space, "restore", "--staged", "--", path)
+
         # Unstaging the submodules may have emptied the index. `git commit` then
         # exits non-zero for "nothing to commit", which the check below would
         # report as a REFUSED autosave and abort the whole converge — so a repo
@@ -460,44 +1128,101 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # log carrying events its principal never made, signed into main by
         # a host that is not its principal's. The verifier caught it after the
         # fact; the transport must not carry it in the first place. Unstage
-        # it, commit the rest, and stop: the file stays in the working tree,
-        # visible, for whoever owns the process that wrote it.
+        # it and hold it back (SYN-8): the file stays in the working tree,
+        # visible, for whoever owns the process that wrote it; the rest of the
+        # space converges normally so incoming commits are received and other
+        # good edits are published.
         foreign = foreign_writer_logs(space)
-        for path, _writer, _principal in foreign:
+        for path, _writer, principal in foreign:
             _git(space, "restore", "--staged", "--", path)
+            held_back[path] = f"foreign writer log: belongs to {principal} (DIP-0044)"
 
+        # A WRONG WEEKDAY IS REPAIRED, NOT A REASON TO STOP THE FLEET. The
+        # weekday in `[2026-09-23 Tue]` is derived from the date, so a wrong one
+        # is a formatting error the date tool corrects deterministically. On
+        # 2026-09-23 an agent wrote "Tue" for a Wednesday in 6-meridian's inbox;
+        # the pre-commit hook refused this autosave (correctly), and that
+        # refusal failed the whole phase-1 cycle -- and the agent kept writing
+        # new wrong stamps while it was being fixed by hand. The hook stays the
+        # guard for everything it cannot repair; this runs the same validator's
+        # fixer on the same staged files first and says what it changed.
+        repaired = _repair_weekdays(space)
+        if repaired:
+            print(f"  autosave {space.name}: repaired weekday names in {', '.join(repaired)}")
+
+        # NEVER SHARE BAD STATE (SYN-3): a file with conflict markers or one
+        # too large for the shared copy is unstaged, left in the working tree
+        # and named -- and the rest of the space still syncs (SYN-8).
+        for rel, why in unshareable(space).items():
+            _git(space, "restore", "--staged", "--", rel)
+            held_back[rel] = why
+
+        commit_msg = ["-m", "ledger: autosave before converge"]
+        if os.environ.get("DATACORE_AUTOSAVE_TRAILER"):
+            # A caller's attribution (cos_sync: Winston as co-author), so it no
+            # longer needs an autosave of its own ahead of these checks.
+            commit_msg += ["-m", os.environ["DATACORE_AUTOSAVE_TRAILER"]]
         rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
         if rc_staged == 0:                      # 0 = no staged changes remain
             autosaved = False
             crc, cout, cerr = 0, "", ""
         else:
-            crc, cout, cerr = _git(space, "commit",
-                                   "-m", "ledger: autosave before converge")
+            crc, cout, cerr = _git(space, "commit", *commit_msg)
         if crc != 0:
-            # A REFUSED AUTOSAVE MUST STOP THE CONVERGE. This return used to be
-            # absent: a pre-commit hook rejected the commit, `add -A` had already
-            # staged everything, and the merge then failed with "your local
-            # changes would be overwritten" — an error naming the merge, in a
-            # repo whose actual problem was one invalid org tag on line 6042.
-            # Swallowing a non-zero rc from git is the precise defect this
-            # module was written to remove, and it was sitting inside it.
-            #
-            # Not --no-verify: the hook is a guard doing its job. The operator
-            # has to see what it said, so its own output is the reason.
+            # A REFUSED AUTOSAVE HOLDS BACK THE REFUSED FILES, NOT THE SPACE.
+            # Not --no-verify: the hook is a guard doing its job, and its own
+            # words are the reason. But one invalid org tag on line 6042 used to
+            # stop the whole converge (LS-11): nothing else in 2-datacore moved
+            # from 2026-09-26 04:25Z, hourly. Ask the hook which files it
+            # refuses, unstage those (they stay in the working tree, untouched),
+            # commit the rest, and carry on (SYN-8).
             detail = (cout + cerr).strip()
-            return Result(False, "autosave refused by pre-commit hook",
-                          {"detail": detail[:400]})
-        if foreign:
-            own_principal, own_actor = _own_principal()
-            named = "; ".join(f"{path} belongs to {principal} (writer {writer})"
-                              for path, writer, principal in foreign)
-            return Result(False,
-                          f"foreign writer log left uncommitted: {named} — this host writes "
-                          f"as {own_actor or '?'} for {own_principal or 'an undeclared principal'}; "
-                          f"find the process writing under that name and stop it (DIP-0044)",
-                          {"branch": db, "foreign": [p for p, _, _ in foreign]})
+            _, staged_out, _ = _git(space, "-c", "core.quotepath=off", "diff", "--cached",
+                                    "--name-only")
+            staged_paths = [x for x in staged_out.splitlines() if x.strip()]
+            refused, said = refused_by_hook(space, staged_paths)
+            if said:
+                detail = said
+            for rel in refused:
+                _git(space, "restore", "--staged", "--", rel)
+                held_back[rel] = "refused by pre-commit hook"
+            rc_staged, _, _ = _git(space, "diff", "--cached", "--quiet")
+            if rc_staged == 0:
+                autosaved, crc = False, 0
+            else:
+                crc, cout, cerr = _git(space, "commit", *commit_msg)
+            if crc != 0:
+                detail = (cout + cerr).strip() or detail
+                return Result(False, "autosave refused by pre-commit hook",
+                              {"detail": detail[:400], "held_back": sorted(held_back)})
+            hook_detail = detail
 
-    ok, err, resolved = _merge(space, f"origin/{db}")
+    rewrites = _incoming_rewrites(space, f"origin/{db}")
+    if rewrites:
+        return _rewrite_refusal(db, f"origin/{db}", rewrites, autosaved)
+    # INCOMING-LOSS CHECK (MEM-61). git_fleet_sync guards its _pull with this
+    # already; converge had no equivalent, so a machine that deleted 25 tracked
+    # files and pushed sent a clean fast-forward that silently removed the files
+    # here. Same threshold as git_fleet_sync: 10 deleted files or a file shrunk
+    # to ≤20 % of its baseline (MASS_DELETION=10, SHRINK_KEEP=0.2).
+    from git_fleet_sync import incoming_losses as _incoming_losses
+    losses = _incoming_losses(space, f"origin/{db}")
+    if losses:
+        return Result(False,
+                      f"refused: origin/{db} would remove tracked content — "
+                      f"{'; '.join(losses[:3])}. Nothing was merged; "
+                      f"a human merges if intended (MEM-61)",
+                      {"branch": db, "incoming_loss": losses})
+    ok, err, resolved, kept = _merge(space, f"origin/{db}", keep_both=True)
+    unfiled: list[str] = []
+    if kept:
+        # SYN-9: the merge completed around the conflicted file(s); a person
+        # gets one task each, and the rest of the space publishes below.
+        # A task that could not be filed SAYS WHY (fleet sim 2026-10-03,
+        # break 1): without a task the conflict stays an alert on every sync,
+        # and nothing said what had refused the task.
+        unfiled = [str(t) for t in (file_conflict_tasks(space, kept) or [])
+                   if str(t).startswith("no task filed")]
     if not ok:
         # Never reset, never rescue-branch, never discard. A conflict here
         # is genuine disagreement about content and belongs to a human; the
@@ -521,7 +1246,10 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         rc, ahead, _ = _git(space, "rev-list", "--count", f"HEAD..{ref}")
         if rc != 0 or ahead.strip() == "0":
             continue
-        ok, err, prefixes = _merge(space, ref)
+        rewrites = _incoming_rewrites(space, ref)
+        if rewrites:
+            return _rewrite_refusal(db, ref, rewrites, autosaved)
+        ok, err, prefixes, _ = _merge(space, ref)
         if not ok:
             return Result(False, "merge conflict on a ledger ref — human needed",
                           {"branch": db, "ref": ref, "autosaved": autosaved, "detail": err[:400]})
@@ -543,9 +1271,66 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     if not pr.ok:
         return Result(False, f"converged but not published: {pr.reason}",
                       {"branch": db, "autosaved": autosaved, **pr.context})
+    # Alert once, then quiet (owner, 2026-09-30): a conflict this sync met is
+    # an alert; one whose task is already open is named but handled.
+    alert, handled = split_waiting(space, fresh=[k["path"] for k in kept])
+    quiet = ("conflict waiting for a person, already reported: " + "; ".join(
+        f"{path} (task {iid} is open)" for path, iid in handled)) if handled else ""
+    if held_back or alert:
+        # Everything else synced; these did not, and say why (SYN-3, SYN-8),
+        # or they wait for a person to settle a conflict (SYN-9).
+        parts = []
+        if held_back:
+            named = "; ".join(f"{rel} ({why})" for rel, why in sorted(held_back.items()))
+            refused = any(why.startswith("refused by") for why in held_back.values())
+            parts.append(f"{'autosave refused by pre-commit hook — ' if refused else ''}"
+                         f"held back, still only on this machine: {named}")
+        if alert:
+            parts.append("conflict waiting for a person: " + "; ".join(
+                f"{path} (merged around it, nothing lost; task {iid})" for path, iid in alert))
+        if unfiled:
+            parts.append("; ".join(sorted(set(unfiled))))
+        if quiet:
+            parts.append(quiet)
+        # Not "synced" beside a conflict: that word reads as success (SYN-6).
+        # WENT THROUGH: everything but the named files is merged and on origin,
+        # and the tree is not mid-merge. Not ok in words (this is the alert),
+        # but a caller that works IN the space -- the overnight run, the
+        # phase-1 ingest -- may carry on there and leave the named files to
+        # their person (fleet sim 2026-10-03, break 1: one conflict stopped
+        # every overnight task in 2-datacore for three days).
+        return Result(False, "; ".join(parts) + ("; the rest of the space went through"
+                                                 if alert or handled else "; everything else synced"),
+                      {"branch": db, "autosaved": autosaved, "went_through": True,
+                       "held_back": sorted(held_back),
+                       "conflicts": [p for p, _ in alert], "conflicts_handled": handled,
+                       "detail": hook_detail[:400], "pushed": pr.context.get("attempts", 1)})
+    if handled:
+        # Handled, not success: named on every sync, never a success word
+        # (SYN-6), never a failure or a second alert.
+        return Result(True, quiet + "; the rest of the space went through",
+                      {"branch": db, "autosaved": autosaved, "conflicts_handled": handled,
+                       "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs,
+                       "ledger_prefixes": resolved})
     return Result(True, "converged", {"branch": db, "autosaved": autosaved,
                                       "pushed": pr.context.get("attempts", 1), "ledger_refs": merged_refs,
                                       "ledger_prefixes": resolved})
+
+
+def _publication_forks(space: Path, commit: str, db: str) -> list[str]:
+    """git_relay.publication_forks against origin/<db>; [] means safe to push."""
+    from git_relay import publication_forks
+    return publication_forks(space, commit, f'origin/{db}')
+
+
+def _fork_refusal(space: Path, db: str, forks: list[str]) -> str:
+    """The refusal, naming what is wrong and the way out. Nothing was pushed."""
+    return (f"push REFUSED — ledger fork against origin/{db}: {'; '.join(forks)[:240]}. "
+            f"The commit stays local and origin is unchanged. Recover: inspect with "
+            f"`python3 .datacore/lib/git_relay.py --forks`; restore the log to origin's "
+            f"history with `python3 .datacore/lib/ledger_restore_prefix.py --space "
+            f"{Path(space).name} --actor <writer> --find` (a genuinely divergent chain "
+            f"needs a human), then converge again")
 
 
 def _push_with_retry(space: Path, db: str) -> Result:
@@ -564,11 +1349,29 @@ def _push_with_retry(space: Path, db: str) -> Result:
             args = push_arguments(captured.strip(), f'refs/heads/{db}')
         except ValueError:
             return Result(False, 'publication commit/ref is invalid')
+        # NEVER PUSH A FORK (owner decision L9). A CLEAN merge of origin/<db>
+        # or of an origin/ledger/* ref takes one side's log whole when the
+        # other side never touched it, so a host that rewound its log and
+        # re-appended arrives as a valid chain that replaces events origin
+        # already holds (GitFleet.lean `merge_rewrite_is_not_union`). Check
+        # what this push PUBLISHES against what origin holds, with the same
+        # gate the relay, the fleet sweep and the rollout use. Re-checked on
+        # every attempt: a retry pushes a new merge.
+        forks = _publication_forks(space, captured.strip(), db)
+        if forks:
+            return Result(False, _fork_refusal(space, db, forks),
+                          {"attempt": attempt, "ledger_fork": forks})
         rc, _, err = _git(space, *args)
         if rc == 0:
             return Result(True, "pushed", {"attempts": attempt})
         low = err.lower()
-        if "non-fast-forward" in low or "fetch first" in low or "rejected" in low:
+        # The pre-push hook catches the same lost race before the server can:
+        # another host pushed since our fetch, so the remote tip is not an
+        # ancestor of ours, and git then says only "failed to push some refs".
+        # Converging makes it an ancestor; the fork gate above re-checks the
+        # merge on the next attempt (1-datafund, 2026-10-04..07).
+        lost_race = "remote tip is not an ancestor" in low
+        if "non-fast-forward" in low or "fetch first" in low or "rejected" in low or lost_race:
             c = _converge_locked(space, publish=False)
             if not c:
                 return Result(False, "push rejected and converge failed",
@@ -582,7 +1385,7 @@ def _push_with_retry(space: Path, db: str) -> Result:
         # FAIL into the cycle's status, which is the false alarm the fetch-side
         # classification was written to end. The classifier reads the same
         # stderr and already answers correctly for both cases.
-        return Result(False, f"push {_fetch_reason(err)}",
+        return Result(False, f"push {_fetch_reason(err, space)}",
                       {"attempt": attempt, "stderr": err.strip()[:200]})
     return Result(False, f"push still rejected after {PUSH_ATTEMPTS} attempts",
                   {"hint": "remote is moving faster than we can converge"})
@@ -604,11 +1407,13 @@ def append(space: Path, actor: str, type: str, payload: dict,
         return Result(False, 'repository category does not permit direct fact publication', {})
     with _repo_lock(space):
         try:
-            event = EventLog(space, actor).append(type, payload)
+            log = EventLog(space, actor)
+            event = log.append(type, payload)
         except Exception as exc:  # noqa: BLE001 — a bad event type is the caller's bug
             return Result(False, "append rejected", {"error": exc.__class__.__name__})
 
-        rel = f".datacore/events/{actor}.jsonl"
+        # The file it landed in: a telemetry type goes to the telemetry log (LED-8).
+        rel = log.path_for(type, payload).relative_to(space).as_posix()
         rc, _, err = _git(space, "add", "--", rel)
         if rc != 0:
             return Result(False, "git add failed", {"stderr": err.strip()[:200]})
@@ -667,19 +1472,26 @@ def sync_repo(repo: Path, quiet: bool = False, *, root: Path | None = None) -> s
     next fix to land on one side only — which is the defect DIP-0046 exists to
     remove, not a smaller instance of it worth keeping.
 
-    'clean' | 'offline' | 'blocked' | 'conflict' | 'skipped'. The distinction
+    'clean' | 'waiting' | 'offline' | 'blocked' | 'conflict' | 'skipped'.
+    'waiting' is a conflict already reported whose task is still open: it
+    needs nothing new from anyone and is not an alert. The distinction
     that earns its keep is offline vs blocked: offline clears itself when the
     laptop reopens, blocked never does.
     """
     res = converge(Path(repo), root=root) if root is not None else converge(Path(repo))
-    if res.ok:
+    if res.ok and res.context.get("single_host"):
+        outcome = "local"
+    elif res.ok and res.context.get("conflicts_handled"):
+        # A conflict already reported, its task open: not a failure, not clean.
+        outcome = "waiting"
+    elif res.ok:
         outcome = "clean"
     elif "not in registry" in res.reason:
         # Refused, not failed: an unregistered repo has no category, so there is
         # no rule to apply. Defaulting silently is what DIP-0046 §1 forbids.
         outcome = "skipped"
     elif any(s in res.reason for s in ("auth denied", "host key", "repo missing",
-                                       "autosave refused")):
+                                       "autosave refused", "disk full on")):
         outcome = "blocked"
     elif "offline" in res.reason or "fetch failed" in res.reason:
         outcome = "offline"
@@ -688,9 +1500,17 @@ def sync_repo(repo: Path, quiet: bool = False, *, root: Path | None = None) -> s
     if not quiet:
         detail = res.context.get("detail", "")
         print(f"{Path(repo).name}: {outcome}"
-              + (f" — {res.reason}" if not res.ok else "")
+              + (f" — {res.reason}" if not res.ok or outcome == "waiting" else "")
               + (f"\n  {detail.splitlines()[0]}" if detail else ""))
     return outcome
+
+
+def converge_line(op: str, space: Path, res: Result) -> str:
+    """One log line: space, ok / waiting / FAIL, reason. 'waiting' is a
+    conflict already reported with its task open -- not ok in words (SYN-6),
+    not a failure (owner, 2026-09-30: alert once, then quiet)."""
+    label = "FAIL" if not res.ok else ("waiting" if res.context.get("conflicts_handled") else "ok")
+    return f"{op} {Path(space).name}: {label} — {res.reason}"
 
 
 def _code_update(repo: Path) -> str:
@@ -708,7 +1528,7 @@ def _code_update(repo: Path) -> str:
     dirty = bool(out.strip())
     rc, _, err = _git(repo, "fetch", "-q", "origin")
     if rc != 0:
-        reason = _fetch_reason(err)
+        reason = _fetch_reason(err, repo)
         return "offline" if "offline" in reason else "blocked"
     db = default_branch(repo)
     _, cur, _ = _git(repo, "branch", "--show-current")
@@ -722,6 +1542,17 @@ def _code_update(repo: Path) -> str:
     return "dirty" if dirty else "clean"
 
 
+def _repos(root: Path) -> dict:
+    """Registered repos plus the top-level spaces declared only by their marker
+    (SPC-9; see classify). What sync converges and status lists."""
+    registry = dict(_registry(root))
+    for path in sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink()
+                       and p.name not in registry and (p / ".git").exists()
+                       and _marker_space(p, root)):
+        registry[path.name] = {"category": "knowledge", "via": "space marker"}
+    return registry
+
+
 def sync_outcomes(root: Path, only: str | None = None,
                   include_code: bool = True) -> list[tuple[str, str, str]]:
     """Every registered repo under `root`, converged or fast-forwarded.
@@ -733,7 +1564,7 @@ def sync_outcomes(root: Path, only: str | None = None,
     never committed. Returns (name, category, outcome) per repo.
     """
     out: list[tuple[str, str, str]] = []
-    for key, entry in _registry(root).items():
+    for key, entry in _repos(root).items():
         path = root if key == "<root>" else root / key
         name = "<root>" if key == "<root>" else key
         if only and Path(key).name != only and key != only:
@@ -770,7 +1601,7 @@ def sync_all(root: Path, only: str | None = None, quiet: bool = False,
 def status_lines(root: Path) -> list[str]:
     """One line per registered repo: branch, dirty count, ahead/behind. Touches nothing."""
     lines = []
-    for key, entry in _registry(root).items():
+    for key, entry in _repos(root).items():
         path = root if key == "<root>" else root / key
         if not (path / ".git").exists():
             continue
@@ -785,7 +1616,14 @@ def status_lines(root: Path) -> list[str]:
     return lines
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
+    """The command line. A converge that cannot run still answers in JSON.
+
+    Every caller parses `"reason"` out of this output (cos_sync, the phase-1
+    cycle). A crash printed a traceback and no JSON, so the box alerted
+    "<space> sync blocked: unknown" for all ten spaces at once (fleet sim
+    2026-10-03, break 11). The cause is now the reason.
+    """
     import argparse
     ap = argparse.ArgumentParser(description="ledger transport")
     ap.add_argument("op", choices=["converge", "gaps", "classify", "sync", "status"])
@@ -793,20 +1631,33 @@ if __name__ == "__main__":
     ap.add_argument("--repo", help="sync: limit to one space by directory name")
     ap.add_argument("--root", type=Path, default=_data_root())
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--line", action="store_true",
+                    help="converge: one line (space, ok/FAIL, reason) instead of JSON, for logs")
     ap.add_argument("--no-code", action="store_true",
                     help="sync: knowledge repos only, leave code repos alone")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     if a.op == "sync":
-        raise SystemExit(sync_all(a.root, only=a.repo, quiet=a.quiet,
-                                  include_code=not a.no_code))
+        return sync_all(a.root, only=a.repo, quiet=a.quiet, include_code=not a.no_code)
     if a.op == "status":
         print("\n".join(status_lines(a.root)))
-        raise SystemExit(0)
+        return 0
     if a.space is None:
         ap.error(f"--space is required for {a.op}")
     fn = {"converge": converge, "gaps": gaps, "classify": classify}[a.op]
-    res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+    try:
+        res = fn(a.space) if a.op == 'gaps' else fn(a.space, root=a.root)
+    except Exception as exc:  # noqa: BLE001 -- answer with the cause, never a bare traceback
+        said = " ".join(str(exc).split())[:300]
+        res = Result(False, f"{a.op} could not run: {type(exc).__name__}"
+                            + (f": {said}" if said else ""), {"crashed": type(exc).__name__})
+    if a.line:
+        print(converge_line(a.op, a.space, res))
+        return 0 if res.ok else 1
     print(json.dumps({"ok": res.ok, "reason": res.reason, "context": res.context},
                      indent=2, default=str))
-    raise SystemExit(0 if res.ok else 1)
+    return 0 if res.ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

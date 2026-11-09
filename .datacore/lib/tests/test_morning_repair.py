@@ -1,0 +1,200 @@
+"""The morning repair sweep: what it finds, what it may do, and what it reports."""
+import json
+from datetime import date
+
+import morning_repair as M
+
+
+def test_v2_fail_lines_become_findings(tmp_path, monkeypatch):
+    log = tmp_path / "v2.log"
+    log.write_text("  \x1b[32mok  \x1b[0m VERSION     2.0.0\n"
+                   "    \x1b[31mFAIL\x1b[0m egress declared                  2 undeclared in opted-in modules\n")
+    monkeypatch.setattr(M, "V2_LOG", log)
+    found = M.v2_checklist(run=False)
+    assert [f["id"] for f in found] == ["v2-egress-declared"]
+    assert "2 undeclared" in found[0]["evidence"]
+
+
+def test_mail_triage_is_judged_by_todays_clean_run(tmp_path, monkeypatch):
+    log = tmp_path / "triage.log"
+    monkeypatch.setattr(M, "TRIAGE_LOG", log)
+    log.write_text("[email-triage] Completed at 2026-09-25T07:30:52Z — totals: scanned=117 archived=19 "
+                   "processed=48 errors=0\n")
+    assert M.mail_triage(date(2026, 9, 25)) == []
+    log.write_text("[email-triage] ERROR: MAIL_TRIAGE_ACCOUNTS is not set -- no inbox was scanned\n")
+    assert M.mail_triage(date(2026, 9, 25))[0]["id"] == "input-mail-triage"
+    log.write_text("[email-triage] Completed at 2026-09-25T03:30:00Z — totals: scanned=0 archived=0 "
+                   "processed=0 errors=2\n")
+    assert M.mail_triage(date(2026, 9, 25)), "errors or an empty scan are not a clean run"
+
+
+def test_sweep_remediates_then_delegates_only_what_is_still_failing(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "pull_latest", lambda: "fleet sync rc 0")
+    a = {"id": "unit-x", "kind": "unit", "unit": "x.service", "title": "unit x failed"}
+    b = {"id": "v2-egress", "kind": "v2", "title": "v2-verify: egress"}
+    calls = {"n": 0}
+
+    def fake_findings(run_v2=True):
+        calls["n"] += 1
+        return [dict(a), dict(b)] if calls["n"] == 1 else [dict(b)]   # the re-run cleared x
+    monkeypatch.setattr(M, "findings", fake_findings)
+    monkeypatch.setattr(M, "remediate", lambda f: "re-ran x.service (rc 0)" if f["kind"] == "unit" else "")
+    delegated = []
+    monkeypatch.setattr(M, "delegate", lambda f, day: delegated.append(f["id"]) or f"repair-{f['id']}")
+    assert M.sweep() == 0
+    assert delegated == ["v2-egress"], "only what the safe remediation did not clear goes to miles"
+    state = json.loads(next((tmp_path / "state").glob("*.json")).read_text())
+    by = {f["id"]: f for f in state["findings"]}
+    assert by["unit-x"]["cleared_by_sweep"] and not by["v2-egress"]["cleared_by_sweep"]
+
+
+def test_the_budget_caps_delegations(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "pull_latest", lambda: "fleet sync rc 0")
+    many = [{"id": f"v2-{i}", "kind": "v2", "title": f"t{i}"} for i in range(M.MAX_ITEMS + 3)]
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [dict(f) for f in many])
+    monkeypatch.setattr(M, "remediate", lambda f: "")
+    monkeypatch.setattr(M, "delegate", lambda f, day: f"repair-{f['id']}")
+    M.sweep()
+    state = json.loads(next((tmp_path / "state").glob("*.json")).read_text())
+    assert sum(1 for f in state["findings"] if f.get("item")) == M.MAX_ITEMS
+    assert sum(1 for f in state["findings"] if f.get("over_budget")) == 3
+
+
+def _recheck_with_one_repair(tmp_path, monkeypatch, *, yesterday=False, pr=""):
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "FRAGMENTS", tmp_path / "frag")
+    monkeypatch.setattr(M, "_pull_request", lambda iid: (True, pr))
+    monkeypatch.setattr(M, "_dead_lettered", lambda iid: False)
+    day = M.datetime.now(M.timezone.utc).date().isoformat()
+    (tmp_path / "state").mkdir()
+    v2 = {"id": "v2-egress", "kind": "v2", "title": "v2-verify: egress", "item": "repair-v2-egress"}
+    (tmp_path / "state" / f"{day}.json").write_text(json.dumps({"findings": [
+        {"id": "unit-x", "kind": "unit", "title": "unit x failed", "tried": "re-ran x.service (rc 0)"}, v2]}))
+    if yesterday:
+        from datetime import date, timedelta
+        prev = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+        (tmp_path / "state" / f"{prev}.json").write_text(json.dumps({"findings": [{**v2, "item": "repair-v2-egress-y"}]}))
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [{"id": "v2-egress", "kind": "v2",
+                                                             "title": "v2-verify: egress", "evidence": "still 2"}])
+    sent = []
+    monkeypatch.setattr(M, "_alert_group", sent.append)
+    M.recheck()
+    return json.loads((tmp_path / "frag" / day / "repairs.json").read_text()), sent
+
+
+def test_recheck_reports_repaired_and_still_failing_and_does_not_page_a_repair_handed_over_tonight(tmp_path, monkeypatch):
+    """CAD-6/AGT-8/MSG-8 (2026-09-26): a repair handed over at 02:00 is listed as in repair,
+    not paged at 03:30, and never "review the pull request" when there is none."""
+    frag, sent = _recheck_with_one_repair(tmp_path, monkeypatch)
+    assert [r["title"] for r in frag["repaired"]] == ["unit x failed"]
+    assert frag["still_failing"][0]["item"] == "repair-v2-egress"
+    assert frag["still_failing"][0]["needs"].startswith("in repair")
+    assert sent == []
+
+
+def test_an_existing_pull_request_is_what_the_owner_reviews(tmp_path, monkeypatch):
+    import cross_model_audit
+    monkeypatch.setattr(cross_model_audit, "pr_reviews", lambda url: [{"family": "gpt", "kind": "comment"}])
+    frag, _ = _recheck_with_one_repair(tmp_path, monkeypatch, pr="https://x/pull/7")
+    assert frag["still_failing"][0]["needs"] == "review the pull request https://x/pull/7"
+
+
+def test_a_pull_request_no_second_model_reviewed_is_not_the_owners_yet(tmp_path, monkeypatch):
+    """AUD-5: Miles's PR goes to the owner only after another family commented."""
+    import cross_model_audit
+    monkeypatch.setattr(cross_model_audit, "pr_reviews", lambda url: [{"family": "claude", "kind": "comment"}])
+    frag, _ = _recheck_with_one_repair(tmp_path, monkeypatch, pr="https://x/pull/7")
+    assert frag["still_failing"][0]["needs"].startswith("in review: a second model reviews")
+
+
+def test_a_repair_still_failing_after_24_hours_pages_the_owner(tmp_path, monkeypatch):
+    _, sent = _recheck_with_one_repair(tmp_path, monkeypatch, yesterday=True)
+    assert len(sent) == 1 and "v2-verify: egress" in sent[0]
+
+
+def test_a_sweep_that_did_not_run_is_the_first_thing_reported(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "FRAGMENTS", tmp_path / "frag")
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [])
+    monkeypatch.setattr(M, "_alert_group", lambda text: None)
+    M.recheck()
+    day = M.datetime.now(M.timezone.utc).date().isoformat()
+    frag = json.loads((tmp_path / "frag" / day / "repairs.json").read_text())
+    assert frag["still_failing"][0]["title"] == "the 02:00 sweep did not run"
+
+
+def test_repairs_that_gave_up_are_findings_once_per_job(tmp_path, monkeypatch):
+    log = tmp_path / "esc.log"
+    log.write_text("autofix: 3 repair(s) need a person\n  old-job: miles gave up\n"
+                   "autofix: 13 repair(s) need a person\n"
+                   "  nightshift-overnight: miles gave up — gave up after 3 failed attempts\n"
+                   "  nightshift-overnight: miles gave up — gave up after 3 failed attempts\n"
+                   "  box-deploy-drift: miles gave up — gave up after 3 failed attempts\n")
+    monkeypatch.setattr(M, "ESCALATIONS_LOG", log)
+    found = M.escalations()
+    assert [f["id"] for f in found] == ["escalation-box-deploy-drift", "escalation-nightshift-overnight"]
+    assert all(f["kind"] == "escalation" for f in found)
+
+
+def test_an_escalation_is_not_handed_back_to_miles(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "pull_latest", lambda: "fleet sync rc 0")
+    esc = {"id": "escalation-x", "kind": "escalation", "title": "job x: repair gave up"}
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [dict(esc)])
+    monkeypatch.setattr(M, "remediate", lambda f: "")
+    delegated = []
+    monkeypatch.setattr(M, "delegate", lambda f, day: delegated.append(f["id"]) or "x")
+    M.sweep()
+    assert delegated == []
+
+
+def test_recheck_closes_repaired_ledger_item_and_leaves_failing_item_open(tmp_path, monkeypatch):
+    """recheck() dismisses the ledger item of a finding it no longer sees at 03:30,
+    and leaves the item of a still-failing finding open (class B, audit 2026-10-17)."""
+    from ledger.fold import fold
+    from ledger.log import EventLog, read_events
+
+    # set up a minimal space with two repair items
+    space = tmp_path / "2-datacore"
+    (space / ".datacore" / "events").mkdir(parents=True)
+    writer = EventLog(space, "morning-repair")
+    writer.append("item.create", {
+        "id": "repair-cadence-foo-20261001", "title": "Repair: cadence foo",
+        "assignee": "miles", "route": "dev", "morning_repair": True,
+        "body": "Done means 03:30 no longer finds it.", "requested_by": "morning-repair"})
+    writer.append("item.create", {
+        "id": "repair-unit-bar-20261001", "title": "Repair: unit bar failed",
+        "assignee": "miles", "route": "dev", "morning_repair": True,
+        "body": "Done means 03:30 no longer finds it.", "requested_by": "morning-repair"})
+
+    monkeypatch.setattr(M, "ROOT", tmp_path)
+    monkeypatch.setattr(M, "STATE", tmp_path / "state")
+    monkeypatch.setattr(M, "FRAGMENTS", tmp_path / "frag")
+    monkeypatch.setattr(M, "_pull_request", lambda iid: (True, ""))
+    monkeypatch.setattr(M, "_dead_lettered", lambda iid: False)
+    monkeypatch.setattr(M, "_alert_group", lambda text: None)
+
+    day = M.datetime.now(M.timezone.utc).date().isoformat()
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / f"{day}.json").write_text(json.dumps({"findings": [
+        {"id": "cadence-foo", "kind": "cadence", "title": "cadence foo is red",
+         "item": "repair-cadence-foo-20261001"},
+        {"id": "unit-bar", "kind": "unit", "title": "unit bar failed",
+         "item": "repair-unit-bar-20261001"},
+    ]}))
+
+    # at 03:30: cadence-foo is gone; unit-bar still failing
+    monkeypatch.setattr(M, "findings", lambda run_v2=True: [
+        {"id": "unit-bar", "kind": "unit", "title": "unit bar failed", "evidence": "still dead"}
+    ])
+
+    M.recheck()
+
+    state = fold(read_events(space))
+    assert state.items["repair-cadence-foo-20261001"].status == "dismissed", \
+        "repaired finding's item must be dismissed at 03:30"
+    assert state.items["repair-cadence-foo-20261001"].closed_kind == "done"
+    assert state.items["repair-unit-bar-20261001"].status != "dismissed", \
+        "still-failing finding's item must remain open"

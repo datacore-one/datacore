@@ -56,6 +56,7 @@ import argparse
 import gzip
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -86,7 +87,7 @@ def find_transcript(session_id: str) -> Path | None:
 
     Deriving the project slug from cwd would be faster, but wrong the moment a
     session starts in a subdirectory (`.datacore/dips` becomes
-    `-Users-gregor-Data--datacore-dips`, with dots collapsed to dashes too).
+    `-Users-alice-Data--datacore-dips`, with dots collapsed to dashes too).
     A glob is cheap and cannot be wrong.
     """
     if not PROJECTS_DIR.is_dir():
@@ -120,6 +121,14 @@ def _text(msg) -> str:
     return ""
 
 
+def _local_day(ts: str) -> str:
+    """The local calendar day of a transcript timestamp, as journals are dated."""
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().date().isoformat()
+    except ValueError:
+        return ts[:10]
+
+
 def _iter_records(path: Path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
@@ -149,6 +158,8 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
     first_prompt = ""
     wrapped = False
     stamps: list[str] = []
+    owner_days: set[str] = set()
+    compactions = 0
 
     for rec in _iter_records(transcript):
         ts = rec.get("timestamp")
@@ -158,10 +169,18 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
 
         if rtype == "user":
             body = _text(rec.get("message", {}))
+            # A compaction summary arrives as a user record too. /wrap-up must
+            # account for every compacted stretch (2026-11-01: a nine-day
+            # session was wrapped up from the last summary alone).
+            if rec.get("isCompactSummary"):
+                compactions += 1
+                continue
             # Hook output and tool results also arrive as user records; only
             # count something that looks like a person typing.
             if body and not body.startswith("<"):
                 user_turns += 1
+                if ts:
+                    owner_days.add(_local_day(ts))
                 if not first_prompt:
                     first_prompt = body[:500]
             if any(m in body for m in WRAPUP_MARKERS):
@@ -185,6 +204,8 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
                     fp = inp.get("file_path")
                     if fp:
                         files.add(fp)
+                elif name == "Bash":
+                    files |= _bash_write_targets(str(inp.get("command") or ""))
 
     sub_tokens = Counter()
     sub_turns = 0
@@ -202,12 +223,27 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
             # next_actions.org and a learning file, all written by spawned
             # agents. Session-scoped push reads this set, so a gap here means
             # real work silently never leaves the machine.
+            #
+            # Bash counts here for the same reason it counts on the main thread.
+            # It did not, until 2026-09-23: this branch read `file_path` only,
+            # so an agent that wrote through the shell contributed nothing --
+            # and `journal-entry-writer` writes every space journal with
+            # `cat >> <path> <<EOF`. The space journals were therefore absent
+            # from `files_modified` on every wrap-up, which is precisely the
+            # "real work silently never leaves the machine" the note above
+            # warns about, happening in the code underneath it. 285f4f2 closed
+            # this for the main thread and left the subagent half open.
             for blk in (rec.get("message") or {}).get("content") or []:
-                if (isinstance(blk, dict) and blk.get("type") == "tool_use"
-                        and blk.get("name") in ("Edit", "Write", "NotebookEdit")):
-                    fp = (blk.get("input") or {}).get("file_path")
+                if not (isinstance(blk, dict) and blk.get("type") == "tool_use"):
+                    continue
+                name = blk.get("name")
+                inp = blk.get("input") or {}
+                if name in ("Edit", "Write", "NotebookEdit"):
+                    fp = inp.get("file_path")
                     if fp:
                         files.add(fp)
+                elif name == "Bash":
+                    files |= _bash_write_targets(str(inp.get("command") or ""))
 
     # Which spaces the session touched, from the paths it wrote. Used by the
     # sweep to route patterns to the right space without asking an LLM.
@@ -234,6 +270,8 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
         "ended_at": max(stamps) if stamps else None,
         "turns": turns,
         "user_turns": user_turns,
+        "owner_days": sorted(owner_days),
+        "compactions": compactions,
         "tokens": dict(tokens),
         "output_tokens": tokens["output_tokens"],
         "subagent_transcripts": len(subagents),
@@ -250,6 +288,63 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
 # --------------------------------------------------------------------------
 # archiving
 # --------------------------------------------------------------------------
+
+# Paths a Bash command writes to. Claude Code's auto mode tells the model to
+# prefer Bash over Edit/Write ("make file changes with sed, heredocs, or short
+# scripts"), so a session's entire file output can arrive through this tool and
+# contribute nothing to files_modified. Measured 2026-09-18: 208 Bash calls,
+# zero Edit/Write, files_modified == [] — and `wrap_up_mechanics finalize`, which
+# scopes its commit to that list, committed nothing while reporting success.
+#
+# Heuristic by necessity: a shell command's effects cannot be known without
+# running it. It is deliberately conservative — a missed path leaves the old
+# behaviour, a wrong one would commit something the session did not touch.
+_BASH_WRITE = [
+    re.compile(r'>>?\s*([^\s|&;<>()"\']+)'),                 # > file, >> file
+    re.compile(r'\btee\s+(?:-a\s+)?([^\s|&;<>()"\']+)'),
+    re.compile(r'\bsed\s+-i(?:\s+\S*)?\s+(?:[^\s]+\s+)?([^\s|&;<>()"\']+)'),
+    re.compile(r'\bcp\s+\S+\s+([^\s|&;<>()"\']+)'),
+    re.compile(r'\bmv\s+\S+\s+([^\s|&;<>()"\']+)'),
+    re.compile(r'write_text\(|\bopen\(\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"][wa]'),
+]
+
+
+def _bash_write_targets(command: str) -> set[str]:
+    """Best-effort: which paths does this shell command write to?"""
+    out: set[str] = set()
+    if not command or len(command) > 20000:
+        return out
+    for rx in _BASH_WRITE:
+        for m in rx.finditer(command):
+            for g in m.groups():
+                if not g:
+                    continue
+                g = g.strip().strip('"\'')
+                if not _looks_like_path(g):
+                    continue
+                out.add(g)
+    return out
+
+
+# A heredoc body contains `>` in prose and code, so the redirect pattern matches
+# markdown and shell fragments as eagerly as filenames. The first run of this
+# extraction returned 159 "paths" including `#`, `**A` and `!c.ok`. Committing
+# those would be worse than committing nothing, so a candidate has to look like
+# a path before it counts.
+_PATH_OK = re.compile(r'^~?/?[\w.@+-]+(?:/[\w.@+-]+)*$')  # absolute, ~, or relative
+
+
+def _looks_like_path(s: str) -> bool:
+    if not s or len(s) > 400:
+        return False
+    if s.startswith(('/dev/', '&', '$', '(', '#', '*', '!', '|', '=')) or s == '-':
+        return False
+    if not _PATH_OK.match(s):
+        return False
+    # A bare word is a shell token far more often than a file. Require either a
+    # directory separator or a real-looking extension.
+    return '/' in s or bool(re.search(r'\.[A-Za-z0-9]{1,6}$', s))
+
 
 def _gzip_copy(src: Path, dst: Path) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -463,8 +558,13 @@ def main() -> int:
         # Silent no-op, not an error: the SessionEnd hook fires in contexts
         # that have no session id, and a hook that fails there is a hook that
         # gets disabled.
-        print(json.dumps({"status": "no-session-id"}) if args.json else
-              "no session id available (set --session or CLAUDE_CODE_SESSION_ID)")
+        # Outside Claude Code (Codex, Hermes, OpenClaw, ...) there is no Claude
+        # transcript to copy, so this step does not apply — callers (/wrap-up,
+        # /tomorrow, /continue) report it as such, never as a failure.
+        reason = ("no Claude Code session here: this harness keeps no transcript "
+                  "Datacore archives (pass --session to archive a Claude session by id)")
+        print(json.dumps({"status": "not-applicable", "reason": reason}) if args.json
+              else f"not applicable — {reason}")
         return 0
 
     result = archive(sid, force=args.force)

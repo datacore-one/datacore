@@ -83,10 +83,37 @@ def _session_marked(session_id):
         return False
 
 
+_RECALL = re.compile(r'hook-inject|plur_inject|plur-hook\s+hook-(?:inject|prompt)|plur\s+hook\s+inject')
+
+
+def _user_hook_recalls(path=None):
+    """Does the user's own Claude Code settings already run prompt-time recall?
+
+    The install ships this hook in its project settings so a new user has
+    recall with no extra step (MEM-69). Someone who ran `plur init`, or wired
+    it by hand, also has it at user level, and Claude Code runs both: the
+    project copy then stands down instead of injecting twice.
+    """
+    path = path or Path.home() / '.claude' / 'settings.json'
+    try:
+        settings = json.loads(Path(path).read_text())
+        groups = (settings.get('hooks') or {}).get('UserPromptSubmit') or []
+        return any(_RECALL.search(str(h.get('command', '')))
+                   for g in groups if isinstance(g, dict)
+                   for h in (g.get('hooks') or []) if isinstance(h, dict))
+    except (OSError, ValueError, AttributeError, RecursionError):
+        return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rehydrate', action='store_true')
+    parser.add_argument('--unless-user-hook', action='store_true',
+                        help='do nothing when ~/.claude/settings.json already wires recall')
     args = parser.parse_args(argv)
+    if args.unless_user_hook and _user_hook_recalls():
+        print('{}')
+        return
     try:
         stdin_data = sys.stdin.read(_MAX_STDIN + 1)
         if len(stdin_data) > _MAX_STDIN:

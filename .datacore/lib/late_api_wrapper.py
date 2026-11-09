@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from urllib.request import Request
 from secret_http import urlopen
+from datacore.ledger import attests
 from urllib.error import HTTPError
 from typing import Dict, Optional, List
 
@@ -38,6 +39,13 @@ class LateAPIClient:
             "Content-Type": "application/json",
         }
 
+    # Every call to Late goes through here, reads included; only a write --
+    # a post created, scheduled or published -- is recorded.
+    @attests("social.post",
+             ref=lambda r: str((r.get("post") or r).get("_id", "") or (r.get("post") or r).get("id", ""))
+             if isinstance(r, dict) else "",
+             detail="late_api_wrapper: post sent through Late",
+             when=lambda r, self, method, *a, **k: str(method).upper() != "GET")
     def _api_request(self, method: str, path: str, data: Optional[Dict] = None) -> Dict:
         """Make API request to Late."""
         url = f"{self.api_base}{path}"

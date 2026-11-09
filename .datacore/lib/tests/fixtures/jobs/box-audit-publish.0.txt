@@ -1,0 +1,7 @@
+# fixture for box-audit-publish artifact[0]
+# producer artifact: ~/.datacore/state/audit-publish.log on box
+# harvested: 2026-09-28 (the box's own check run for the night, without --write; the publish job prints the same first line)
+# regex under test: cross_model_audit check [0-9]{4}-[0-9]{2}-[0-9]{2}: 
+# represents: SUCCESS (the night was aggregated)
+# ---
+cross_model_audit check 2026-09-28: 0 confirmed, 21 unconfirmed, 0 alert(s)

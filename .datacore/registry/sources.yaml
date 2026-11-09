@@ -172,6 +172,82 @@ sources:
     good_for: [general, technology, academic, market-analysis, companies]
     note: "Autonomous agent. $2-5/task. Budget-gated."
 
+  # === CASE RESEARCH CELL (free, key-less scholarly and registry sources; adapters in the health module) ===
+  europepmc:
+    type: api
+    description: "Europe PMC — PubMed plus open-access full text, author manuscripts and preprints"
+    tool: "python3 .datacore/modules/health/lib/research/case_cli.py run --stream <S>"
+    layers: [search, research]
+    content_type: documents
+    cost_per_call: 0
+    authority: high
+    good_for: [medical, academic, scientific]
+
+  openalex:
+    type: api
+    description: "OpenAlex — broadest free index of scholarly works with open-access locations"
+    tool: "python3 .datacore/modules/health/lib/research/case_cli.py run --stream <S>"
+    layers: [search, research]
+    content_type: documents
+    cost_per_call: 0
+    authority: high
+    good_for: [medical, academic, scientific, papers]
+
+  semantic-scholar:
+    type: api
+    description: "Semantic Scholar — citation graph, TLDRs, open-access PDFs (free key lifts the rate limit)"
+    tool: "python3 .datacore/modules/health/lib/research/case_cli.py run --stream <S>"
+    layers: [search, research]
+    api_key: SEMANTIC_SCHOLAR_API_KEY
+    content_type: documents
+    cost_per_call: 0
+    authority: high
+    good_for: [academic, papers]
+
+  clinicaltrials:
+    type: api
+    description: "ClinicalTrials.gov API v2 — trial matching by condition, status and country"
+    tool: "python3 .datacore/modules/health/lib/research/case_cli.py run --stream S6"
+    layers: [research]
+    content_type: structured_data
+    cost_per_call: 0
+    authority: high
+    good_for: [medical, trials]
+
+  ctis:
+    type: api
+    description: "EU CTIS public search — European trials (undocumented portal endpoint, may need maintenance)"
+    tool: "python3 .datacore/modules/health/lib/research/case_cli.py run --stream S6"
+    layers: [research]
+    content_type: structured_data
+    cost_per_call: 0
+    authority: high
+    good_for: [medical, trials]
+
+  crossref:
+    type: api
+    description: "Crossref — DOI metadata and retraction notices"
+    tool: "lib/research/sources/crossref.py"
+    layers: [research]
+    content_type: structured_data
+    cost_per_call: 0
+
+  unpaywall:
+    type: api
+    description: "Unpaywall — legal open-access copy of any DOI (needs a contact email, not a key)"
+    tool: "lib/research/sources/unpaywall.py"
+    layers: [gather]
+    content_type: documents
+    cost_per_call: 0
+
+  openfda:
+    type: api
+    description: "openFDA drugs@FDA — approvals by drug name"
+    tool: "lib/research/sources/openfda.py"
+    layers: [research]
+    content_type: structured_data
+    cost_per_call: 0
+
   # === BUDGET CAPS ===
   # Monthly spending limits per source. Research-orchestrator checks accumulated
   # costs in source_costs.yaml before each call and skips over-budget sources.

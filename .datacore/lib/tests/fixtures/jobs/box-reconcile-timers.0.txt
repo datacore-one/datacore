@@ -1,0 +1,7 @@
+# fixture for box-reconcile-timers artifact[0]
+# producer artifact: ~/.datacore/cos/reconcile.last-run on box
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: rc=0
+# represents: SUCCESS
+# ---
+2026-09-27T10:20:01Z rc=0

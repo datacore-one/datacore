@@ -80,7 +80,9 @@ def _this_actor() -> str:
 
     A per-writer log is only disjoint if exactly one writer writes it. A
     default actor silently breaks that for every machine except the one the
-    default names.
+    default names -- and so does the hostname, which is why this resolves
+    STRICTLY (owner follow-up Q2): an undeclared host raises `UndeclaredActor`
+    naming identity.env and the registry. `main()` calls it once at startup.
     """
     try:
         from actor_identity import this_actor
@@ -89,7 +91,7 @@ def _this_actor() -> str:
         _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
         _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
         this_actor = _m.this_actor
-    return this_actor()
+    return this_actor(strict=True)
 
 def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> dict:
     """Reconcile an already-imported task with what org says about it NOW.
@@ -116,9 +118,15 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     if not org_file.exists():
         return {"dismissed": 0, "updated": 0}
     from ledger_project_org import phase
+    import org_readonly
+    if org_readonly.enabled(space):
+        # Phase F: the list is a read-only view. A hand edit reaches the ledger
+        # only through the editor hook (`org_readonly.py hook`), never here.
+        return {"dismissed": 0, "updated": 0, "readonly": True}
     if phase(space) == 1:
         from ledger.projection_state import sync_generated
-        return sync_generated(space, fold(read_events(space)), actor or _this_actor(), dry_run)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        return sync_generated(space, authoritative_state(space), actor or _this_actor(), dry_run)
     # File-level tags, parsed the way genesis does. Items created through the
     # adapter/ingest never recorded `filetags`, while genesis-imported ones
     # do — checkpoint-verify then compares unlike data and reports the same
@@ -134,7 +142,8 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     except OSError:
         pass
     ws = SafeOrgWorkspace(); ws.load(str(org_file))
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     log = None
     dismissed = updated = 0
     for node in ws.all_nodes():
@@ -351,14 +360,46 @@ def _dismiss_archived(space, ws, state, log, actor, dry_run) -> int:
     org_dir = space / "org"
     live_ids: set[str] = set()
     archived_ids: set[str] = set()
+
+    def _ids(f: Path) -> set[str]:
+        return set(re.findall(r":ID:\s*(\S+)", f.read_text(errors="replace")))
+
+    # ARCHIVE EVIDENCE: the archive files beside the authored ones, as
+    # org-archive-subtree writes them. An unreadable archive only withholds
+    # evidence, which declines to close things -- the cautious direction.
     for f in sorted(org_dir.glob("*.org")):
-        try:
-            ids = set(re.findall(r":ID:\s*(\S+)", f.read_text(errors="replace")))
-        except OSError:
-            # Unreadable file: treat its ids as LIVE, never as archived. The
-            # cautious direction is the one that declines to close things.
+        if not f.is_file() or "archive" not in f.name.lower():
             continue
-        (archived_ids if "archive" in f.name.lower() else live_ids).update(ids)
+        try:
+            archived_ids |= _ids(f)
+        except OSError:
+            continue
+
+    # LIVENESS: every authored org file under org/, nested ones included
+    # ("an id still present in ANY live org file is left alone").
+    #
+    # An unreadable live file used to be `continue`d, which put its ids in
+    # NEITHER set -- so an id it held that also sat in an archive was
+    # dismissed, and dismiss is terminal (DIP-0034). "Treat its ids as live"
+    # cannot be done id by id when the ids cannot be read, so it is done for
+    # the whole pass: any live file or directory we cannot read means no
+    # archived-dismissal this run. Found by the Lean model
+    # (DatacoreSpec/LedgerSeal.lean, ingest_*), replayed 2026-09-23.
+    unreadable: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(
+            org_dir, onerror=lambda exc: unreadable.append(str(exc))):
+        dirnames.sort()
+        for name in sorted(filenames):
+            if not name.endswith(".org") or "archive" in name.lower():
+                continue
+            if "archive" in Path(dirpath).relative_to(org_dir).as_posix().lower():
+                continue
+            try:
+                live_ids |= _ids(Path(dirpath) / name)
+            except OSError as exc:
+                unreadable.append(f"{name}: {exc}")
+    if unreadable:
+        return 0
 
     closed = 0
     for nid in sorted(archived_ids - live_ids):
@@ -389,7 +430,9 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
     if (adapter is not None and Path(adapter).resolve() != installed
             or Path(org_workspace_adapter.__file__).resolve() != installed):
         raise ValueError('ID preparation requires the matching installed core adapter')
-    files = [space / 'org' / name for name in ORG_FILES
+    import org_readonly
+    names = ('inbox.org',) if org_readonly.enabled(space) else ORG_FILES  # phase F: the list is read-only
+    files = [space / 'org' / name for name in names
              if (space / 'org' / name).exists()]
     # Validate the complete identity namespace before changing any file. A
     # workspace per file hides collisions and lets ingestion conflate tasks.
@@ -460,7 +503,8 @@ def _projected_duplicates(space: Path, files: list[Path]) -> set[str]:
         return set()
     from ledger.fold import fold
     from ledger.log import read_events
-    known = set(fold(read_events(space)).items)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    known = set(authoritative_state(space).items)
     return {i for i in shared if i in known}
 
 
@@ -527,8 +571,29 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    # IDENTITY AT STARTUP (owner follow-up Q2): every admission and every
+    # reconciliation below appends as this host's declared actor. Resolve it
+    # once, strictly, before touching any space -- an undeclared host is
+    # refused here instead of sweeping every space and failing at each append.
+    try:
+        actor = _this_actor()
+    except RuntimeError as exc:
+        if type(exc).__name__ != "UndeclaredActor":
+            raise
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
 
-    spaces = sorted(p for p in args.root.glob("[0-9]-*") if (p / "org").is_dir())
+    # Every top-level space, however many digits its number has (SPC-9: the
+    # eleventh space is `10-…`, which the old `[0-9]-*` glob never matched),
+    # plus any declared only by its marker. The glob also follows the links of
+    # the phase-1 cycle's view root, which discovery deliberately does not.
+    from spaces import LEGACY_GLOB, discover_spaces
+    found = {p for p in args.root.glob(LEGACY_GLOB) if p.name.partition("-")[0].isdigit()}
+    try:
+        found |= {s.path for s in discover_spaces(args.root) if s.path.parent == args.root}
+    except (OSError, ValueError):
+        pass                                # the glob alone is the old behaviour
+    spaces = sorted(p for p in found if (p / "org").is_dir())
     # Sweeping nothing is not a successful sweep.
     if not spaces:
         print(f"ERROR: no spaces with org/ under {args.root} — refusing to report success")
@@ -538,6 +603,17 @@ def main() -> int:
     failures = 0
     for space in spaces:
         try:
+            import org_readonly
+            if org_readonly.enabled(space):
+                # Phase F: hand edits to the read-only list are not imported
+                # hourly; the editor hook turns them into adapter commands.
+                if not args.dry_run:
+                    ensure_ids(space)
+                pending = org_readonly.hook(space, quiet=True, out=lambda _line: None)
+                print(f"{space.name:14} read-only lists (phase F): "
+                      + ("no hand edit" if pending == 0 else
+                         f"hand edit waiting for `org_readonly.py hook --space {space} --apply`"))
+                continue
             if not args.dry_run:
                 ensure_ids(space)
             before = scan(space)
@@ -559,9 +635,9 @@ def main() -> int:
                 # not bad luck, a shared writer. Per-host actors cannot
                 # collide, so the class ends here rather than being detected
                 # again by resolve_ledger_conflicts' ForkError guard.
-                import_space(space, actor=_this_actor())
+                import_space(space, actor=actor)
             total_new += new
-            sy = sync_state(space, dry_run=args.dry_run)
+            sy = sync_state(space, actor=actor, dry_run=args.dry_run)
             # ORPHANS ARE A LEDGER FAILURE, so the sweep closes them rather
             # than letting them accumulate for a human to find. Confirmation
             # needs TWO sweeps an hour apart (see confirm_and_dismiss): one
@@ -570,7 +646,7 @@ def main() -> int:
             orph = confirm_and_dismiss(space, time.time(),
                                        execute=not args.dry_run)
             sy["dismissed"] += orph.get("dismissed", 0)
-            if orph.get("refused"):
+            if orph.get("refused") and not orph["refused"].startswith("phase-1"):
                 print(f"{space.name:14} ORPHAN SWEEP REFUSED — {orph['refused']}")
             drift = new or sy["dismissed"] or sy["updated"]
             flag = "  <-- DRIFT" if drift else ""

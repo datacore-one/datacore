@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import socket
@@ -120,7 +121,8 @@ def orphans(space: Path) -> dict:
         return {"space": space.name, "skipped": "unreadable org file(s)",
                 "detail": unreadable[:3], "orphans": []}
 
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     live = [i for i, it in state.items.items()
             if it.status in LIVE and not (it.payload or {}).get("section")]
     found = [i for i in live if i not in present]
@@ -174,13 +176,31 @@ def confirm_and_dismiss(space: Path, now: float, execute: bool = False,
     unreadable files skip the space, and the ceiling — because dismiss is
     terminal (DIP-0034) and two scans do not make a bad scanner good.
     """
+    # A PHASE-1 SPACE HAS NO AUTHORED EVIDENCE OF ABSENCE. Its next_actions.org
+    # is generated from the ledger, so an item another host created is simply
+    # not rendered yet on a host whose projection is behind -- and two sweeps an
+    # hour apart dismissed it for good as housekeeping. About 41 live tasks were
+    # lost that way after the flip, two on 2026-09-26 (audit B-F1). Until an
+    # absence can be judged against the last rendered base, do not judge it.
+    if (space / ".datacore" / "ledger-phase").exists():
+        return {"dismissed": 0, "refused": "phase-1 space: the task list is generated "
+                "from the ledger, so absence from it is not evidence"}
     watch = _watch_path(space)
     try:
         prev = json.loads(watch.read_text())
     except (OSError, ValueError):
         prev = {}
     prev_ids = set(prev.get("orphans") or [])
-    prev_at = float(prev.get("at") or 0)
+    try:
+        prev_at = float(prev.get("at") or 0)
+    except (TypeError, ValueError):
+        prev_at = 0.0
+    # `json` reads -Infinity/NaN. A watch file saying `"at": -Infinity` would
+    # make `now - prev_at` infinite and let ONE real scan confirm a deletion --
+    # the two-sweep rule stands on `at` being the time of a real observation.
+    # Found by the Lean model (DatacoreSpec/LedgerSeal.lean, orphans_*).
+    if not math.isfinite(prev_at):
+        prev_at = 0.0
 
     r = orphans(space)
     if r.get("skipped"):

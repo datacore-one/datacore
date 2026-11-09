@@ -9,7 +9,7 @@ symptom.
 
 A fleet that cannot verify itself must say WHY in the artifact, in words that
 name the next action. "20 unverifiable" is a fact; "20 unverifiable — a
-full-tunnel VPN is capturing 192.168.1.0/24, which is where blackpi lives"
+full-tunnel VPN is capturing the LAN subnet the self-hosted git server lives on"
 is a fact someone can act on.
 
 Reports, never decides. Nothing here changes routing, and a VPN is never
@@ -49,13 +49,17 @@ def routes() -> str:
 
 def default_iface(table: str | None = None) -> str:
     table = routes() if table is None else table
+    # Read the table's own format, not the platform's: a table captured on one
+    # host is parsed on another (a report, a test), and `platform.system()`
+    # made a Linux runner read a macOS `netstat -rn` table as empty.
     for line in table.splitlines():
         f = line.split()
-        if platform.system() == "Darwin":
-            if f and f[0] == "default" and len(f) >= 4:
-                return f[-1]
-        elif f[:1] == ["default"] and "dev" in f:
+        if f[:1] != ["default"]:
+            continue
+        if "dev" in f[:-1]:                      # Linux `ip route`: default via X dev eth0
             return f[f.index("dev") + 1]
+        if len(f) >= 4:                          # macOS `netstat -rn`: ... Flags Netif
+            return f[-1]
     return ""
 
 

@@ -46,7 +46,12 @@ ENV_FILE = os.environ.get("DATACORED_ENV_FILE", "/etc/datacored.env")
 TOKEN_KEY = "CLAUDE_CODE_OAUTH_TOKEN"
 REFRESH_KEY = "CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
 EXPIRES_KEY = "CLAUDE_CODE_OAUTH_EXPIRES_AT"
-REFRESHER = Path.home() / "Data/2-datacore/2-projects/datacore-app/daemon/ops/token-refresh/cos_token_refresh.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+#: The app daemon lives in the install's system space (install.yaml roles.system).
+REFRESHER = (Path.home() / "Data" / space_for("system", Path.home() / "Data", "0-personal")
+             / "2-projects/datacore-app/daemon/ops/token-refresh/cos_token_refresh.py")
 
 
 def _fingerprint(value: str) -> str:

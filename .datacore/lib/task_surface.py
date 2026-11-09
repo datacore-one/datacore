@@ -19,40 +19,21 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
-FILES = ["5-plur/org/next_actions.org", "5-plur/org/someday.org",
-         "5-plur/org/inbox.org"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spaces import space_for  # noqa: E402
+
+#: The product space's org files (install.yaml roles.product).
+PRODUCT = space_for("product", REPO, "0-personal")
+FILES = [f"{PRODUCT}/org/{n}.org" for n in ("next_actions", "someday", "inbox")]
 
 # First match wins. Order matters: the more specific surfaces come first,
 # because a task can legitimately mention two and only one is where you work.
-SURFACES = [
-    # bizdev first: a prospect name would otherwise be swallowed by a generic
-    # pattern, and it is the surface with no repo, so nothing else claims it.
-    ("bizdev",     r"adacta|halcom|marand|smart ?com|outfit7|hekovnik|emphasys|"
-                   r"\btrack [ab]\b|buying centre|buying autonomy|warm intro|prospect|"
-                   r"scoring rubric|godigital|speaker submission|persona|pipeline|"
-                   r"\blead\b|intro path|repo-signal sweep"),
-    ("enterprise", r"enterprise|plur-df|plur\.datafund\.io|\boidc\b|\bscim\b|"
-                   r"\bsaml\b|admin dashboard|tenant|dependabot|igea|\bsrc\b"),
-    ("bench",      r"plur-bench|longmemeval|locomo|benchmark|leaderboard|r@\d"),
-    ("encode",     r"plur-encode|extract-cli|plur-ai/encode|repo history"),
-    ("hub",        r"\bhub\b|marketplace|pack directory|public index|install count|"
-                   r"mcp\.directory|mcp\.so|mcpservers|pulsemcp|smithery|awesome-|"
-                   r"directory listing|registry submission|submit to \w+\.(org|io|com)"),
-    ("website",    r"plur\.ai/|website|docs\.plur\.ai|landing|sitemap|canonical|own\.html"),
-    ("comms",      r"\btweet\b|\bx thread\b|@plur_ai|linkedin|reddit|hacker news|"
-                   r"show hn|discord|newsletter|campaign|outreach|press|blog|dev\.to|"
-                   r"article|announcement|\bpost\b"),
-    ("ops",        r"\bdns\b|\btls\b|systemd|\bcron\b|server|backup|rotate|"
-                   r"credential|monitor|grafana|hetzner|nightshift|runner|"
-                   r"\bci\b cost|self-hosted|infra"),
-    # core last and broad: it is the default place work lands, so it must not
-    # claim a task another surface has a better claim on.
-    ("core",       r"plur-ai/plur|plur#\d|@plur-ai/|packages/|plur_[a-z]+|engram|"
-                   r"injection|dedup|retriev|rerank|embed|pack install|capsule|"
-                   r"provenance|\bscope\b|pinned|langchain|python sdk|pypi|\bnpm\b|"
-                   r"learnbatch|plur init|integration target|\bcli\b|\bmcp\b|"
-                   r"rebase|merge conflict|branch"),
-]
+# The table is this install's own (repos, prospects, products), so it lives in
+# the gitignored config/task-themes.local.yaml under `surfaces:`; the shipped
+# task-themes.yaml carries a neutral default (INS-3).
+from task_triage import themes  # noqa: E402
+
+SURFACES = list(themes("surfaces").items())
 DEFAULT = "unassigned"
 
 

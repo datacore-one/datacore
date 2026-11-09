@@ -2,8 +2,12 @@
 """Prune learning buffer entries that have been promoted to PLUR engrams.
 
 Scans patterns.md, corrections.md, preferences.md across all spaces.
-Removes entries older than --days that have a matching engram in PLUR.
-Preserves frontmatter and file headers above the first ## entry.
+Removes entries older than --days that have a matching ACTIVE engram in PLUR.
+A retired (or candidate) engram is not a promotion: pruning against it would
+delete the only live copy of the lesson.
+Preserves frontmatter and file headers above the first ## entry, and every
+kept entry byte for byte: the rewritten file is the original with the pruned
+entries' lines removed, and nothing else changed.
 
 Usage:
     python3 prune_learning_buffer.py --dry-run
@@ -163,11 +167,23 @@ def _extract_keywords(text):
     return {w for w in words if len(w) >= 3 and w not in stopwords}
 
 
+# Engram statuses that count as "promoted". Anything else (retired, candidate)
+# does not license deleting the buffer entry. A record with no status field
+# predates the field and is treated as active.
+PROMOTED_STATUSES = ("active",)
+
+# `engrams:` list items and their top-level `status:` (4-space indent).
+_RECORD_START = re.compile(r"^  - ")
+_RECORD_STATUS = re.compile(r"^    status:\s*(\S+)")
+
+
 def load_engram_index(engrams_path=None):
-    """Load engram statements from YAML via fast line-by-line parsing.
+    """Load ACTIVE engram statements from YAML via fast line-by-line parsing.
 
     Returns a list of (keywords_set, statement_text) tuples for matching.
-    Avoids loading the full YAML (slow for 600K+ lines).
+    Avoids loading the full YAML (slow for 600K+ lines). A record's statement
+    is kept only if the record's own status is in PROMOTED_STATUSES (or it
+    has none); the status may come before or after the statement.
     """
     path = engrams_path or ENGRAMS_FILE
     if not path.exists():
@@ -176,10 +192,32 @@ def load_engram_index(engrams_path=None):
     statements = []
     in_statement = False
     continuation_lines = []
+    record_statements = []   # statements of the current engram record
+    record_status = None
+
+    def close_record():
+        nonlocal record_statements, record_status
+        if record_status is None or record_status in PROMOTED_STATUSES:
+            statements.extend(record_statements)
+        record_statements = []
+        record_status = None
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
+
+            if in_statement and not (line.startswith("      ") and stripped):
+                # End of a multiline statement (same rule as before)
+                if continuation_lines:
+                    record_statements.append(" ".join(continuation_lines))
+                continuation_lines = []
+                in_statement = False
+
+            if _RECORD_START.match(line):
+                close_record()
+            m = _RECORD_STATUS.match(line)
+            if m:
+                record_status = m.group(1).strip("\"'")
 
             if stripped.startswith("statement:"):
                 val = stripped.split("statement:", 1)[1].strip()
@@ -189,10 +227,10 @@ def load_engram_index(engrams_path=None):
                     continuation_lines = []
                 elif val.startswith('"') or val.startswith("'"):
                     # Quoted inline value
-                    statements.append(val.strip("\"'"))
+                    record_statements.append(val.strip("\"'"))
                     in_statement = False
                 elif val:
-                    statements.append(val)
+                    record_statements.append(val)
                     in_statement = False
                 else:
                     # Empty — next lines are continuation
@@ -200,18 +238,12 @@ def load_engram_index(engrams_path=None):
                     continuation_lines = []
             elif in_statement:
                 # Continuation lines are indented (typically 6+ spaces)
-                if line.startswith("      ") and stripped:
-                    continuation_lines.append(stripped)
-                else:
-                    # End of multiline
-                    if continuation_lines:
-                        statements.append(" ".join(continuation_lines))
-                    continuation_lines = []
-                    in_statement = False
+                continuation_lines.append(stripped)
 
-    # Handle trailing multiline
+    # Handle trailing multiline, then the last record
     if continuation_lines:
-        statements.append(" ".join(continuation_lines))
+        record_statements.append(" ".join(continuation_lines))
+    close_record()
 
     # Build keyword index
     index = []
@@ -320,19 +352,15 @@ def prune_file(filepath, cutoff_date, engram_index, dry_run=False, verbose=False
                 print(f"         -> KEEP (no engram)")
 
     if not dry_run and pruned_entries:
-        # Rebuild file content
-        parts = [header.rstrip("\n")]
-
-        for entry in keep:
-            raw = entry["raw"]
-            # Strip trailing whitespace/separators from entry
-            raw = raw.rstrip("\n").rstrip("-").rstrip("\n")
-            parts.append("")  # blank line before entry
-            parts.append(raw)
-            parts.append("")
-            parts.append("---")
-
-        new_content = "\n".join(parts) + "\n"
+        # Rebuild by deleting the pruned entries' lines and nothing else.
+        # parse_entries split on "\n" and each piece (header, entry raw) is a
+        # "\n"-join of consecutive lines, so re-joining the kept pieces is the
+        # original minus the pruned blocks, byte for byte. The previous rebuild
+        # stripped trailing '-' from every kept entry, added a '---' separator
+        # to entries that had none, and dropped header blank lines.
+        has_header = not ENTRY_RE.match(content.split("\n", 1)[0])
+        parts = ([header] if has_header else []) + [entry["raw"] for entry in keep]
+        new_content = "\n".join(parts)
 
         # Write atomically via temp file
         tmp = filepath.with_suffix(".md.tmp")

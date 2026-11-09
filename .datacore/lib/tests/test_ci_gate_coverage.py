@@ -69,10 +69,30 @@ def test_every_declaration_carries_a_reason_and_a_review_date():
         assert entry.get("reviewed"), f"{entry.get('path')} declared with no review date"
 
 
+def _repository_is_here(path: str) -> bool:
+    """Is the repository that would hold `path` checked out here at all?
+
+    Modules other than the core's own are separate repositories, and
+    .datacore/dips is a submodule. A CI checkout has neither, so a declaration
+    about a directory inside one is neither present nor stale there -- it is
+    about a repository this checkout does not contain. Where the repository IS
+    present (a full install), a missing directory is stale as before.
+    """
+    parts = Path(path).parts
+    if parts[:2] == (".datacore", "modules") and len(parts) > 2:
+        home = audit.DATACORE.parent / Path(*parts[:3])
+    elif parts[:2] == (".datacore", "dips"):
+        home = audit.DATACORE.parent / Path(*parts[:2])
+    else:
+        return True
+    return home.is_dir() and any(home.iterdir())
+
+
 def test_no_declaration_names_a_directory_that_is_gone():
     """A stale entry silently re-opens the hole it was written to describe."""
     stale = [d["path"] for d in _declared()
-             if not (audit.DATACORE.parent / d["path"]).exists()]
+             if not (audit.DATACORE.parent / d["path"]).exists()
+             and _repository_is_here(d["path"])]
     assert not stale, f"declared but no longer present: {stale}"
 
 
@@ -91,3 +111,15 @@ def test_the_core_suites_are_gated(path):
     assert audit.is_gated(f".datacore/{path}/test_anything.py", gated), (
         f".datacore/{path} is not run by CI"
     )
+
+
+@pytest.mark.parametrize("rel", [
+    "worktrees/li2-jimo-from-repo/lib/gateio/strategies/test_a.py",
+    "state/backup/lib/tests/test_a.py",
+])
+def test_a_checkout_parked_under_datacore_is_not_a_suite(rel):
+    """A worktree checked out at .datacore/worktrees/ (2026-10-28, a trading-module
+    branch) is a second copy of another repository's tests, not a suite of this
+    one; scanning it made the gate demand a declaration for a scratch checkout and
+    made the nightly suite audit run a stale branch's 2000+ tests as its own."""
+    assert not audit.is_source(Path(rel))

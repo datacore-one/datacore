@@ -25,16 +25,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
-#: SSH aliases to inspect. The Data root is resolved on the host itself
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from jobs.manifest import ssh_hosts  # noqa: E402
+
+#: SSH aliases to inspect: every machine the install's roster
+#: (registry/infrastructure.yaml) reaches over ssh -- never a list of ours
+#: written here (INS-3). The Data root is resolved on the host itself
 #: (`$HOME/Data`) rather than hardcoded here — the path is the remote user's
 #: business, and writing it down would bake one machine's layout into a tool
-#: that runs against four.
-HOSTS = ('winston', 'nightshift', 'plur-claw', 'hermes')
+#: that runs against several.
+HOSTS = tuple(ssh_hosts())
 DATA_ROOT = '$HOME/Data'
 
 
@@ -120,21 +126,156 @@ def ledger_forks(repo: Path) -> list[str]:
     So the guard lives HERE, at the moment of creation, not only in a
     checker somewhere else on a schedule.
     """
-    from ledger.verify import verify_chain, check_not_rewound
+    # The one verifier (ledger.verify, Phase 2 V2): task logs AND the per-space
+    # telemetry logs (decision 3; both are published by a relay), judged as the
+    # CLI and the health check judge them. A problem this machine cannot judge
+    # (a writer whose verify key it lacks) is "could not be established",
+    # never "failed" (V5) -- the relay still holds back either way.
+    from ledger.log import TELEMETRY_DIR
+    from ledger.verify import _rewind_problems, verdict_of, verify_log
     bad = []
     events = Path(repo) / '.datacore' / 'events'
     if not events.is_dir():
         return bad
-    for f in sorted(events.glob('*.jsonl')):
+    telemetry = Path(repo) / '.datacore' / TELEMETRY_DIR
+    logs = [(f, f.name) for f in sorted(events.glob('*.jsonl'))]
+    if telemetry.is_dir():
+        logs += [(f, f'{TELEMETRY_DIR}/{f.name}') for f in sorted(telemetry.glob('*.jsonl'))]
+    for f, shown in logs:
         try:
             if f.is_symlink():
                 raise ValueError('symbolic ledger path')
-            errors = verify_chain(f) + check_not_rewound(f)
-            if errors:
-                bad.append(f'{f.name}: ledger integrity verification failed')
+            verdict = verdict_of(verify_log(f, incremental=True).problems + _rewind_problems(f))
+            if verdict == 'broken':
+                bad.append(f'{shown}: ledger integrity verification failed')
+            elif verdict == 'unknown':
+                bad.append(f'{shown}: ledger integrity could not be established')
         except (OSError, ValueError, TypeError, AttributeError, KeyError):
-            bad.append(f'{f.name}: ledger integrity could not be established')
+            bad.append(f'{shown}: ledger integrity could not be established')
     return bad
+
+
+def publication_forks(repo: Path, commit: str, ref: str) -> list[str]:
+    """Would making `commit` the new tip of `ref` fork or rewind a ledger log?
+
+    NEVER PUSH A FORK is a property of what a push PUBLISHES, so this reads the
+    commit's tree, not the working tree, and compares it with `ref` (the
+    remote-tracking ref the push will advance) using fork.py's own predicate:
+    an `(actor, seq)` on both sides with different hashes is a fork. Two more
+    ways a push can break every other machine's copy are named too:
+
+      rewind   an event `ref` holds is missing from the commit -- a truncated
+               or deleted log, which a fork check ignores ("one side ahead")
+      chain    the commit's copy fails verify_chain where `ref`'s copy did not
+
+    Why the chain check alone (`ledger_forks`) is not enough: a three-way merge
+    takes one side's copy WHOLE when the other side never touched the file. A
+    host that rewound its log and re-appended arrives as a perfectly valid
+    chain -- it is only a fork relative to origin, which no single copy can
+    see (fork.py's module docstring). GitFleet.lean `merge_rewrite_is_not_union`.
+
+    [] means safe to publish. A missing `ref` compares nothing (a first push).
+    """
+    import tempfile
+    from ledger import fork
+    from ledger.verify import verify_chain
+
+    repo = Path(repo)
+    prefix = '.datacore/events/'
+
+    def names(rev: str) -> set[str] | None:
+        rc, out = fork._git(repo, 'ls-tree', '-r', '--name-only', rev, '--', prefix)
+        if rc:
+            return None
+        return {n for n in out.splitlines()
+                if n.startswith(prefix) and n.endswith('.jsonl') and '/' not in n[len(prefix):]}
+
+    def blob(rev: str, rel: str) -> str | None:
+        rc, out = fork._git(repo, 'show', f'{rev}:{rel}')
+        return out if rc == 0 else None
+
+    def chain_ok(rel: str, text: str) -> bool:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / Path(rel).name
+            path.write_text(text)
+            return not verify_chain(path)
+
+    ours_names = names(commit)
+    if ours_names is None:
+        return ['ledger logs of the publication commit could not be listed']
+    rc, _ = fork._git(repo, 'rev-parse', '--verify', '-q', f'{ref}^{{commit}}')
+    theirs_names = (names(ref) or set()) if rc == 0 else set()
+
+    bad = []
+    for rel in sorted(ours_names | theirs_names):
+        name = rel[len(prefix):]
+        ours_text = blob(commit, rel) if rel in ours_names else ''
+        theirs_text = blob(ref, rel) if rel in theirs_names else None
+        if ours_text is None:
+            bad.append(f'{name}: publication copy unreadable')
+            continue
+        if ours_text == theirs_text:
+            continue                       # nothing this push would change
+        ours = fork._index(ours_text)
+        if theirs_text is not None:
+            theirs = fork._index(theirs_text)
+            collisions = [k for k in ours.keys() & theirs.keys() if ours[k] != theirs[k]]
+            lost = theirs.keys() - ours.keys()
+            if collisions:
+                bad.append(f'{name}: {len(collisions)} (actor, seq) differ from {ref} — a fork')
+            if lost:
+                bad.append(f'{name}: {len(lost)} event(s) on {ref} missing — a rewind')
+        if ours_text and not chain_ok(rel, ours_text) and (
+                theirs_text is None or chain_ok(rel, theirs_text)):
+            bad.append(f'{name}: chain fails verification')
+    return bad
+
+
+def _park(repo: Path, host: str, branch: str, pre: str) -> str:
+    """Take a refused merge OFF the branch, keeping it as evidence.
+
+    Returning "REFUSED" while the forked merge commit stays on the branch only
+    moves the push to the next pusher: git_fleet_sync publishes HEAD, and
+    HEAD is the merge (replayed: tests/test_git_fleet_formal.py). The merge
+    stays reachable under refs/relay-refused/.
+
+    THE TREE IS CHECKED AT RESET TIME, not assumed (MEM-62). It was clean
+    before the merge, but an agent can write between that check and this
+    reset, and `reset --hard` would erase its edit to a tracked file without a
+    trace. Anything in the working tree (tracked edits and untracked files) is
+    first committed onto `<ref>-wip` (a scratch index; the real one is not
+    touched) and the status names it. If that save fails, nothing is reset.
+    """
+    import tempfile
+    ref = f'refs/relay-refused/{host}/{branch}'
+    _run(['git', '-C', str(repo), 'update-ref', ref, 'HEAD'])
+    saved = ''
+    dirty = _run(['git', '-C', str(repo), 'status', '--porcelain', '--untracked-files=all'])
+    if dirty.returncode or dirty.stdout.strip():
+        wip = f'{ref}-wip'
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, 'GIT_INDEX_FILE': str(Path(tmp) / 'index')}
+            steps = [['git', '-C', str(repo), 'read-tree', 'HEAD'],
+                     ['git', '-C', str(repo), 'add', '-A']]
+            ok = dirty.returncode == 0 and all(
+                subprocess.run(c, env=env, capture_output=True, timeout=120).returncode == 0
+                for c in steps)
+            tree = subprocess.run(['git', '-C', str(repo), 'write-tree'], env=env,
+                                  capture_output=True, text=True, timeout=60) if ok else None
+            commit = (subprocess.run(['git', '-C', str(repo), 'commit-tree', tree.stdout.strip(),
+                                      '-p', 'HEAD', '-m', f'relay rescue: uncommitted work on {branch} '
+                                      f'before the refused merge was reset'],
+                                     capture_output=True, text=True, timeout=60)
+                      if tree is not None and tree.returncode == 0 else None)
+        if (commit is None or commit.returncode != 0
+                or _run(['git', '-C', str(repo), 'update-ref', wip, commit.stdout.strip()]).returncode):
+            return (f'branch NOT reset — uncommitted work could not be saved first; '
+                    f'do not push; refused merge at {ref}')
+        saved = f'; uncommitted work saved at {wip}'
+    reset = _run(['git', '-C', str(repo), 'reset', '-q', '--hard', pre])
+    if reset.returncode != 0:
+        return f'branch could NOT be restored to {pre[:10]} — do not push; evidence at {ref}{saved}'
+    return f'branch restored to {pre[:10]}; refused merge kept at {ref}{saved}'
 
 
 def _normalise_remote(url: str) -> str:
@@ -204,22 +345,27 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
         if dry_run:
             return f"{repo}: would relay {ahead} commit(s) from {host}"
 
+        pre = _run(['git', '-C', str(local), 'rev-parse', '--verify', 'HEAD']
+                   ).stdout.strip()
+        if not pre:
+            return f"{repo}: REFUSED — local HEAD unreadable; nothing merged"
         merge = _run(['git', '-C', str(local), 'merge', '--no-edit',
                       f'{remote_name}/{branch}'], timeout=300)
         if merge.returncode != 0:
             return (f"{repo}: merge from {host} failed; conflict/index evidence "
                     f"retained for review; nothing pushed")
 
-        # NEVER PUSH A FORK. The merge above can only have combined two
-        # per-writer logs, and if it produced two events sharing an
-        # (actor,seq) then pushing would hand that fork to every machine.
-        # Abort and leave the merge for a human — the host's work is still
-        # safe where it was.
-        forks = ledger_forks(local)
+        # NEVER PUSH A FORK. A merge is a union only when each side merely
+        # APPENDED to each log; a side that rewrote a log is taken whole by a
+        # clean three-way merge. So check the chains AND compare with origin
+        # (fork.py's predicate), and on refusal take the merge off the branch:
+        # a refusal that leaves it there is published by the next pusher.
+        # The host's work is still safe where it was.
+        forks = ledger_forks(local) + publication_forks(local, 'HEAD', f'origin/{branch}')
         if forks:
             return (f"{repo}: REFUSED — merging {host} would fork the ledger "
-                    f"({'; '.join(forks)[:160]}). Local history retained; nothing "
-                    f"pushed. Resolve by hand.")
+                    f"({'; '.join(forks)[:160]}); nothing pushed; "
+                    f"{_park(local, host, branch, pre)}. Resolve by hand.")
 
         # Converge with origin before pushing. The relaying machine is not
         # necessarily up to date itself, and a rejected push would leave the
@@ -231,8 +377,11 @@ def relay(host: str, root: str, repo: str, data_dir: Path,
             return (f"{repo}: origin convergence failed; local commits and "
                     f"conflict/index evidence retained; nothing pushed")
 
-        if ledger_forks(local):
-            return f'{repo}: REFUSED — origin convergence failed ledger integrity; local evidence retained'
+        forks = ledger_forks(local) + publication_forks(local, 'HEAD', f'origin/{branch}')
+        if forks:
+            return (f'{repo}: REFUSED — origin convergence failed ledger integrity '
+                    f"({'; '.join(forks)[:160]}); nothing pushed; "
+                    f'{_park(local, host, branch, pre)}')
 
         push = _run(['git', '-C', str(local), 'push', 'origin', branch],
                     timeout=300)
@@ -284,6 +433,10 @@ def main() -> int:
         return 1 if total else 0
 
     hosts = [a.host] if a.host else list(HOSTS)
+    if not hosts:
+        print("no hosts: the machine roster (.datacore/registry/infrastructure.yaml) "
+              "declares none reachable over ssh", file=sys.stderr)
+        return 2
     total = 0
     for host in hosts:
         # RESOLVE $HOME ON THE HOST, once. DATA_ROOT is written with `$HOME` so

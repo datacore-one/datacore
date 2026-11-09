@@ -26,6 +26,7 @@ import sys
 import urllib.parse
 import urllib.request
 from secret_http import urlopen as secret_urlopen
+from datacore.ledger import attests
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,18 +71,60 @@ def try_refresh(token_data: dict, token_path: Path):
         return False, None, str(e)
 
 
-def send_telegram(text: str):
-    """Send notification via Telegram if configured."""
+@attests("telegram.sent", detail="oauth_health_check: alert to The Firm group",
+         when=lambda sent, *a, **k: sent is True)
+def send_telegram(text: str) -> bool:
+    """Send the alert to The Firm group. True only when Telegram accepted it.
+
+    Errors go only to the group (ALERT_CHAT_ID); there is no fallback to
+    TELEGRAM_CHAT_ID, the agent's 1:1 chat with the owner (MSG-1). A send that
+    cannot be made or is refused is recorded as undelivered for the morning
+    sweep (MSG-10) -- it used to be swallowed by `except: pass`. Never raises.
+    """
+    from tg_format import fit, html_safe, keep_full, normalize, record_undelivered
     bot = os.environ.get('TELEGRAM_BOT_TOKEN')
-    chat = os.environ.get('TELEGRAM_CHAT_ID')
-    if not bot or not chat:
-        return
+    chat = os.environ.get('ALERT_CHAT_ID')
+    if not chat or not bot:
+        why = ('ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat' if not chat
+               else 'no bot token (TELEGRAM_BOT_TOKEN)')
+        print(f'oauth_health_check: alert NOT sent ({why})', file=sys.stderr)
+        record_undelivered('oauth_health_check', why, text)
+        return False
+    body = normalize(text)
+    short = fit(body)
+    if short != body:
+        short = fit(body, more=keep_full(body, 'oauth_health_check') or None)
     try:
-        data = urllib.parse.urlencode({'chat_id': chat, 'text': text, 'parse_mode': 'HTML'}).encode()
+        data = urllib.parse.urlencode({'chat_id': chat, 'text': html_safe(short), 'parse_mode': 'HTML'}).encode()
         req = urllib.request.Request(f'https://api.telegram.org/bot{bot}/sendMessage', data=data)
-        secret_urlopen(req, timeout=10)
-    except Exception:
-        pass
+        status = secret_urlopen(req, timeout=10).status
+        why = '' if status == 200 else f'http {status}'
+    except urllib.error.HTTPError as e:
+        why = f'http {e.code}'
+    except Exception as e:  # noqa: BLE001 -- a sender never crashes the health check
+        why = f'exception: {type(e).__name__}: {e}'
+    if why:
+        print(f'oauth_health_check: alert NOT delivered ({why})', file=sys.stderr)
+        record_undelivered('oauth_health_check', why, text)
+        return False
+    return True
+
+
+def _claude_row_name() -> str:
+    """The row names the agent whose token this is -- the install's chief of
+    operations, from principals.yaml -- so no agent of ours ships here (INS-3)."""
+    try:
+        import roster
+        ops = roster.by_role("chief of operations")
+        return f"claude_code_oauth ({roster.display(ops)})" if ops else "claude_code_oauth"
+    except ImportError:
+        return "claude_code_oauth"
+
+
+def _this_host() -> str:
+    """The token checked is this machine's own (~/.claude), so recovery is here."""
+    import socket
+    return socket.gethostname().split(".")[0] or "this host"
 
 
 def check_claude_token(now, warn_days):
@@ -89,13 +132,13 @@ def check_claude_token(now, warn_days):
 
     Unlike the Google tokens, this one cannot be refreshed non-interactively
     once its refresh token is rotated/revoked. Recovery is interactive:
-    `ssh nightshift` then `claude setup-token`. So we only monitor + alert.
+    `claude setup-token` on the host this runs on. So we only monitor + alert.
     Returns (row_tuple_or_None, problem_str_or_None, exit_contribution_int).
     """
-    name = "claude_code_oauth (Miles)"
+    name = _claude_row_name()
     if not CLAUDE_CRED.exists():
         return ((name, 'MISSING', f'no file at {CLAUDE_CRED}'),
-                f"{name}: credentials file missing — run `claude setup-token` on nightshift", 1)
+                f"{name}: credentials file missing — run `claude setup-token` on {_this_host()}", 1)
     try:
         d = json.loads(CLAUDE_CRED.read_text())
         o = d.get('claudeAiOauth', {})
@@ -116,10 +159,10 @@ def check_claude_token(now, warn_days):
     #   - access token expired hard (>12h past) → refresh is actually broken.
     if hours_left < -12:
         return ((name, 'EXPIRED', f'expired {(-hours_left):.1f}h ago; refresh not working'),
-                f"{name}: token stale and NOT auto-refreshing — re-auth: ssh nightshift then `claude setup-token`", 1)
+                f"{name}: token stale and NOT auto-refreshing — re-auth: run `claude setup-token` on {_this_host()}", 1)
     if not has_refresh:
         return ((name, 'NO_REFRESH', f'{hours_left:.1f}h left, no refresh token'),
-                f"{name}: no refresh token — will die at expiry; run `claude setup-token` on nightshift", 2)
+                f"{name}: no refresh token — will die at expiry; run `claude setup-token` on {_this_host()}", 2)
     return ((name, 'OK', f'access token {hours_left:.1f}h left; auto-refreshes (Max, refresh token present)'), None, 0)
 
 

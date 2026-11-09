@@ -54,11 +54,20 @@ MANIFEST = ROOT / ".datacore" / "lib" / "jobs" / "manifest.yaml"
 FIXTURES = ROOT / ".datacore" / "lib" / "tests" / "fixtures" / "jobs"
 HOME = pathlib.Path.home()
 
-# manifest machine name -> ssh alias. The manifest calls winston "box"; ssh
-# does not. Without this map every --live check against box returned n-a,
-# which reads as "could not tell" and is correct but useless.
-SSH_ALIAS = {"box": "winston", "nightshift": "nightshift",
-             "hermes": "hermes", "plur-claw": "plur-claw"}
+# manifest machine name -> ssh alias. The manifest and ssh can name one
+# machine differently. Without this map every --live check against such a
+# machine returned n-a, which reads as "could not tell" and is correct but useless.
+def _ssh(machine: str) -> str:
+    """The ssh alias for a manifest machine, from the install's roster
+    (registry/infrastructure.yaml, via jobs.manifest.ssh_alias). The manifest
+    and ssh may name one machine differently; the map is the install's, never
+    a list of ours written here (INS-3). Unknown: the name itself."""
+    try:
+        from .manifest import ssh_alias
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.manifest import ssh_alias
+    return ssh_alias(machine) or machine
 
 SUCCESS_MARK = "# represents: SUCCESS"
 UNMARKED = "# represents: UNVERIFIED — a human must confirm this is success output"
@@ -170,7 +179,7 @@ def _read_artifact(path: str, machine: str) -> str | None:
         if len(t) <= 20000:
             return t
         return t[:12000] + "\n# ...elided...\n" + t[-8000:]
-    host = SSH_ALIAS.get(machine, machine)
+    host = _ssh(machine)
     try:
         r = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", host,
@@ -197,14 +206,33 @@ def _read_artifact(path: str, machine: str) -> str | None:
     return r.stdout.decode("utf-8", errors="replace")
 
 
-def regex_checks() -> list[tuple[str, str, int, str, str]]:
-    doc = yaml.safe_load(MANIFEST.read_text())
+
+def _effective(path):
+    """The job list as this install runs it: manifest.local.yaml over the tracked list."""
+    try:
+        from .manifest import effective_doc
+    except ImportError:  # executed as a script
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from jobs.manifest import effective_doc
+    return effective_doc(path)
+
+def _checks_in(doc) -> list[tuple[str, str, int, str, str]]:
     out = []
     for j in doc["jobs"]:
         for i, a in enumerate(j.get("artifacts", [])):
             if a.get("check") in ("regex", "last_line_regex"):
                 out.append((j["name"], j["machine"], i, a["path"], a["arg"]))
     return out
+
+
+def regex_checks() -> list[tuple[str, str, int, str, str]]:
+    """The regex checks this install runs: manifest.local.yaml over the tracked list."""
+    return _checks_in(_effective(MANIFEST))
+
+
+def shipped_regex_checks() -> list[tuple[str, str, int, str, str]]:
+    """The regex checks of the tracked list alone -- what CI and a fresh install run."""
+    return _checks_in(yaml.safe_load(MANIFEST.read_text()) or {"jobs": []})
 
 
 # Rewrites a producer's OWN observed line to its success value. Used when the
@@ -287,7 +315,7 @@ def prune_orphans() -> list[pathlib.Path]:
     -- harvested from live state -- outlived them silently. Class 4, applied to
     the fixtures themselves.
     """
-    live = {f"{job}.{idx}.txt" for job, _m, idx, _p, _r in regex_checks()}
+    live = {f"{job}.{idx}.txt" for job, _m, idx, _p, _r in [*regex_checks(), *shipped_regex_checks()]}
     gone = [f for f in FIXTURES.glob("*.txt") if f.name not in live]
     for f in gone:
         f.unlink()

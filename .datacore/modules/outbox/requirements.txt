@@ -1,0 +1,17 @@
+# Python dependencies for the outbox module.
+#
+# Generated 2026-09-23 from the packages this module actually imports (AST, not
+# grep), floored at the version it was running against. Floors rather than pins:
+# these modules share one interpreter with 37 others, and exact pins across all
+# of them guarantee a conflict nobody can resolve.
+#
+# An undeclared dependency does not fail where it is missing — it fails where
+# nobody is looking. research's nightly run died at its import line every night
+# while nightshift's worked, because the package had been installed by hand on
+# one host and declared nowhere.
+#
+#   python3 -m pip install -r requirements.txt
+
+
+PyYAML>=6.0.3
+numpy>=2.4.4

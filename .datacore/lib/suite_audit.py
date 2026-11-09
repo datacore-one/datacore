@@ -41,6 +41,11 @@ NOT_SOURCE = (
 
 def is_source(path: Path) -> bool:
     s = f"/{path.as_posix()}/"
+    # .datacore/state/ is gitignored runtime state; it can hold backup checkouts.
+    # .datacore/worktrees/ holds git worktrees of other repositories (a trading
+    # branch was parked there on 2026-10-28); their tests are that repo's copy.
+    if s.startswith(("/state/", "/worktrees/")):
+        return False
     return not any(x in s for x in NOT_SOURCE)
 
 
@@ -60,6 +65,42 @@ def is_source(path: Path) -> bool:
 SERIAL_SUITES = ("modules/lens/tests",)
 
 
+def _declared(state: str) -> list[str]:
+    """Directories (relative to .datacore) that config/ungated-test-suites.yaml
+    declares with this `state`."""
+    path = DATACORE / "config" / "ungated-test-suites.yaml"
+    try:
+        import yaml
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, ImportError):
+        return []
+    out = []
+    for s in doc.get("suites") or []:
+        p = str((s or {}).get("path") or "").strip().rstrip("/")
+        if (s or {}).get("state") == state and p.startswith(".datacore/"):
+            out.append(p[len(".datacore/"):])
+    return out
+
+
+def _declared_fixtures() -> list[str]:
+    """`state: fixture`: a practice project kept as an eval fixture, whose tests
+    belong to that project and are never Datacore's own suite."""
+    return _declared("fixture")
+
+
+def empty_suites(results) -> list:
+    """Suites that collected nothing, less those declared `state: promise-gated`.
+
+    A directory of promise evals is hidden by promise_gate.py until its promise
+    is green in the committed baseline, so collecting nothing there is the gate
+    working (TSK-11, 2026-10-04). It is still run: once the promise goes green
+    its evals collect, and a red one fails like any other test.
+    """
+    gated = _declared("promise-gated")
+    return [r for r in results
+            if r.empty and not any(r.suite == g or r.suite.startswith(g + "/") for g in gated)]
+
+
 def discover_suites() -> list[Path]:
     """A suite is a directory that owns test files and is run from its own root.
 
@@ -67,9 +108,12 @@ def discover_suites() -> list[Path]:
     pytest can actually collect in one process.
     """
     dirs: set[Path] = set()
+    fixtures = _declared_fixtures()
     for p in DATACORE.rglob("test_*.py"):
         rel = p.relative_to(DATACORE)
         if not is_source(rel):
+            continue
+        if any(rel.as_posix().startswith(f + "/") for f in fixtures):
             continue
         dirs.add(p.parent)
     # Drop a directory pytest already reaches by recursing from an ancestor suite,
@@ -123,22 +167,20 @@ def run_suite(suite: Path, python: str, cov_dir: Path | None = None) -> Result:
         # -p keeps one data file per process, which is what lets 19 separate
         # pytest runs be combined into a single picture afterwards.
         pre = [python, "-m", "coverage", "run", "-p", "--source", str(DATACORE / "lib"), "-m"]
-    proc = subprocess.run(
-        # --continue-on-collection-errors is the point of this runner. Without it a
-        # single un-importable file aborts its whole root: `pytest .datacore/lib`
-        # collected ZERO of 212 files because ws_chat_test.py reads a token at
-        # import, and reported "1 error" -- which reads as one broken test, not as
-        # "none of your tests ran". The suite that guards the ledger, identity and
-        # delegation was silently not running for anyone who typed the directory.
-        [*pre, "pytest", "-q", "-p", "no:cacheprovider", "--no-header", "-rf",
-         "--continue-on-collection-errors", "."],
-        cwd=suite,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
-             **({"COVERAGE_FILE": str(cov_dir / ".coverage")} if cov_dir else {})},
-        timeout=1800,
-    )
+    try:
+        proc = _run_pytest(pre, suite, cov_dir)
+    except subprocess.TimeoutExpired as exc:
+        # A HANG IS A RED SUITE, NOT A CRASHED AUDIT. Escaping the pool, this
+        # killed the whole run with a traceback (mac-suite-audit, 2026-09-26..30),
+        # so nobody could see which suite hung or how the others did.
+        res = Result(suite=rel, rc=-1, errors=1)
+        partial = exc.output if isinstance(exc.output, str) else (exc.output or b"").decode(errors="replace")
+        for n, what in _COUNT.findall(partial or ""):
+            if what == "passed":
+                res.passed = int(n)
+        res.summary = f"timed out after {_timeout_for(suite)}s"
+        res.failures = [f"ERROR {rel}: suite timed out after {_timeout_for(suite)}s (a test hangs)"]
+        return res
     out = proc.stdout + proc.stderr
     res = Result(suite=rel, rc=proc.returncode)
     tail = out.strip().splitlines()[-1] if out.strip() else ""
@@ -155,6 +197,37 @@ def run_suite(suite: Path, python: str, cov_dir: Path | None = None) -> Result:
             res.skipped = n
     res.failures = [ln.strip() for ln in out.splitlines() if ln.startswith("FAILED") or ln.startswith("ERROR")][:40]
     return res
+
+
+#: Per-suite wall clock. A suite over this is reported as hung, not waited on.
+SUITE_TIMEOUT_S = 1800
+#: Suites that are slow, not hung, get their own limit. lib/tests ran 81% in 45
+#: minutes with no test over the 240 s hang detector (owner, 2026-10-01: 90 min).
+SUITE_TIMEOUTS = {"lib/tests": 5400}
+
+
+def _timeout_for(suite: Path) -> int:
+    rel = suite.relative_to(DATACORE).as_posix() if suite.is_relative_to(DATACORE) else str(suite)
+    return SUITE_TIMEOUTS.get(rel, SUITE_TIMEOUT_S)
+
+
+def _run_pytest(pre: list[str], suite: Path, cov_dir: Path | None):
+    return subprocess.run(
+        # --continue-on-collection-errors is the point of this runner. Without it a
+        # single un-importable file aborts its whole root: `pytest .datacore/lib`
+        # collected ZERO of 212 files because ws_chat_test.py reads a token at
+        # import, and reported "1 error" -- which reads as one broken test, not as
+        # "none of your tests ran". The suite that guards the ledger, identity and
+        # delegation was silently not running for anyone who typed the directory.
+        [*pre, "pytest", "-q", "-p", "no:cacheprovider", "--no-header", "-rf",
+         "--continue-on-collection-errors", "."],
+        cwd=suite,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+             **({"COVERAGE_FILE": str(cov_dir / ".coverage")} if cov_dir else {})},
+        timeout=_timeout_for(suite),
+    )
 
 
 def ci_gated_paths() -> set[str]:
@@ -229,6 +302,16 @@ def gate_report() -> int:
     return 1 if stale else 0
 
 
+def verdict(unexplained, empty) -> int:
+    """Non-zero when any suite is not green OR any suite collected nothing.
+
+    "Collected nothing" used to be reported and then ignored by the exit code:
+    a run under an interpreter without pytest exited 0 with every suite empty
+    (2026-09-22). Zero tests is not zero failures.
+    """
+    return 1 if (unexplained or empty) else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--gate", action="store_true", help="report which test files no automated gate runs")
@@ -271,6 +354,7 @@ def main() -> int:
         print(json.dumps([r.__dict__ for r in results], indent=2))
     else:
         accepted = accepted_failures()
+        counted_empty = empty_suites(results)
         n_accepted = 0
         unexplained = []
         for r in results:
@@ -278,8 +362,10 @@ def main() -> int:
             seen = [f for f in r.failures if _is_accepted(f, accepted)]
             n_accepted += len(seen)
             green = r.ok or (not r.empty and not live and r.passed > 0)
-            mark = "ok  " if green else ("----" if r.empty else "FAIL")
-            note = "  (no pytest tests collected)" if r.empty else ""
+            gated = r.empty and r not in counted_empty
+            mark = "ok  " if green else ("gate" if gated else "----" if r.empty else "FAIL")
+            note = ("  (promise-gated: evals hidden until the promise is green)" if gated
+                    else "  (no pytest tests collected)" if r.empty else "")
             print(f"  {mark} {r.suite:<52} {r.passed:5d} passed  {r.failed} failed  "
                   f"{r.errors} error  {r.skipped} skipped{note}")
             for f in live:
@@ -292,7 +378,7 @@ def main() -> int:
         tot_p = sum(r.passed for r in results)
         tot_f = sum(r.failed for r in results)
         tot_e = sum(r.errors for r in results)
-        empty = [r for r in results if r.empty]
+        empty = counted_empty
         n_live = tot_f - n_accepted
         # The summary line a job contract asserts on.
         #
@@ -310,7 +396,7 @@ def main() -> int:
 
     if cov_dir is not None:
         report_untouched(cov_dir, args.python)
-    return 1 if unexplained else 0
+    return verdict(unexplained, empty)
 
 
 def report_untouched(cov_dir: Path, python: str) -> None:

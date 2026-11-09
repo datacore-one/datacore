@@ -27,8 +27,10 @@ without touching a network or subprocess.
 - **Spend emission -- shadow accounting, live.** EVERY successful `_invoke`
   (i.e. every run that didn't raise) emits a `spend.record` ledger event
   via `ledger.log.EventLog`, unless `DATACORE_NO_SPEND=1`. Actor and space
-  resolution mirror `ledger_cli.py` / `job_verify.py`: `$DATACORE_ACTOR`
-  else hostname; `$DATACORE_ROOT` else `~/Data`. Signing is left at
+  resolution: the explicit `actor` argument, else `$DATACORE_ACTOR`, else
+  `actor_identity.this_actor(strict=True)` -- never the hostname (owner
+  decisions L10, follow-up Q2); an undeclared host gets an error result, not
+  a spend event under a guessed name. `$DATACORE_ROOT` else `~/Data`. Signing is left at
   `EventLog`'s own default (opt-in via `$DATACORE_LEDGER_SIGN=1`), so a
   bare run stays unsigned.
 - **Cost floor -- conservation invariant.** `fold()` (see `ledger/fold.py`
@@ -82,6 +84,13 @@ from ledger.log import EventLog
 # not treat cost_cents produced via this path as an actual invoice figure.
 ESTIMATE_CENTS_PER_MILLION_TOKENS = 300
 ESTIMATE_CHARS_PER_TOKEN = 4
+
+# Access the owner retired (owner decision 2026-09-26, AGT-3): no agent's child
+# process receives these, whatever its parent carries. `dict(os.environ)` used
+# to pass the fleet .env's ANTHROPIC_API_KEY on, so `claude -p` billed the
+# retired key instead of the configured subscription. Same set as
+# chief-of-staff's cos_env.METERED_KEYS.
+RETIRED_KEYS = frozenset({"ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"})
 
 
 def estimate_cost_cents(prompt: str, text: str) -> int:
@@ -147,8 +156,11 @@ def get_executor(name: str | None = None) -> "Executor":
 
 
 def _default_actor() -> str:
-    """Actor resolution mirrors `ledger_cli.py` / `job_verify.py`:
-    `$DATACORE_ACTOR`, else `socket.gethostname()`."""
+    """This machine's declared actor, resolved STRICTLY (owner follow-up Q2).
+
+    `$DATACORE_ACTOR`, identity.env, or the registry; an undeclared host raises
+    `UndeclaredActor` naming identity.env and the registry. It used to fall
+    back to the hostname and fail only later, at `EventLog.append` (L10)."""
     try:
         from actor_identity import this_actor
     except ImportError:
@@ -156,7 +168,7 @@ def _default_actor() -> str:
         _spec = _ilu.spec_from_file_location("actor_identity", _pl.Path(__file__).resolve().parent / "actor_identity.py")
         _m = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_m)
         this_actor = _m.this_actor
-    return this_actor()
+    return this_actor(strict=True)
 
 
 def _default_space_dir() -> Path:
@@ -202,9 +214,10 @@ class Executor:
         self._model: str | None = None
 
     def _execution_env(self) -> dict:
-        """Bind subprocess context to this dispatch, never ambient grants."""
+        """Bind subprocess context to this dispatch, never ambient grants --
+        and never the retired metered keys (RETIRED_KEYS, AGT-3)."""
         from tool_policy import principal_for
-        env = dict(os.environ)
+        env = {k: v for k, v in os.environ.items() if k not in RETIRED_KEYS}
         env.update(DATACORE_ACTOR=self._actor,
                    DATACORE_POLICY_PRINCIPAL=principal_for(self._actor),
                    DATACORE_POLICY_TASK=self._item or "",
@@ -214,7 +227,8 @@ class Executor:
             from ledger.fold import fold
             from ledger.log import read_events
             from ledger.policy import load_policy, validate_approval, approval_payload_hash, PolicyError
-            task = fold(read_events(Path(self._space))).items.get(self._item)
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            task = authoritative_state(Path(self._space)).items.get(self._item)
             if task is None or task.status != "claimed" or task.owner != self._actor:
                 raise PolicyError("executor requires this actor's current claim")
             if task.edit_conflicts:
@@ -225,6 +239,18 @@ class Executor:
                 log = EventLog(Path(self._space), self._actor)
                 validate_approval(log, task.payload, load_policy())
                 env["DATACORE_POLICY_GRANTED"] = ",".join(task.payload.get("effects") or [])
+            # DELEGATION DEPTH CROSSES THE PROCESS BOUNDARY (decision L5,
+            # 2026-09-23). An agent that creates items through
+            # org_workspace_adapter during this run records
+            # `hops = $DATACORE_HOPS`; nothing set it, so every such follow-up
+            # started at depth 0 and max_hops never bound the adapter path.
+            # The child's depth is the claimed item's recorded hops (0 when
+            # absent or malformed) plus one -- the same rule
+            # ledger_claim.chain_follow_up writes. Set for every executed task,
+            # overriding any ambient value. A run with no claimed item keeps
+            # whatever it inherited.
+            from claim_gate import recorded_hops
+            env["DATACORE_HOPS"] = str(recorded_hops(task.payload) + 1)
         return env
 
     def _invoke(self, prompt: str, timeout_s: int) -> tuple[str, int]:

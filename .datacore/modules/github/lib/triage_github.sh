@@ -19,8 +19,14 @@ set -euo pipefail
 # each host supplies from its own private config.
 DATA_DIR="${DATA_DIR:-$HOME/Data}"
 MODULE_DIR="$DATA_DIR/.datacore/modules/github"
-CACHE_DIR="$MODULE_DIR/data"
 LOG_PREFIX="[github-triage]"
+# The repo list and scan cache are user data: they live in the space's private
+# module-data folder (MEM-63), never in the module. The resolver refuses while
+# legacy data still sits in $MODULE_DIR/data -- a refusal stops the run.
+CACHE_DIR=$(DATACORE_ROOT="${DATACORE_ROOT:-$DATA_DIR}" python3 "$MODULE_DIR/lib/github_paths.py") || {
+    echo "$LOG_PREFIX FAILED: module data folder unresolved (legacy data in the module? migrate with module_data_migrate.py)"
+    exit 3
+}
 
 echo "$LOG_PREFIX Starting at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
@@ -29,7 +35,23 @@ echo "$LOG_PREFIX Discovering repos..."
 python3 "$MODULE_DIR/lib/repo_discovery.py" \
     --data-dir "$DATA_DIR" > /dev/null 2>&1 || true
 
+# A setting the job's environment does not carry is read from the machine's one
+# env file (config_plane: ~/.datacore/datacore.env, or $DATACORE_ENV_FILE). The
+# cron lines do not source it, and when the owner defaults left this public code
+# on 2026-10-17 no host had the setting anywhere else: every run stopped here.
+_from_env_file() {
+    python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; import config_plane as c
+p = Path(sys.argv[2])
+print(c.load(p).get(sys.argv[3], "") if p.is_file() else "")' "$1" "${DATACORE_ENV_FILE:-$HOME/.datacore/datacore.env}" "$2" 2>/dev/null || true
+}
+CORE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../lib" && pwd)"
+[ -n "${GITHUB_TRIAGE_USERNAME:-}" ] || GITHUB_TRIAGE_USERNAME="$(_from_env_file "$CORE_LIB" GITHUB_TRIAGE_USERNAME)"
+
 # --- Step 2: Scan GitHub ---
+if [ -z "${GITHUB_TRIAGE_USERNAME:-}" ]; then
+    echo "$LOG_PREFIX GITHUB_TRIAGE_USERNAME is not set (environment or ${DATACORE_ENV_FILE:-~/.datacore/datacore.env}) — no GitHub user to scan for."
+    exit 1
+fi
 ORGS=$(python3 -c "
 import json
 from pathlib import Path
@@ -53,7 +75,7 @@ echo "$LOG_PREFIX Scanning orgs: $ORGS"
 # (2026-07-19 .. 2026-08-10) behind "created: 0, errors: 0" and "Completed".
 SCAN_RC=0
 python3 "$MODULE_DIR/lib/github_scanner.py" \
-    --username "${GITHUB_TRIAGE_USERNAME:-plur9}" \
+    --username "$GITHUB_TRIAGE_USERNAME" \
     --orgs "$ORGS" \
     --hours 24 \
     --cache "$CACHE_DIR/scan_cache.json" \

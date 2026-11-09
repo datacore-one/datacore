@@ -6,7 +6,7 @@ as part of a version release. Anything else worth announcing — a new plugin, a
 blog post, a reply in someone else's thread — had no path, so this is the same
 credentials and the same endpoint with the release coupling removed.
 
-Credentials come from a space env file (default `5-plur`), never from argv, so a
+Credentials come from a space env file (default: the product space), never from argv, so a
 token cannot end up in shell history or a process listing.
 
 Usage:
@@ -33,6 +33,7 @@ import time
 import urllib.parse
 import urllib.request
 from secret_http import urlopen as secret_urlopen
+from datacore.ledger import attests
 from pathlib import Path
 
 SECRETS = Path.home() / 'Data/.datacore/secrets/spaces'
@@ -109,6 +110,9 @@ def sign(creds: dict[str, str]) -> str:
     return 'OAuth ' + ', '.join(f'{_quote(k)}="{_quote(params[k])}"' for k in sorted(params))
 
 
+@attests("x.post",
+         ref=lambda r: str((r.get("data") or {}).get("id", "")) if isinstance(r, dict) else "",
+         detail="x_post: tweet published")
 def post(text: str, creds: dict[str, str], reply_to: str | None, quote: str | None) -> dict:
     """Post one tweet.
 
@@ -142,7 +146,8 @@ def main() -> None:
     source.add_argument('--file', type=Path, help='read the body from this file')
     parser.add_argument('--reply-to', help='tweet id this replies to')
     parser.add_argument('--quote', help='tweet id to quote')
-    parser.add_argument('--space', default='5-plur')
+    from spaces import space_for  # the product space: install.yaml roles.product
+    parser.add_argument('--space', default=space_for('product', Path(__file__).resolve().parents[2], '0-personal'))
     parser.add_argument('--dry-run', action='store_true', help='print and exit')
     args = parser.parse_args()
 

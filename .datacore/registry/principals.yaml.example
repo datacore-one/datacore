@@ -62,6 +62,31 @@ principals:
     memory_scope: agent:assistant
     budget_monthly_usd: null
     permission_mode: propose     # proposes; a human approves anything that leaves
+    wip_limit: 1                 # tasks held in progress at once; the agent's run reads it (nightshift lib/assignment_queue.py); unset = 1
+    listens_in: [team-space]     # repositories its dispatcher claims from (by repo name, not folder); a delegation filed elsewhere is refused at filing (delegation_watch.listening_problem); unset = not judged
+
+# Settings that list this installation's own agents. Shipped code names no
+# agent (INS-3); it reads these through roster.section(). Every section is
+# optional: without it the tool does nothing agent-specific.
+sprint_sync:
+  agent_claimer: "nightshift|agent|assistant"   # regex: sprint claimers that are agents
+delegation_exercise:                            # delegation_fleet_exercise.py
+  ring: {assistant: [teammate-agent]}           # who seeds work for whom
+  forbidden: [teammate-agent, assistant]        # an edge the policy must refuse
+cross_model_audit:                              # cross_model_audit.py: one model family per agent
+  agents: {assistant: claude}
+  nightly_cap_usd: {assistant: 1.00}
+  models:                                       # copied from each agent's runtime config, never guessed;
+    claude: {transport: claude-cli, model: ""}  # "" = the subscription CLI's own default
+    # deepseek: {transport: openrouter, model: <id the agent's runtime uses>}
+    # gpt:      {transport: openai, model: <id>}
+    # glm:      {transport: local, model: <id>, base_url: "http://127.0.0.1:11434/v1"}
+testnet_dashboard:                              # testnet_dashboard.py: personas on the public page
+  agents:                                       # [persona, public handle, lane]
+    - ["Assistant", "@your_assistant_bot", "operations"]
+  published:                                    # terms deliberately published, and why
+    "Assistant": "agent persona, published under its own bot handle"
+    "@your_assistant_bot": "public bot handle"
 
 # Verify keys (stage 8). Each writer signs its events with a private key that
 # never leaves its host (~/.datacore/keys/<actor>.key); the public half is

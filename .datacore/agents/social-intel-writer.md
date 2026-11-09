@@ -116,7 +116,7 @@ relevance: 3  # 1-5
 industries: [kebab-case-tag, another-tag]
 market_position: competitor  # competitor | leader | emerging | adjacent
 stage: growth  # seed | series_a | growth | enterprise
-space: 1-datafund  # space this entity is relevant to
+space: 2-team  # space this entity is relevant to
 website: ""
 linkedin: ""
 location: ""

@@ -2,11 +2,19 @@
 // Scans outbox directories and provides archive search.
 // Plain JS (ESM) for direct dynamic import by the MCP server.
 
-import { z } from '@datacore-one/mcp/runtime'
+import { z, findPython } from '@datacore-one/mcp/runtime'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import * as fs from 'fs'
 import * as path from 'path'
+import { fileURLToPath } from 'url'
+
+// <root>/.datacore/modules/<name>/tools/index.js -> <root>
+const DATA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
+// The MCP server's own interpreter selection: DATACORE_PYTHON, then .datacore/venv,
+// then the first Python that can import yaml. A bare 'python3' ran whatever was
+// first on PATH, which on a Homebrew Mac cannot import the venv's packages.
+const pythonBin = () => findPython(DATA_ROOT) ?? 'python3'
 
 const execFileAsync = promisify(execFile)
 
@@ -17,7 +25,8 @@ function findOutboxDirs(basePath) {
   try {
     for (const entry of fs.readdirSync(basePath)) {
       if (/^\d+-/.test(entry)) {
-        const outboxPath = path.join(basePath, entry, '4-outbox')
+        // The archive queue is 4-archive/ (4-outbox was folded into it, 2026-10-18).
+        const outboxPath = path.join(basePath, entry, '4-archive')
         if (fs.existsSync(outboxPath)) {
           dirs.push({ space: entry, path: outboxPath })
         }
@@ -27,17 +36,15 @@ function findOutboxDirs(basePath) {
   return dirs
 }
 
+// The folder's own description files stay in the space (archive_sync.py).
+const FOLDER_FILES = new Set(['_index.md', 'README.md'])
+
 function scanOutboxItems(outboxPath) {
   const items = []
   try {
-    for (const sub of fs.readdirSync(outboxPath)) {
-      const subPath = path.join(outboxPath, sub)
-      if (fs.statSync(subPath).isDirectory()) {
-        const files = fs.readdirSync(subPath).filter(f => !f.startsWith('.'))
-        for (const f of files) {
-          items.push({ destination: sub, file: f })
-        }
-      }
+    for (const f of fs.readdirSync(outboxPath)) {
+      if (f.startsWith('.') || FOLDER_FILES.has(f)) continue
+      items.push({ destination: 'archive', file: f })
     }
   } catch { /* ignore */ }
   return items
@@ -88,7 +95,7 @@ export const tools = [
       }
 
       try {
-        const { stdout } = await execFileAsync('python3', [
+        const { stdout } = await execFileAsync(pythonBin(), [
           scriptPath, '--query', args.query,
           '--limit', String(args.limit || 10),
           '--json',
@@ -134,7 +141,7 @@ result = handler.dispose(${pathsJson}, reason='${reason}', confirm=${confirm})
 print(json.dumps(result))
 `
       try {
-        const { stdout } = await execFileAsync('python3', ['-c', code], {
+        const { stdout } = await execFileAsync(pythonBin(), ['-c', code], {
           cwd: path.join(ctx.storage.basePath, '.datacore', 'modules', 'outbox', 'lib'),
           timeout: 15000,
         })

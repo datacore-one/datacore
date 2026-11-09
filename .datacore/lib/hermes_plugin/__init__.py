@@ -27,6 +27,12 @@ WHAT IT DOES. Three things, all from the registry the fleet already keeps:
              same `metric.attest policy.refusal` in the ledger as the Claude
              SDK hook. A refusal reaches the model as the block message.
 
+  presses   Approve / Dismiss presses on approval questions (callback data
+             `cosap:`) are passed on to the chief-of-staff press handler
+             (`cos_approvals_poll.py --press`) before Hermes's own button
+             handler sees them — owner decision 2026-09-27, "Hermes passes
+             presses on". See install_press_forwarder.
+
 Guard failures refuse tool execution. This plugin is a policy check, not an
 OS sandbox: arbitrary code with the same filesystem credentials can bypass
 it, and deployed runtimes must supply an independent execution boundary.
@@ -309,13 +315,79 @@ def policy_block(tool_name: str, args) -> str | None:
         return "Datacore policy unavailable; tool execution refused"
 
 
-def pre_tool_call(tool_name: str = "", args=None, **_kw):
+# ---- Winston files first (issue #300, 2026-11-07) ---------------------------
+#
+# The persona rule and the narrowed Telegram toolsets held on 2026-11-06 and not
+# on 2026-11-07: the same model, asked for an incident note, set out to research
+# it itself (about 25 skill lookups), then asked the owner what had happened, and
+# never filed. Two guards, only in Winston's Telegram turns: a routing frame on
+# every owner message, and a stop on stalling. Filing and status are never blocked.
+
+_ROUTING: dict[str, dict] = {}
+_STALL_LIMIT = 4
+_ROUTING_FRAME = (
+    "[Winston charter] You orchestrate; you do not do tasks. If this message asks for work, "
+    "your FIRST action is datacore_delegate (space, title, assignee miles, tris or data, "
+    "done_when, check) and then reply in one line who has it. "
+    "Do not research or investigate it yourself, and do not ask the founder for facts the agent "
+    "can find. Only if no agent can take it (datacore_who_has_what shows them paused or down) "
+    "say so and that you will do it yourself. Status questions: datacore_who_has_what. "
+    "An earlier session about the same request is not evidence that filing fails now: "
+    "file it in this turn and trust only the reply you get.")
+
+
+def _winston() -> bool:
+    try:
+        return identity().get("actor") == "winston"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def pre_llm_call(session_id: str = "", turn_id: str = "", platform: str = "", **_kw):
+    """Hermes pre_llm_call: the routing frame for Winston's Telegram turns, else None."""
+    _ROUTING.pop(session_id, None)
+    if platform != "telegram" or not _winston():
+        logger.info("datacore: routing frame skipped (platform=%r, session=%s)", platform, session_id)
+        return None
+    logger.info("datacore: routing frame on (session=%s, turn=%s)", session_id, turn_id)
+    _ROUTING[session_id] = {"turn": turn_id, "calls": 0, "routed": False}
+    return {"context": _ROUTING_FRAME}
+
+
+def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -> str | None:
+    st = _ROUTING.get(session_id)
+    if not st or (turn_id and st["turn"] and turn_id != st["turn"]):
+        logger.info("datacore: stall guard idle for %s (session=%s known=%s, turn=%s vs %s)",
+                    tool_name, session_id, bool(st), turn_id, st and st["turn"])
+        return None
+    name = str(tool_name or "")
+    if name.startswith("datacore_"):
+        a = args if isinstance(args, dict) else {}
+        inner = a.get("payload") if isinstance(a.get("payload"), dict) else {}
+        if name in ("datacore_who_has_what", "datacore_delegate") or (
+                name == "datacore_ledger_append"
+                and "item.create" in (str(a.get("type", "")), str(inner.get("type", "")))):
+            st["routed"] = True
+        return None
+    if st["routed"]:
+        return None
+    st["calls"] += 1
+    if st["calls"] <= _STALL_LIMIT:
+        return None
+    return ("Stop: you are coordinating, not doing. If the founder asked for work, file it now "
+            "with datacore_delegate (space, title, assignee miles, tris or data, done_when, check) "
+            "and tell him who has it. The agent finds the facts. "
+            "If he asked about status, use datacore_who_has_what.")
+
+
+def pre_tool_call(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", **_kw):
     """Hermes pre_tool_call: {"action": "block", "message": ...} or None."""
     try:
         if not identity()["ok"]:
             return {"action": "block", "message": "Datacore identity unresolved; restore the principal registry"}
         text = call_text(tool_name, args)
-        reason = foreign_actor_write(text) or policy_block(tool_name, args)
+        reason = (foreign_actor_write(text) or policy_block(tool_name, args)
+                  or stall_block(tool_name, args, session_id, turn_id))
         if reason:
             return {"action": "block", "message": reason}
     except Exception as exc:  # noqa: BLE001
@@ -420,12 +492,87 @@ LEDGER_APPEND_SCHEMA = {
             "properties": {
                 "space": {"type": "string", "description": "Discovered space directory relative to the data root, including nested spaces."},
                 "type": {"type": "string", "description": "Event type, e.g. item.create, item.update, item.complete."},
-                "payload": {"type": "object", "description": "Event payload. For item.create include id and title."},
+                "payload": {"type": "object", "description": (
+                    "Event payload. For item.create: title, assignee (miles, tris or data), "
+                    "asked_by, route (do), done_when and check; id is generated when left out. "
+                    "Example: {\"space\": \"2-datacore\", \"type\": \"item.create\", \"payload\": "
+                    "{\"title\": \"...\", \"assignee\": \"miles\", \"asked_by\": \"gregor\", "
+                    "\"route\": \"do\", \"done_when\": \"...\", \"check\": \"...\"}}. "
+                    "Write check on one line with no backslash ([0-9] not \\d, [[:space:]] not "
+                    "\\s): a backslash or line break makes the call arrive empty.")},
             },
             "required": ["space", "type", "payload"],
         },
     },
 }
+
+
+DELEGATE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_delegate",
+        "description": ("File the founder's request for one agent: miles (code, infrastructure, ops), "
+                        "tris (research, analysis) or data (writing for people). Every field is "
+                        "plain text. The reply names the item id."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "space": {"type": "string", "description": "Space folder name, e.g. 2-datacore."},
+                "title": {"type": "string", "description": "What is to be done, in one line."},
+                "assignee": {"type": "string", "description": "miles, tris or data."},
+                "done_when": {"type": "string", "description": "What the finished result is and where it is saved."},
+                "check": {"type": "string", "description": (
+                    "A shell test, run from the space root, that passes only when the result says "
+                    "what done_when requires: at least two greps for required content, or a count "
+                    "compared with a number. One line, single quotes only, no double quote and no "
+                    "backslash. Example: test -s 1-tracks/ops/note.md && grep -qi 'root cause' "
+                    "1-tracks/ops/note.md && test $(grep -c '^- ' 1-tracks/ops/note.md) -ge 2")},
+            },
+            "required": ["space", "title", "assignee", "done_when", "check"],
+        },
+    },
+}
+
+
+def delegate_handler(space: str = "", title: str = "", assignee: str = "", done_when: str = "",
+                     check: str = "", **_kw) -> str:
+    """2026-11-09: nested payload JSON arrived empty in 2 of 5 runs; flat strings are the filing path."""
+    payload = {k: v for k, v in (("title", title), ("assignee", assignee), ("done_when", done_when),
+                                 ("check", check)) if str(v or "").strip()}
+    if not str(space or "").strip() and not payload:
+        return ledger_append_handler()  # the empty-call explanation
+    return ledger_append_handler(space=space, type="item.create",
+                                 payload={**payload, "asked_by": "gregor", "route": "do"})
+
+
+WHO_HAS_WHAT_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "datacore_who_has_what",
+        "description": ("Who has what: every open delegated task across all spaces, by assignee "
+                        "and status (waiting or working, and for how long). Read only. Use it "
+                        "before answering what an agent is doing, and to follow up stuck work."),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def who_has_what_handler(**_kw) -> str:
+    """Winston path step 3 (owner goal 2026-11-05): the ledger, read across spaces."""
+    if not _lib():
+        return "Not available: the fleet lib is not on this host."
+    try:
+        import time as _time  # noqa: PLC0415
+        import delegation_watch as dw  # noqa: PLC0415
+        folded, errors = dw.states(_root())
+        try:
+            paused = dw.pauses(_root())
+        except Exception:  # noqa: BLE001 -- the pause line never hides the list
+            paused = {}
+        return dw.who_text(dw.who_has_what(folded, now_ms=int(_time.time() * 1000)), errors,
+                           pauses=paused)
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not read the ledgers ({type(exc).__name__}: {exc})."
 
 
 def approvals_pending_handler(**_kw) -> str:
@@ -453,6 +600,93 @@ def approval_decide_handler(id: str = "", decision: str = "", **_kw) -> str:  # 
 
 
 
+# 2026-11-07 dry runs of Winston on a real request: the model put every field
+# beside `type` and `space` (no `payload`), or nested `type` and `space` inside
+# `payload`, was refused, and gave up. Both shapes mean one thing; accept them.
+_ENVELOPE = ("type", "space", "payload")
+
+
+_EXAMPLE = ('{"space": "2-datacore", "type": "item.create", "payload": {"title": "...", '
+            '"assignee": "miles", "asked_by": "gregor", "route": "do", "done_when": "...", "check": "..."}}')
+
+
+def _unwrap_events(payload, kw):
+    """2026-11-08 dry run: the model sent {"events": [ {...} ]}; the item filed had no
+    title or assignee at the top and no dispatcher would ever see it. One wrapped
+    event is that event; several are refused (one call files one event)."""
+    for holder in (kw, payload if isinstance(payload, dict) else {}):
+        evs = holder.get("events")
+        if not isinstance(evs, list):
+            continue
+        if len(evs) != 1 or not isinstance(evs[0], dict):
+            return None, None, "file one event per call, e.g. " + _EXAMPLE
+        inner = dict(evs[0])
+        body = dict(inner["payload"]) if isinstance(inner.get("payload"), dict) else \
+            {k: v for k, v in inner.items() if k not in _ENVELOPE}
+        # type/space travel inside the body; _normalise_filing lifts them out.
+        body.update({k: inner[k] for k in ("type", "space") if k in inner})
+        if holder is kw:
+            kw = {k: v for k, v in kw.items() if k != "events"}
+            return body, kw, None
+        return {**{k: v for k, v in payload.items() if k != "events"}, **body}, kw, None
+    return payload, kw, None
+
+
+def _space_from_text(payload, root, known):
+    """With no space given, the one space named in done_when, title or check.
+
+    A given space is never rewritten: a non-canonical spelling is refused
+    (an alias or a path is not a route to another space's ledger)."""
+    names = {str(p.relative_to(root)) for p in known}
+    text = " ".join(str(payload.get(k) or "") for k in ("done_when", "title", "check"))
+    hits = {n for n in names if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", text)}
+    return hits.pop() if len(hits) == 1 else ""
+
+
+def _normalise_filing(space, payload, kw):
+    kw = dict(kw)
+    extra = {k: v for k, v in kw.items() if k not in _ENVELOPE and k != "actor"}
+    p = dict(payload) if isinstance(payload, dict) else {}
+    if extra and not p:
+        p = extra
+        for k in extra:
+            kw.pop(k, None)
+    for k in ("type", "space"):
+        if k in p:
+            v = p.pop(k)
+            if k == "type" and not kw.get("type"):
+                kw["type"] = v
+            if k == "space" and not space:
+                space = v
+    return space, (p or payload), kw
+
+
+def _new_item_id(payload) -> str:
+    """An item.create without `id` is skipped by the fold: filed and never seen."""
+    import secrets  # noqa: PLC0415
+    import time as _t  # noqa: PLC0415
+    words = re.findall(r"[a-z0-9]+", str(payload.get("title") or "item").lower())
+    return "-".join(words[:6] or ["item"]) + _t.strftime("-%Y%m%d-") + secrets.token_hex(2)
+
+
+def _publish_soon(space_dir) -> None:
+    """Send a new filing out now, in the background; never blocks or raises.
+
+    2026-11-08: the filing waited for Winston's next scheduled converge (up to
+    15 minutes) before any agent could see it, which alone could use up the
+    owner's 15-minute pickup bar (AGT-14)."""
+    try:
+        import subprocess  # noqa: PLC0415
+        transport = Path(sys.path[0]) / "ledger_transport.py"
+        if not transport.is_file():
+            return
+        subprocess.Popen(["python3", str(transport), "converge", "--space", str(space_dir)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:  # noqa: BLE001 -- the scheduled converge still publishes it
+        pass
+
+
 def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
     # The event type arrives as `type` (the schema's property name). It is read
     # from kwargs rather than taken as a parameter, because binding the name
@@ -469,16 +703,48 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         from spaces import discover_spaces  # noqa: PLC0415
     except Exception as exc:  # noqa: BLE001
         return f"Refused: the ledger library did not import ({type(exc).__name__})."
+    if not str(space or "").strip() and not payload and not {k: v for k, v in kw.items() if v}:
+        # Hermes replaces tool-call JSON that does not parse with {} (2026-11-09:
+        # five such calls in a row each got "'' is not a declared event type").
+        return ("Refused: nothing was filed; your call arrived with no arguments because its JSON "
+                "did not parse. The usual cause is a backslash (\\d, \\s, \\.) or a line break "
+                "inside check. Write the check on one line without any backslash: [0-9] instead of "
+                "\\d, [[:space:]] instead of \\s, grep -F for literal text. Then send it again: "
+                + _EXAMPLE)
+    payload, kw, why = _unwrap_events(payload, kw)
+    if why:
+        return f"Refused: nothing was filed; {why}"
+    space, payload, kw = _normalise_filing(space, payload, kw)
     etype = str(kw.get("type") or "").strip()
+    if not etype and isinstance(payload, dict):
+        # The type under another common name (2026-11-08: ten refusals in a row).
+        for alias in ("event_type", "event", "kind"):
+            if str(payload.get(alias) or "") in EVENT_TYPES:
+                payload = dict(payload)
+                etype = str(payload.pop(alias))
+                break
+    if not etype and isinstance(payload, dict) and any(
+            payload.get(k) for k in ("assignee", "asked_by", "route", "done_when")):
+        etype = "item.create"  # a delegation-shaped payload with no type
     if etype not in EVENT_TYPES:
         return (f"Refused: {etype!r} is not a declared event type. "
-                f"Known: {', '.join(sorted(EVENT_TYPES))}.")
+                f"Known: {', '.join(sorted(EVENT_TYPES))}. To delegate, file: {_EXAMPLE}")
     if not isinstance(payload, dict) or not payload:
-        return "Refused: payload must be a non-empty object."
+        return f"Refused: payload must be a non-empty object, e.g. {_EXAMPLE}"
+    try:
+        _r = _root().resolve(strict=True)
+        _known = [e.path for e in discover_spaces(_r, reject_aliases=True, reject_invalid=True)]
+        if not str(space or "").strip() and isinstance(payload, dict):
+            space = _space_from_text(payload, _r, _known)
+    except Exception:  # noqa: BLE001 -- the checks below still judge the raw value
+        pass
+    if not space:
+        return f"Refused: nothing was filed; say which space, e.g. {_EXAMPLE}"
     if (not isinstance(space, str) or not space or "\0" in space
             or Path(space).is_absolute() or ".." in Path(space).parts
             or str(Path(space)) != space or space == "."):
-        return "Refused: space must be a canonical relative space directory."
+        return ("Refused: nothing was filed; space must be exactly a space folder name relative to "
+                f"the data root, with no path inside it, e.g. {_EXAMPLE}")
     try:
         root = _root().resolve(strict=True)
         space_dir = root / space
@@ -489,19 +755,260 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         if (space_dir.resolve(strict=True) != space_dir
                 or space_dir not in {entry.path for entry in known}
                 or not (space_dir / ".datacore").is_dir()):
-            return "Refused: directory is not a space under the configured data root."
+            return f"Refused: directory is not a space under the configured data root. Use the space folder name, e.g. {_EXAMPLE}"
     except (OSError, RuntimeError, ValueError):
-        return "Refused: directory is not a space under the configured data root, or discovery is invalid."
+        return f"Refused: directory is not a space under the configured data root, or discovery is invalid. Use the space folder name, e.g. {_EXAMPLE}"
+    if etype == "item.create" and (payload.get("asked_by") or payload.get("route")):
+        # A delegation with no title or assignee is filed and never picked up.
+        gone = [k for k in ("title", "assignee") if not str(payload.get(k) or "").strip()]
+        if gone:
+            return (f"Refused: nothing was filed; the item has no {' or '.join(gone)}, so no agent "
+                    f"would pick it up. File: {_EXAMPLE}")
+    if etype == "item.create" and not str(payload.get("id") or "").strip():
+        payload = {**payload, "id": _new_item_id(payload)}
+    if etype == "item.create":
+        # Winston path step 4 (2026-11-05): a delegation is filed only where the
+        # assignee's dispatcher listens, or it waits forever (AGT-12's wrong space).
+        try:
+            from delegation_watch import listening_problem  # noqa: PLC0415
+            why = listening_problem(space_dir, payload)
+        except Exception:  # noqa: BLE001 -- the check never blocks on its own failure
+            why = None
+        if why:
+            return f"Refused: {why}"
+        # Issue #298 (2026-11-07): the check on an owner's request must test what
+        # the result says. The persona rule alone did not hold.
+        try:
+            from delegation_watch import check_problem, clean_check  # noqa: PLC0415
+            if payload.get("check"):
+                payload = {**payload, "check": clean_check(payload["check"])}
+            why = check_problem(payload)
+        except Exception:  # noqa: BLE001 -- the check never blocks on its own failure
+            why = None
+        if why:
+            return f"Refused: nothing was filed. {why[0].upper() + why[1:]} Fix the check and file it again."
     try:
         # No actor argument by design: it comes from the registry, never the model.
         ev = guarded_append(EventLog(space_dir=space_dir, actor=ident["actor"]), etype, payload)
     except Exception as exc:  # noqa: BLE001
         return f"Ledger append failed: {type(exc).__name__}: {exc}"
-    return (f"appended {etype} to {space} as {ident['actor']} "
+    if etype == "item.create":
+        _publish_soon(space_dir)
+    done = (f"appended {etype} to {space} as {ident['actor']} "
             f"(seq={getattr(ev, 'seq', '?')} hash={str(getattr(ev, 'hash', ''))[:12]})")
+    if etype == "item.create":
+        done += f" item id {payload['id']}"
+    if etype == "item.create":
+        # Issue #296 (2026-11-06): "Tris has it" was said while Tris's claiming
+        # was paused for lack of credit. Filed regardless; the reply says so.
+        try:
+            import delegation_watch as dw  # noqa: PLC0415
+            who = payload.get("assignee") or payload.get("runner")
+            p = dw.pauses(root).get(who) if who else None
+            if p:
+                done += (f"\nNOTE: {dw.pause_text(who, p)} Tell the founder it is filed for "
+                         f"{dw._person(who)} but cannot start until then; do not say "
+                         f"{dw._person(who)} has it.")
+        except Exception:  # noqa: BLE001 -- the note never fails a filing
+            pass
+    return done
+
+# ── Approval button presses (owner decision 2026-09-27) ─────────────────────
+#
+# The gateway is the bot's one getUpdates consumer, and Hermes's Telegram
+# adapter dispatches callback data by prefix: `cosap:` (the chief-of-staff
+# Approve / Dismiss buttons) matched none of its prefixes and was dropped
+# unanswered — the button spun and the approval never moved. Hermes has no
+# plugin API for Telegram callbacks (it has one for Slack actions), so the
+# forwarder attaches where the adapter registers its callback handler with
+# python-telegram-bot: every CallbackQueryHandler added to an Application gets
+# its callback wrapped, `cosap:` data goes to the press handler, and anything
+# else reaches Hermes's handler unchanged.
+#
+# The press handler decides, authorises (only the principal), answers the
+# button, rewrites the message and alerts decision errors to The Firm group.
+# This side adds nothing to that: it answers the button only when the handler
+# could not (so it stops spinning, with the typed reply as the way out) and
+# alerts the group through the same cos_alert.sh. Never a 1:1 message.
+
+COSAP_PREFIX = "cosap:"
+PRESS_HANDLER = "cos_approvals_poll.py"
+
+
+def _fleet_script(name: str) -> Path | None:
+    for lib in lib_candidates():
+        path = lib / name
+        if path.is_file():
+            return path
+    return None
+
+
+def callback_payload(query) -> dict:
+    """A python-telegram-bot CallbackQuery as the Bot API dict the handler reads."""
+    msg = getattr(query, "message", None)
+    chat = getattr(msg, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if chat_id is None:
+        chat_id = getattr(msg, "chat_id", None)
+    out = {"id": str(getattr(query, "id", "") or ""),
+           "data": getattr(query, "data", None),
+           "from": {"id": getattr(getattr(query, "from_user", None), "id", None)}}
+    if msg is not None:
+        out["message"] = {"message_id": getattr(msg, "message_id", None),
+                          "chat": {"id": chat_id},
+                          "text": getattr(msg, "text", None) or ""}
+    return out
+
+
+def run_press(payload: dict, timeout: int = 60) -> dict:
+    """Hand one press to `cos_approvals_poll.py --press` -> its JSON verdict.
+
+    {"outcome": decided|already|missing|unauthorised|ignored|error,
+     "answered": whether the handler answered the button}. Anything that is
+    not the handler's own verdict is an unanswered error."""
+    script = _fleet_script(PRESS_HANDLER)
+    if script is None:
+        return {"outcome": "error", "answered": False,
+                "why": f"{PRESS_HANDLER} is not in the fleet lib on this host"}
+    import subprocess  # noqa: PLC0415
+    argv = [sys.executable, str(script), "--press"]
+    try:
+        try:
+            from process_run import run  # noqa: PLC0415
+        except ImportError:
+            run = subprocess.run
+        r = run(argv, input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"outcome": "error", "answered": False, "why": f"timed out after {timeout}s"}
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {"outcome": "error", "answered": False, "why": f"{type(exc).__name__}: {exc}"}
+    for line in reversed((r.stdout or "").strip().splitlines()):
+        try:
+            verdict = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(verdict, dict) and "outcome" in verdict:
+            verdict.setdefault("answered", False)
+            if r.stderr:
+                verdict.setdefault("log", r.stderr.strip()[-400:])
+            return verdict
+    return {"outcome": "error", "answered": False,
+            "why": f"rc={r.returncode}: {((r.stderr or '') + (r.stdout or '')).strip()[-200:]}"}
+
+
+def alert_group(text: str) -> None:
+    """The fleet's operational alert: The Firm group, posted by Winston's bot."""
+    script = _fleet_script("cos_alert.sh")
+    if script is None:
+        logger.error("datacore: approvals alert not sent (no cos_alert.sh): %s", text)
+        return
+    import subprocess  # noqa: PLC0415
+    try:
+        subprocess.run([str(script), text], timeout=60,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.error("datacore: cos_alert.sh failed (%s): %s", exc, text)
+
+
+async def forward_press(query) -> str:
+    """Pass one `cosap:` press on. Never raises: the gateway must outlive it."""
+    import asyncio  # noqa: PLC0415
+    data = str(getattr(query, "data", "") or "")
+    rid = data.rsplit(":", 1)[-1][:36]
+    who = getattr(getattr(query, "from_user", None), "id", "?")
+    try:
+        verdict = await asyncio.to_thread(run_press, callback_payload(query))
+    except Exception as exc:  # noqa: BLE001
+        verdict = {"outcome": "error", "answered": False, "why": f"{type(exc).__name__}: {exc}"}
+    outcome = str(verdict.get("outcome", "error"))
+    if verdict.get("log"):
+        logger.info("datacore: press handler said: %s", verdict["log"])
+    if outcome == "unauthorised":
+        logger.warning("datacore: approval press on %s refused — from %s, not the principal", rid, who)
+    else:
+        logger.info("datacore: approval press on %s from %s -> %s", rid, who, outcome)
+    if outcome == "error" and not verdict.get("answered"):
+        try:
+            await query.answer(text=(f"Could not record this press. Reply approve {rid} "
+                                     f"or dismiss {rid} instead.")[:200])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("datacore: could not answer the press: %s", exc)
+        alert_group(f"approvals: a Telegram button press on {rid[:8]} did not reach the "
+                    f"decision ({str(verdict.get('why', ''))[:160]}). The approval is still "
+                    f"pending; the typed reply works.")
+    elif outcome == "ignored" and not verdict.get("answered"):
+        try:
+            await query.answer()
+        except Exception:  # noqa: BLE001
+            pass
+    return outcome
+
+
+def wrap_callback(original):
+    """`cosap:` presses to forward_press; every other button to `original`."""
+    if getattr(original, "_datacore_press_forwarder", False):
+        return original
+
+    async def callback(update, context):
+        query = getattr(update, "callback_query", None)
+        data = getattr(query, "data", None)
+        if isinstance(data, str) and data.startswith(COSAP_PREFIX):
+            try:
+                await forward_press(query)
+            except Exception:  # noqa: BLE001 — forward_press never raises; belt and braces
+                logger.exception("datacore: approval press forwarding failed")
+            return None
+        return await original(update, context)
+
+    callback._datacore_press_forwarder = True
+    callback.__wrapped__ = original
+    return callback
+
+
+def install_press_forwarder(tx=None) -> bool:
+    """Wrap python-telegram-bot's Application.add_handler so every callback-query
+    handler the gateway adds forwards `cosap:` presses. Installed at plugin
+    registration, which the gateway runs before any adapter connects; the
+    Telegram adapter itself loads lazily, so its class is not patched."""
+    if tx is None:
+        try:
+            import telegram.ext as tx  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 — no Telegram on this host: nothing to forward
+            return False
+    app_cls = getattr(tx, "Application", None)
+    cqh = getattr(tx, "CallbackQueryHandler", None)
+    if app_cls is None or cqh is None:
+        return False
+    current = app_cls.add_handler
+    if getattr(current, "_datacore_press_forwarder", False):
+        return True
+
+    def add_handler(self, handler, *args, **kwargs):
+        if isinstance(handler, cqh):
+            try:
+                handler.callback = wrap_callback(handler.callback)
+            except Exception as exc:  # noqa: BLE001 — never block Hermes's own handler
+                logger.warning("datacore: could not attach the approval press forwarder: %s", exc)
+        return current(self, handler, *args, **kwargs)
+
+    add_handler._datacore_press_forwarder = True
+    add_handler.__wrapped__ = current
+    app_cls.add_handler = add_handler
+    return True
+
+
+def _from_hermes(handler):
+    """Hermes calls a tool as handler(args_dict, **kwargs) (tools/registry.py
+    dispatch); the handlers here take the tool's arguments as keywords."""
+    def call(args=None, **_runtime):
+        return handler(**(args if isinstance(args, dict) else {}))
+    call.__wrapped__ = handler
+    return call
+
 
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
+    ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("on_session_start", on_session_start)
     for name, schema, handler, desc, emoji in (
         ("datacore_whoami", WHOAMI_SCHEMA, whoami_handler,
@@ -512,12 +1019,21 @@ def register(ctx) -> None:
          "Approve or dismiss one approval the principal decided explicitly.", "✅"),
         ("datacore_ledger_append", LEDGER_APPEND_SCHEMA, ledger_append_handler,
          "Append an event to a space ledger as this agent's own actor.", "📒"),
+        ("datacore_delegate", DELEGATE_SCHEMA, delegate_handler,
+         "File the founder's request for one agent (flat fields).", "📨"),
+        ("datacore_who_has_what", WHO_HAS_WHAT_SCHEMA, who_has_what_handler,
+         "Who has what: open delegated work across spaces, by assignee and status.", "🗂️"),
     ):
         try:
             ctx.register_tool(name=name, toolset="datacore", schema=schema,
-                              handler=handler, description=desc, emoji=emoji)
+                              handler=_from_hermes(handler), description=desc, emoji=emoji)
         except Exception as exc:  # noqa: BLE001 — hooks matter more than any tool
             logger.warning("datacore: could not register %s (%s)", name, exc)
+    try:
+        if install_press_forwarder():
+            logger.info("datacore plugin: approval button presses (cosap:) are passed on")
+    except Exception as exc:  # noqa: BLE001 — hooks matter more than the forwarder
+        logger.warning("datacore: approval press forwarder not installed (%s)", exc)
     d = identity()
     logger.info("datacore plugin: %s",
                 f"{d['principal']} as {d['actor']} — guards in force" if d["ok"]

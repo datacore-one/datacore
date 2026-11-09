@@ -85,6 +85,19 @@ def main():
         _debug(f"session_bootstrap: focus mode detection failed: {e}")
         lines.append("Datacore session initialized. Engrams will inject on first message.")
 
+    # The first session after an install. Emitted alone, not appended to the
+    # bootstrap block: on the one occasion this fires, journal paths and engram
+    # counts are noise around the only thing that matters. It consumes its own
+    # marker, so this branch can never be taken twice.
+    try:
+        from first_run import consume as consume_first_run
+        greeting = consume_first_run()
+        if greeting:
+            json.dump({"additionalContext": greeting}, sys.stdout)
+            sys.exit(0)
+    except Exception as e:
+        _debug(f"session_bootstrap: first-run check failed: {e}")
+
     if lines:
         context = "[Datacore Session Bootstrap]\n\n" + "\n".join(lines)
         json.dump({"additionalContext": context}, sys.stdout)

@@ -59,11 +59,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--actor', default=None)
     ap.add_argument('--apply', action='store_true')
     a = ap.parse_args(argv)
+    # Identity at startup, strictly (owner follow-up Q2); --actor wins.
+    if not a.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            a.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f'REFUSED: {exc}', file=sys.stderr)
+            return 2
 
     space = a.space.resolve()
     if bool(a.item) == bool(a.all):
         raise SystemExit('pass either --item <id> or --all')
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     if a.all:
         targets = [i for i, it in sorted(state.items.items()) if it.edit_conflicts]
         if not targets:
@@ -82,7 +91,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _reconcile(space: Path, identity: str, actor: str | None, apply: bool) -> int:
-    item = fold(read_events(space)).items[identity]
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    item = authoritative_state(space).items[identity]
     if not item.edit_conflicts:
         print(f'{space.name} {identity} — no retained edit conflicts; nothing to reconcile')
         return 0
@@ -115,10 +125,13 @@ def _reconcile(space: Path, identity: str, actor: str | None, apply: bool) -> in
         print('  dry run — pass --apply to record the reconciliation')
         return 0
 
-    from actor_identity import this_actor
-    log = EventLog(space, actor or this_actor())
+    if not actor:
+        from actor_identity import this_actor
+        actor = this_actor(strict=True)
+    log = EventLog(space, actor)
     event = log.append(kind, payload)
-    after = fold(read_events(space)).items[identity]
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    after = authoritative_state(space).items[identity]
     if after.edit_conflicts:
         print(f'  conflicts remain after {event.hash[:12]}: {sorted(after.edit_conflicts)}')
         return 1

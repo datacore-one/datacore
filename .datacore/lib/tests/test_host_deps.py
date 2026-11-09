@@ -97,3 +97,28 @@ def test_empty_profile_is_not_healthy(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['host_deps'])
     assert host_deps.main() == 1
     assert 'empty' in capsys.readouterr().err
+
+
+def test_briefing_profile_covers_the_mail_triage_the_box_runs():
+    # Winston's 03:30 email triage died on `import google` in his pod: the
+    # Google client was hand-installed on the old host and declared nowhere,
+    # and this profile never looked at the mail module.
+    names = [str(p.relative_to(host_deps.DATACORE_ROOT)) for p in host_deps.files_for('briefing')]
+    assert 'modules/mail/requirements.txt' in names
+
+
+@pytest.mark.parametrize('dist,module', [
+    ('markdown-it-py', 'markdown_it'),
+    ('google-api-python-client', 'googleapiclient'),
+    ('google-auth', 'google.auth'),
+])
+def test_packages_are_checked_under_their_import_name(dist, module):
+    assert host_deps.IMPORT_NAME.get(dist) == module
+
+
+def test_briefing_profile_covers_the_spoken_briefing():
+    # The box speaks the briefing with Kokoro (voice-terminal); cloud speech is
+    # off. kokoro_onnx was missing in Winston's pod on 2026-10-26 and the audio
+    # failed while the checker reported everything importable.
+    names = [str(p.relative_to(host_deps.DATACORE_ROOT)) for p in host_deps.files_for('briefing')]
+    assert 'modules/voice-terminal/requirements.txt' in names

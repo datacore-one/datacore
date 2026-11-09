@@ -162,6 +162,36 @@ def check_repo_sync(repo_path: str) -> list[str]:
 EMPTY_RETRY_SECONDS = 3.0
 
 
+_EXIT_LINE = re.compile(r"^exit=-?\d+\b")
+
+
+def _run_printed(text: str, last: str, n: int = 3) -> str:
+    """What the failing run printed above its own `exit=N` verdict line.
+
+    An append-only `exit=$rc $(date)` log failed as "last line: 'exit=1 Fri
+    ...'" -- true, and no use: which instance failed and why are the lines the
+    run printed just above it (creds distribute: "✗ box: transfer failed
+    (...)"), and they were never quoted (owner, 2026-10-02: "Errors should say
+    what they are"). Only THIS run's lines: the search stops at the previous
+    run's exit line. Lines that say they failed are preferred over chatter.
+    """
+    if not _EXIT_LINE.match(last or ""):
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    run: list[str] = []
+    for ln in reversed(lines[:-1]):
+        if _EXIT_LINE.match(ln):
+            break
+        run.append(ln)
+    run.reverse()
+    if not run:
+        return " -- the run printed nothing before its exit line"
+    bad = [ln for ln in run if re.search(r"✗|fail|error|refused|denied|not found|no such|"
+                                         r"timed? ?out|traceback|exception", ln, re.I)]
+    pick = (bad or run)[-n:]
+    return " -- the run printed: " + " | ".join(ln[:200] for ln in pick)
+
+
 def _read_text(path: str) -> tuple[str | None, str | None]:
     """Read `path` as utf-8 (replacing undecodable bytes). Never raises.
 
@@ -191,6 +221,57 @@ def _read_text(path: str) -> tuple[str | None, str | None]:
         except (OSError, ValueError) as exc:
             return None, f"cannot read file ({exc})"
     return raw.decode("utf-8", errors="replace"), None
+
+
+def join_record_path() -> str:
+    """Where this machine's visitor join record is (visitor_join.RECORD)."""
+    state = os.environ.get("DATACORE_STATE") or os.path.join(
+        os.path.expanduser("~"), ".datacore", "state")
+    return os.path.join(state, "join.json")
+
+
+def _since_error(expanded: str, mtime: float, since: str, *, every: str | None = None,
+                 after: str | None = None, now: float | None = None) -> str | None:
+    """A visitor's duty is judged in SESSION time: did it run for this session?
+
+    `since: join` -- written at or after the last converged join began.
+    `since: arrival` -- written at or after the join that began this session.
+    join.json is rewritten only after a join's duties have run, so a verifier
+    reading it mid-join still sees the previous record and every duty artifact
+    already newer than it: there is no window in which a running duty reads as
+    late. No record at all means no session has ever converged, and the join's
+    own contract is the one alarm for that; here it is simply unprovable.
+    """
+    record = join_record_path()
+    try:
+        with open(record) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return f"{expanded}: since={since} is unprovable -- no join record at {record} ({exc})"
+    if every:
+        # A GATED duty (jobs.manifest.EVERY) is owed once per window, at the
+        # first presence inside it -- not once per arrival. Before the window
+        # opens, or while no join has converged inside it, nothing is owed yet:
+        # a journal waiting for 08:30 after a 07:00 arrival is not late.
+        from jobs.manifest import gate_window
+        start = gate_window(time.time() if now is None else now, every, after)
+        joined = data.get("joined_at")
+        if start is None or not isinstance(joined, (int, float)) or float(joined) < start:
+            return None
+        if mtime < start:
+            when = datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M")
+            return (f"{expanded}: not written since its window opened ({when}, every {every}) "
+                    f"although this machine has been present since -- the duty has not run")
+        return None
+    key = "joined_at" if since == "join" else "arrived_at"
+    mark = data.get(key)
+    if not isinstance(mark, (int, float)):
+        return f"{expanded}: since={since} is unprovable -- {record} has no {key}"
+    if mtime < float(mark):
+        when = datetime.fromtimestamp(float(mark)).strftime("%Y-%m-%d %H:%M")
+        return (f"{expanded}: not written since the last {since} ({when}) -- "
+                f"this session's duty has not run")
+    return None
 
 
 def run_check(artifact: Artifact, *, now: float | None = None,
@@ -233,6 +314,13 @@ def run_check(artifact: Artifact, *, now: float | None = None,
                 f"max_age_hours={artifact.max_age_hours})"
             )
 
+    if getattr(artifact, "since", None):
+        late = _since_error(expanded, st.st_mtime, artifact.since,
+                            every=getattr(artifact, "every", None),
+                            after=getattr(artifact, "after", None), now=now)
+        if late:
+            errors.append(late)
+
     check = artifact.check
 
     if check == "exists":
@@ -266,12 +354,17 @@ def run_check(artifact: Artifact, *, now: float | None = None,
             # Only the tail: these logs are append-only and a failure from six
             # weeks ago is not this run's verdict.
             tail = "\n".join(text.splitlines()[-40:])
-            hit = next((m for m in CRASH_MARKERS if m.lower() in tail.lower()), None)
-            if hit:
-                line = next((l.strip() for l in reversed(tail.splitlines())
-                             if hit.lower() in l.lower()), "")
-                errors.append(f"{expanded}: the run left {hit!r} in its output "
-                              f"(no_crash check failed) -- {line[:120]}")
+            # If the last line reports success, don't fail on crash markers found elsewhere
+            last_line = text.splitlines()[-1] if text.splitlines() else ""
+            if re.search(r"result:\s*ok\b", last_line, re.I):
+                pass  # Job reported success, don't fail on crash markers
+            else:
+                hit = next((m for m in CRASH_MARKERS if m.lower() in tail.lower()), None)
+                if hit:
+                    line = next((l.strip() for l in reversed(tail.splitlines())
+                                 if hit.lower() in l.lower()), "")
+                    errors.append(f"{expanded}: the run left {hit!r} in its output "
+                                  f"(no_crash check failed) -- {line[:120]}")
 
     elif check == "min_bytes":
         # For artifacts a daemon RECREATES when lost. `exists` cannot detect
@@ -342,7 +435,8 @@ def run_check(artifact: Artifact, *, now: float | None = None,
             else:
                 if not matched:
                     said = f" -- last line: {last[:160]!r}" if last else " -- file is empty"
-                    errors.append(f"{expanded}: last line does not match {artifact.arg!r}{said}")
+                    errors.append(f"{expanded}: last line does not match {artifact.arg!r}{said}"
+                                  + _run_printed(text, last))
 
     elif check == "regex":
         text, read_error = _read_text(expanded)

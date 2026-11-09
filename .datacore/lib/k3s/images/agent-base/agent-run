@@ -1,0 +1,14 @@
+#!/bin/sh
+# agent-run ROLE COMMAND... -- run one of the agent's processes under an
+# exclusive lock for its role, held in the agent's volume.
+#
+# A Deployment with strategy Recreate never overlaps two pods, but a hand-made
+# second replica would: it mounts the same volume and would become a second
+# writer on the ledger chain and a second poller of the bot. The lock makes
+# that second copy exit with status 75 instead. It waits up to 120 s first:
+# a replacement pod starts while the old one still has 90 s to stop.
+set -eu
+role=$1; shift
+lock="$HOME/.datacore/state/k3s-$role.lock"
+mkdir -p "$(dirname "$lock")"
+exec flock --wait 120 --conflict-exit-code 75 "$lock" "$@"

@@ -1,0 +1,7 @@
+# fixture for mac-smoke artifact[0]
+# producer artifact: /tmp/datacore-smoke.log on mac
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: ^smoke \d{4}-\d{2}-\d{2}:
+# represents: SUCCESS
+# ---
+smoke 2026-09-27: all checks passed

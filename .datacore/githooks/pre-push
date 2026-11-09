@@ -30,9 +30,33 @@ if [ "${SKIP_PRE_PUSH:-0}" = "1" ]; then
     exit 0
 fi
 
-DATA_DIR="${DATA_DIR:-$HOME/Data}"
-DENYLIST="$DATA_DIR/.datacore/config/public-repo-denylist.yaml"
-SCANNER="$DATA_DIR/.datacore/lib/pre_push_scan.py"
+# ---- Where the core scripts come from ---------------------------------------
+# From THIS hook's own checkout: the hook file lives in <checkout>/.datacore/githooks.
+# The default used to be $HOME/Data. On an agent's host the global hooks directory is the runner checkout's
+# (~/.datacore/v2-runner) while ~/Data is the AGENT'S OWN space repo, with a
+# stale ownership guard and no ledger write gate. Every push there failed with
+# "can't open file .../Data/.datacore/lib/hooks/ledger_write_gate.py" and Data's
+# blog stopped publishing; where ~/Data had neither script the gate was skipped
+# without a word. Order: an explicit DATA_DIR, then the hook's own checkout, then
+# $HOME/Data (hooks copied out of any checkout). A gate found in none of them
+# refuses the push and names the file; it is never skipped silently.
+HOOK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+DATA_DIR="${DATA_DIR:-$HOOK_ROOT}"
+core_file() {  # core_file <path under .datacore/>: the first checkout that carries it
+    for _root in "$DATA_DIR" "$HOOK_ROOT" "$HOME/Data"; do
+        if [ -e "$_root/.datacore/$1" ]; then echo "$_root/.datacore/$1"; return 0; fi
+    done
+    echo "$HOOK_ROOT/.datacore/$1"   # found nowhere: callers refuse (gates) or fail closed (policy)
+    return 1
+}
+require_core_file() {
+    core_file "$1" && return 0
+    echo "pre-push: BLOCKED — required gate .datacore/$1 not found in $DATA_DIR, $HOOK_ROOT or $HOME/Data" >&2
+    echo "  This hook takes core scripts from its own checkout; update it: git -C $HOOK_ROOT pull --ff-only" >&2
+    return 1
+}
+DENYLIST=$(core_file config/public-repo-denylist.yaml || true)
+SCANNER=$(core_file lib/pre_push_scan.py || true)
 # Fallback protection list, used ONLY when the denylist file is missing.
 # These are our public end-user repos; better to block a push here than
 # to fail open because a checkout is incomplete.
@@ -41,18 +65,43 @@ FALLBACK_PROTECTED="plur-ai/plur datacore-one/datacore datacore-one/datacore-dip
 # Capture the ref list once — both the policy check and git-lfs need it.
 # core.hooksPath routes ALL repos here, bypassing per-repo .git/hooks/ —
 # including the LFS pre-push hook. Without explicit chaining, new LFS
-# objects are never uploaded (3-fds silently accumulated 460 objects /
-# 824 MB unpushed by 2026-06-10 exactly this way).
+# objects are never uploaded (one space silently accumulated hundreds of
+# objects unpushed exactly this way).
 REFS_INPUT=$(cat)
 
-OWNERSHIP="$DATA_DIR/.datacore/lib/hooks/log_ownership_guard.py"
+# ---- Shared history is never rewritten (MEM-10; owner decision 6) ----------
+# Runs for EVERY repo, before the not-protected early exit further down: until
+# 2026-09-26 a non-protected repo printed "policy check skipped" and let
+# `git push --force origin main` rewrite the shared main. A push to a shared
+# branch must fast-forward it: the remote's tip is an ancestor of what we push.
+# A tip we do not have locally could be someone's unseen work -- refused too
+# (fetch, merge, push again). Deleting a shared branch is refused.
+ZERO_SHA="0000000000000000000000000000000000000000"
+REWRITE=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
+    case "$r_ref" in (refs/heads/main|refs/heads/master|refs/heads/develop) ;; (*) continue ;; esac
+    [ -z "$r_sha" ] || [ "$r_sha" = "$ZERO_SHA" ] && continue
+    if [ "$l_sha" = "$ZERO_SHA" ]; then
+        echo "${r_ref#refs/heads/} (deletion)"
+    elif ! git merge-base --is-ancestor "$r_sha" "$l_sha" >/dev/null 2>&1; then
+        echo "${r_ref#refs/heads/}"
+    fi
+done)
+if [ -n "$REWRITE" ]; then
+    echo "pre-push: BLOCKED — this push rewrites shared history on: $(echo $REWRITE)" >&2
+    echo "  The remote tip is not an ancestor of what is pushed (a force-push, or work you have not fetched)." >&2
+    echo "  Fetch, merge or rebase your own commits on top, and push again; shared history is never rewritten." >&2
+    exit 1
+fi
+
+LEDGER_GATE=$(require_core_file lib/hooks/ledger_write_gate.py) || exit 1
+OWNERSHIP=$(require_core_file lib/hooks/log_ownership_guard.py) || exit 1
 
 # ---- A Python that can actually run the policy ------------------------------
 # NOT bare `python3`. This hook runs under whatever launched the push, and cron
 # on macOS hands it PATH=/usr/bin:/bin, where python3 is the system 3.9 with no
 # PyYAML. The policy chain then could not run, the hook failed CLOSED, and every
 # push from a scheduled job on the Mac was blocked: ledger_publish_safe "held"
-# 1-datafund and 2-datacore every hour on 2026-09-17 -- while the same push from
+# space repos every hour -- while the same push from
 # a terminal, where python3 is a pyenv 3.11 with PyYAML, went straight through.
 # Failing closed was right; resolving the interpreter by PATH order was the bug.
 # Same probe order as runtime_shell.sh, with the one module this hook needs.
@@ -74,7 +123,16 @@ done
 # Reads REFS_INPUT rather than calling `cat` again: stdin can be read ONCE, and
 # an earlier revision of this block consumed it here, leaving REFS_INPUT empty
 # so LFS chaining and the denylist scan silently scanned nothing.
-if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
+# The ledger gate is stdlib-only (3.9+), so a host without PyYAML still runs it.
+GATE_PY="${HOOK_PY:-$(command -v python3 || true)}"
+if [ -n "$REFS_INPUT" ] && [ -z "$GATE_PY" ]; then
+    echo "pre-push: BLOCKED — no python3 on PATH, so the ledger write gate cannot run" >&2
+    exit 1
+fi
+if [ -n "$REFS_INPUT" ] && [ -z "$HOOK_PY" ]; then
+    echo "pre-push: ⚠ no python3 with PyYAML — ownership guard NOT run (set DATACORE_PYTHON); ledger gate runs with $GATE_PY" >&2
+fi
+if [ -n "$REFS_INPUT" ]; then
     OWN_RANGES=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
         [ -z "$l_ref" ] && continue
         [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
@@ -97,8 +155,8 @@ if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
                 # on the remote's default branch, exactly as the content scan
                 # below reasons. Full history was the fallback here, and it
                 # refused every new run branch of a repo whose past holds
-                # another actor's log edits (6-meridian, 2026-09-05: no run
-                # branch could be pushed, so no claim there ever held).
+                # another actor's log edits (in one space no run branch could
+                # be pushed, so no claim there ever held).
                 for candidate in "refs/remotes/${REMOTE}/main" "refs/remotes/${REMOTE}/master" "refs/remotes/${REMOTE}/develop"; do
                     if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
                         OWN_BASE=$(git merge-base "$l_sha" "$candidate" 2>/dev/null || true)
@@ -119,7 +177,8 @@ if [ -f "$OWNERSHIP" ] && [ -n "$HOOK_PY" ] && [ -n "$REFS_INPUT" ]; then
     done)
     if [ -n "$OWN_RANGES" ]; then
         # shellcheck disable=SC2086
-        "$HOOK_PY" "$OWNERSHIP" $OWN_RANGES || exit 1
+        if [ -n "$HOOK_PY" ]; then "$HOOK_PY" "$OWNERSHIP" $OWN_RANGES || exit 1; fi
+        "$GATE_PY" "$LEDGER_GATE" --ranges $OWN_RANGES || exit 1  # LED-3: only EventLog-written ledger lines
     fi
 fi
 
@@ -158,6 +217,60 @@ if [ "${SKIP_LOCAL_CI:-0}" != "1" ] && [ -n "$REPO_ROOT" ] && [ -n "$REFS_INPUT"
         exit 1
     fi
     echo "pre-push: ✓ local CI passed" >&2
+fi
+
+# ---- Formal verification gate (any repo with a vendored checker) -----------
+# A repo is verified when it tracks a Lean project: a verify.yaml with the
+# vendored formal_check.py beside it (dev module, /formal-verify). Runs locally, not
+# on GitHub: Lean is installed here, and the proofs are checked before the
+# code leaves the machine. --if-touched makes the checker a no-op unless the
+# push changes the project or a file a model covers, so ledger and journal
+# pushes pay nothing. Hosts without Lean skip with a note rather than block:
+# a missing prover is not a failed proof, and must never hold a ledger push.
+#
+# Checks the working tree against the outgoing range, so push from the branch
+# you have checked out. Bypass: SKIP_FORMAL=1 git push …
+if [ "${SKIP_FORMAL:-0}" != "1" ] && [ -n "$REPO_ROOT" ] && [ -n "$REFS_INPUT" ] && [ -n "$HOOK_PY" ]; then
+    FORMAL_PROJECTS=$(cd "$REPO_ROOT" && git ls-files -- '*verify.yaml' | while read -r v; do
+        d=$(dirname "$v"); [ -f "$d/formal_check.py" ] && echo "$d"; done || true)
+    if [ -n "$FORMAL_PROJECTS" ]; then
+        FORMAL_BASE=$(printf '%s\n' "$REFS_INPUT" | while IFS=' ' read -r l_ref l_sha r_ref r_sha; do
+            [ -z "$l_ref" ] && continue
+            [ "$l_sha" = "0000000000000000000000000000000000000000" ] && continue
+            if [ "$r_sha" != "0000000000000000000000000000000000000000" ] && \
+               git rev-parse --quiet --verify "${r_sha}^{commit}" >/dev/null 2>&1; then
+                echo "$r_sha"; break
+            fi
+            for candidate in "refs/remotes/${REMOTE}/${r_ref#refs/heads/}" "refs/remotes/${REMOTE}/main" "refs/remotes/${REMOTE}/master"; do
+                if git rev-parse --quiet --verify "$candidate" >/dev/null 2>&1; then
+                    git merge-base "$l_sha" "$candidate" 2>/dev/null && break
+                fi
+            done
+            break
+        done || true)
+        if [ ! -x "$HOME/.elan/bin/lake" ] && ! command -v lake >/dev/null 2>&1; then
+            echo "pre-push: formal gate skipped — Lean (lake) not installed on this host" >&2
+        else
+            for proj in $FORMAL_PROJECTS; do
+                if [ -n "$FORMAL_BASE" ]; then
+                    set -- --base "$FORMAL_BASE" --if-touched
+                else
+                    set --   # base unknown: check everything, never assume nothing changed
+                fi
+                echo "pre-push: formal gate: $proj — SKIP_FORMAL=1 to bypass" >&2
+                if ! ( cd "$REPO_ROOT" && "$HOOK_PY" "$proj/formal_check.py" --project "$proj" "$@" </dev/null >&2 ); then
+                    echo "" >&2
+                    echo "═══════════════════════════════════════════════════════════════" >&2
+                    echo "PUSH BLOCKED: formal verification failed in $REPO_ROOT/$proj" >&2
+                    echo "═══════════════════════════════════════════════════════════════" >&2
+                    echo "Fix the model or the code (see FAIL lines above), or bypass" >&2
+                    echo "deliberately:  SKIP_FORMAL=1 git push ..." >&2
+                    echo "═══════════════════════════════════════════════════════════════" >&2
+                    exit 1
+                fi
+            done
+        fi
+    fi
 fi
 
 lfs_chain() {
@@ -230,6 +343,44 @@ else
     esac
 fi
 
+# A fork of a protected repo is public too, and it is where a user's pushes go:
+# `datacore init` forks datacore-one/datacore and keeps it as the `upstream`
+# remote. Checking only the push target's name skipped the scan for every fork,
+# so it ran for nobody but the operator. Any remote of THIS repo that is a
+# protected repo makes the push protected, scanned under the protected policy.
+# ...but only when the push target itself can be public. A private space repo
+# that keeps the public template as its `upstream` remote is not a fork anyone
+# can read, and treating it as one blocked every journal and task push
+# (2-datacore, 2026-09-27). GitHub decides: PRIVATE skips the promotion; no
+# answer (gh missing, offline) keeps it, so the check fails closed.
+_TARGET_VIS=""
+if [ "$IS_PROTECTED" != "1" ] && command -v gh >/dev/null 2>&1; then
+    _TARGET_VIS=$(gh repo view "$REPO" --json visibility -q .visibility 2>/dev/null || true)
+fi
+if [ "$IS_PROTECTED" != "1" ] && [ "$_TARGET_VIS" != "PRIVATE" ]; then
+    for _u in $(git remote 2>/dev/null); do
+        _slug=$(git remote get-url "$_u" 2>/dev/null | sed -E 's#^(git@github.com:|https://github.com/|ssh://git@github.com/)##; s#\.git$##')
+        [ -n "$_slug" ] && [ "$_slug" != "$REPO" ] || continue
+        _is=0
+        if [ -f "$DENYLIST" ] && [ "$PYTHON_OK" = "1" ]; then
+            _is=$("$HOOK_PY" - "$DENYLIST" "$_slug" <<'PY_FORK'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+print('1' if sys.argv[2] in d.get('protected_repos', []) else '0')
+PY_FORK
+            ) || _is=1
+        else
+            case " $FALLBACK_PROTECTED " in *" $_slug "*) _is=1 ;; esac
+        fi
+        if [ "$_is" = "1" ]; then
+            echo "pre-push: $REPO is a fork of $_slug — treating as PROTECTED" >&2
+            REPO="$_slug"
+            IS_PROTECTED=1
+            break
+        fi
+    done
+fi
+
 if [ "$IS_PROTECTED" != "1" ]; then
     echo "pre-push: $REPO not a protected public repo — policy check skipped" >&2
     lfs_chain
@@ -244,7 +395,7 @@ echo "pre-push: $REPO is PROTECTED — running policy chain…" >&2
 [ -f "$SCANNER" ]   || fail_closed "scanner script missing"
 
 # ---- Collect outgoing commit range per ref --------------------------------
-RANGE_TOOL="$DATA_DIR/.datacore/lib/git_privacy.py"
+RANGE_TOOL=$(core_file lib/git_privacy.py || true)
 [ -f "$RANGE_TOOL" ] || fail_closed "Git range validator missing"
 ALL_RANGE=$(printf '%s\n' "$REFS_INPUT" | "$HOOK_PY" "$RANGE_TOOL" --outgoing "$REMOTE") \
     || fail_closed "cannot establish outgoing commits; fetch the remote and retry"

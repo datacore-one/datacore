@@ -176,6 +176,8 @@ def test_a_power_log_that_is_not_utf8_is_still_read(monkeypatch, tmp_path):
         b"   pid 409(WindowServer): UserIsActive named: \xd5 tickle\n"
         b"2026-09-17 09:03:08 +0200 Wake                \tWake from Deep Idle\n")
     monkeypatch.setattr(awake, "_PMSET", ("/bin/cat", str(log)))
+    monkeypatch.setenv("DATACORE_POWER_ASL_DIR", "")
+    monkeypatch.setattr(awake, "_MEMO", None)
     text = awake._sleep_log()
     assert len(text.splitlines()) == 3
     asleep = awake.asleep_seconds_since(1789606348.0, now=1789628588.0)
@@ -203,3 +205,23 @@ def test_a_regex_failure_says_what_the_artifact_actually_said(tmp_path):
     errors = run_check(Artifact(path=str(status), check="regex", arg="^OK phase1-cycle"))
     assert len(errors) == 1
     assert "did not match" in errors[0] and "no usable Python" in errors[0]
+
+
+def test_the_asl_day_files_are_read_in_pmsets_format(tmp_path, monkeypatch):
+    """pmset -g log took 63 s on 2026-09-23 -- past its timeout -- and every
+    caller silently lost the machine's sleep. The ASL day files carry the same
+    records; rendered in pmset's format, the existing parsers read them."""
+    d = tmp_path / "asl"; d.mkdir()
+    (d / "2026.09.23.asl").write_bytes(b"x")
+    monkeypatch.setenv("DATACORE_POWER_ASL_DIR", str(d))
+    monkeypatch.setenv("DATACORE_STATE", str(tmp_path / "state"))
+    monkeypatch.setattr(awake, "_MEMO", None)
+    monkeypatch.setattr(awake, "_asl_events",
+                        lambda p: [[1790154844, "Sleep"], [1790154887, "DarkWake"], [1790154908, "Wake"]])
+    assert awake.last_full_wake(log=awake._sleep_log()) == 1790154908
+    # A day file that cannot be read is not an empty day: fall back, never guess.
+    monkeypatch.setattr(awake, "_MEMO", None)
+    monkeypatch.setattr(awake, "_asl_events", lambda p: None)
+    monkeypatch.setattr(awake, "_pmset_log", lambda: "FALLBACK")
+    (d / "2026.09.24.asl").write_bytes(b"y")
+    assert awake._sleep_log() == "FALLBACK"

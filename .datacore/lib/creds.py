@@ -26,7 +26,9 @@ import difflib
 import json
 import os
 import re
+import shlex
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -639,8 +641,112 @@ class CredentialManager:
         import credential_access as ca  # noqa: PLC0415
         return ca
 
+    @staticmethod
+    def _cred_lock(key: str):
+        """The broker's per-credential lock, keyed on the INDEX ID.
+
+        Keyed on the caller's raw argument until 2026-09-23, so `creds get
+        oura-pat` and `creds get OURA_PERSONAL_ACCESS_TOKEN` took different
+        locks for the same credential and could refresh a single-use chain
+        concurrently -- the race this lock exists to prevent. Callers pass the
+        resolved entry's id; every name for one credential shares one lock.
+        """
+        import contextlib  # noqa: PLC0415
+        import fcntl  # noqa: PLC0415
+
+        @contextlib.contextmanager
+        def held():
+            lockdir = Path.home() / ".datacore" / "locks"
+            lockdir.mkdir(parents=True, exist_ok=True)
+            fh = open(lockdir / f"cred-{key.replace('/', '_')}.lock", "w")
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+                fh.close()
+        return held()
+
+    @staticmethod
+    def _full_entry(c: "Credential") -> dict:
+        """The index row as written, for the verifier.
+
+        `Credential.extra` drops every KNOWN_FIELD, among them `provider` and
+        `id`. doctor passed `extra` alone, so `_entry_verifier` never saw
+        provider=gitea/gitlab, fell through to the generic probe, and reported
+        ANY 2xx from the api_base root as ok -- while `get` reported n-a for
+        the same value. Both now verify against the same full row.
+        """
+        extra = c.extra if isinstance(c.extra, dict) else {}
+        return {**extra, "id": c.id, "name": c.name, "type": c.type,
+                "provider": c.provider, "status": c.status}
+
+    # ---- Verified-ok cache (see VERIFY_CACHE_TTL_S) -------------------------
+    # Called only under _cred_lock. Any doubt (unreadable, corrupt, mismatched,
+    # expired, future-dated) is a miss: the answer is always "ask the provider".
+
+    @staticmethod
+    def _verify_cache_path() -> Path:
+        return Path.home() / ".datacore" / "state" / "creds-verified.json"
+
+    @staticmethod
+    def _verify_cache_ttl() -> int:
+        try:
+            return max(0, int(os.environ.get("DATACORE_CREDS_VERIFY_TTL",
+                                             VERIFY_CACHE_TTL_S)))
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _verify_cache_key(key: str, var: str, value: str) -> tuple:
+        import hashlib  # noqa: PLC0415
+        return f"{key}|{var}", hashlib.sha256(value.encode()).hexdigest()
+
+    def _verify_cache_load(self) -> dict:
+        try:
+            data = json.loads(self._verify_cache_path().read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _verify_cache_hit(self, key: str, var: str, value: str) -> bool:
+        ttl = self._verify_cache_ttl()
+        if ttl <= 0 or not value:
+            return False
+        slot, digest = self._verify_cache_key(key, var, value)
+        rec = self._verify_cache_load().get(slot)
+        if not isinstance(rec, dict) or rec.get("sha256") != digest:
+            return False
+        try:
+            age = time.time() - float(rec.get("verified_at"))
+        except (TypeError, ValueError):
+            return False
+        return 0 <= age < ttl
+
+    def _verify_cache_store(self, key: str, var: str, value: str, ok: bool) -> None:
+        """Record an ok verdict, or drop the slot on anything else."""
+        if self._verify_cache_ttl() <= 0 and ok:
+            return
+        slot, digest = self._verify_cache_key(key, var, value)
+        data = self._verify_cache_load()
+        if ok:
+            data[slot] = {"sha256": digest, "verified_at": time.time()}
+        elif data.pop(slot, None) is None:
+            return
+        path = self._verify_cache_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                json.dump(data, fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except OSError:
+            pass  # no cache means the next get verifies again: fail closed
+
     def cmd_get(self, cred_id: str, consumer: str = "cli",
-                no_verify: bool = False) -> int:
+                no_verify: bool = False, strict: bool = False) -> int:
         """Serve a currently-valid credential value. THE BROKER.
 
         Holds an exclusive lock for the credential id for the whole operation.
@@ -652,48 +758,142 @@ class CredentialManager:
 
         It prints the VALUE on stdout (that is the point of a broker) and
         everything else on stderr, so `X=$(creds get id)` is safe.
-        """
-        import fcntl  # noqa: PLC0415
-        ca = self._access()
 
-        lockdir = Path.home() / ".datacore" / "locks"
-        lockdir.mkdir(parents=True, exist_ok=True)
-        lock = lockdir / f"cred-{cred_id.replace('/', '_')}.lock"
-        fh = open(lock, "w")
+        Verdicts: FAIL is never served (exit 1). n-a ("could not tell") is
+        served with exit 0 and ONE stderr line starting with NA_NOTICE_PREFIX
+        (decision C1, 2026-09-23; see GET_EPILOG), because many credentials have
+        no free probe by decision (NO_PROBE) and refusing them all would break
+        every consumer at once. `--strict` refuses n-a too (exit 3): a caller
+        that needs "the provider confirmed this value" asks for it.
+
+        The verdict is the SAME function doctor applies: the variable actually
+        served (not the entry's primary) and the full index row (so disabled,
+        api_base and provider-specific verifiers apply here as they do there).
+        """
+        ca = self._access()
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            entry = ca._entry(cred_id)
+        except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+
+        key = str(entry.get("id") or cred_id)
+        with self._cred_lock(key):
             try:
                 value = ca.get_value(cred_id, consumer=consumer)
             except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
                 print(f"{exc}", file=sys.stderr)
                 return 1
 
-            entry = ca._entry(cred_id)
-            var = entry.get("var_name") or (entry.get("vars") or [cred_id])[0]
+            # The variable whose value is being served. Verifying the entry's
+            # primary instead sent a secondary var's value (GH_TOKEN) to the
+            # primary's provider (api.openai.com) and judged it by that.
+            var = ca._var_for(entry, cred_id)
 
-            if not no_verify:
-                state, detail = ca.verify_value(var, value)
+            if not no_verify and not self._verify_cache_hit(key, var, value):
+                state, detail = ca.verify_value(var, value, entry=entry)
+                self._verify_cache_store(key, var, value, ok=(state == "ok"))
                 if state == "FAIL":
                     # Refusing to serve a value proven dead is the difference
                     # between this and reading the file yourself. A dead value
                     # served silently is what sends someone to rotate a
                     # credential that was fine.
-                    print(f"{cred_id}: value is DEAD ({detail}). Not served.",
+                    print(f"{cred_id}: this host's value is DEAD ({detail}). Not served.",
                           file=sys.stderr)
+                    print(self._fleet_hint(ca, cred_id, entry), file=sys.stderr)
                     if entry.get("lifecycle") == "rotating":
                         owner = entry.get("owner", "unresolved")
                         mint = entry.get("mint_host", "unknown")
                         print(f"  rotating: owner={owner} mint_host={mint} — "
                               f"renew there, not here.", file=sys.stderr)
                     return 1
-                if state == "n-a":
-                    print(f"{cred_id}: served WITHOUT verification ({detail})",
-                          file=sys.stderr)
+                if state != "ok":
+                    if strict:
+                        print(f"creds get: {cred_id}: NOT served, exit 3 — "
+                              f"could not verify ({detail}); --strict refuses n-a",
+                              file=sys.stderr)
+                        return 3
+                    # Decision C1 (2026-09-23): n-a stays served with exit 0.
+                    # This line is the ONLY signal that the value is
+                    # unverified, so it has one fixed prefix that no other
+                    # outcome prints (FAIL, --strict and --no-verify differ).
+                    print(f"{NA_NOTICE_PREFIX} {cred_id}: served UNVERIFIED on "
+                          f"stdout, exit 0 — {detail}. Use --strict to refuse "
+                          f"n-a (exit 3).", file=sys.stderr)
             print(value)
             return 0
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-            fh.close()
+
+    @staticmethod
+    def _other_hosts(ca, entry: dict) -> list[str]:
+        """The hosts besides this one that the index declares the credential on."""
+        me = ca.instance_name()
+        hosts = entry.get("hosts") if isinstance(entry, dict) else None
+        return [str(h) for h in (hosts or []) if str(h) not in (me, "local")]
+
+    def _fleet_hint(self, ca, cred_id: str, entry: dict) -> str:
+        """What a FAIL on THIS host does and does not mean (MEM-07).
+
+        A 401 here says this host's copy is dead, not that the credential was
+        revoked: on 2026-07-08 the @plur_ai X keys had been rotated into one
+        host's tree and never distributed, so every other copy 401'd while the
+        key was alive. The verdict names the other hosts and the comparison,
+        so nobody has to go looking -- and nobody is sent to replace a key
+        that still works elsewhere."""
+        others = self._other_hosts(ca, entry)
+        if others:
+            return (f"  this is ONE host's copy. {cred_id} is also declared on "
+                    f"{', '.join(others)}: compare every host's value before calling it "
+                    f"revoked -- `creds compare {cred_id}` (sha256 fingerprints over ssh, "
+                    f"read-only, never a value). A copy that works on another host means "
+                    f"this one is stale: distribute that value, nothing is revoked.")
+        return (f"  no other host is declared for {cred_id}; before calling it revoked, "
+                f"compare with the value the provider's console shows (fingerprint: "
+                f"`python3 .datacore/lib/credential_access.py get {cred_id}`).")
+
+    def cmd_compare(self, cred_id: str, timeout: int = 20) -> int:
+        """Fingerprint of a credential's value on every declared host, read-only.
+
+        This host's fingerprint comes from the broker's own resolution; each
+        other host is asked over ssh for `credential_access.py get <id>`, which
+        prints a fingerprint and never the value. Exit 0 when every reachable
+        host holds the same value, 1 when they differ, 2 when a host could not
+        be read (unknown is never "the same")."""
+        import subprocess
+        ca = self._access()
+        try:
+            entry = ca._entry(cred_id)
+        except (ca.CredentialNotIndexed, ca.CredentialUnresolvable) as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 2
+        me = ca.instance_name()
+        rows = []
+        try:
+            rows.append((me, ca.fingerprint(ca.get_value(cred_id, consumer="creds-compare"))))
+        except Exception as exc:  # noqa: BLE001 -- reported, never guessed
+            rows.append((me, f"unreadable ({str(exc)[:60]})"))
+        for host in self._other_hosts(ca, entry):
+            try:
+                r = subprocess.run(
+                    ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={min(timeout, 10)}", host,
+                     f"python3 ~/Data/.datacore/lib/credential_access.py get {shlex.quote(cred_id)}"],
+                    capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+                m = re.search(r"->\s*([0-9a-f]{12}|\(empty\))", r.stdout)
+                rows.append((host, m.group(1) if m else f"unreadable (exit {r.returncode})"))
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                rows.append((host, f"unreadable ({type(exc).__name__})"))
+        for host, fp in rows:
+            print(f"  {host:16} {fp}")
+        prints = {fp for _, fp in rows if re.fullmatch(r"[0-9a-f]{12}", fp)}
+        if len(prints) < len(rows):
+            print(f"\n  not every host could be read -- no conclusion about {cred_id}.")
+            return 2
+        if len(prints) > 1:
+            print(f"\n  the hosts hold DIFFERENT values: the key is not proven revoked. Probe "
+                  f"each host's copy (`creds doctor --id {cred_id}` there); the one that works "
+                  f"is the current value, and the others are stale copies to replace with it.")
+            return 1
+        print(f"\n  every host holds the same value.")
+        return 0
 
     def cmd_doctor(self, cred_id: str = None) -> int:
         """Liveness for every indexed credential. ok / FAIL / n-a.
@@ -705,6 +905,9 @@ class CredentialManager:
         """
         ca = self._access()
         index = self._load_index()
+        if index is None:
+            print(f"no credential index at {self.index_path}")
+            return 2
         creds = [c for c in index.credentials
                  if not cred_id or c.id == cred_id]
         if not creds:
@@ -731,8 +934,7 @@ class CredentialManager:
                     rows.append(("FAIL", c.id, f"unreadable: {str(exc)[:70]}"))
                     fail += 1
                 continue
-            state, detail = ca.verify_value(
-                var, value, entry=c.extra if isinstance(c.extra, dict) else {})
+            state, detail = ca.verify_value(var, value, entry=self._full_entry(c))
             if state == "FAIL":
                 warn = ca.replication_warning(
                     {**(c.extra if isinstance(c.extra, dict) else {}), "id": c.id})
@@ -750,7 +952,38 @@ class CredentialManager:
             print(f"  {state:5} {cid:32} {detail[:70]}")
         print(f"\n  ok {ok}   FAIL {fail}   n-a {na}"
               f"   ({na} could not be determined — not counted as passing)")
+        by_id = {c.id: c for c in creds}
+        for state, cid, _ in rows:
+            if state == "FAIL" and cid in by_id:
+                print(f"\n  FAIL {cid}:")
+                print(self._fleet_hint(ca, cid, self._full_entry(by_id[cid])))
+        self._warn_duplicate_keys(ca, creds if cred_id else None)
         return 1 if fail else 0
+
+    @staticmethod
+    def _warn_duplicate_keys(ca, only=None) -> None:
+        """Decision C2 (2026-09-23): a key assigned twice in ONE store is read
+        last-wins by every parser, so the earlier line is dead text that the
+        next edit may land on. Warn with KEY NAMES only -- never a value, and
+        never a change to the exit code. With `--id`, only that credential's
+        variables are listed."""
+        wanted = None
+        if only is not None:
+            wanted = set()
+            for c in only:
+                extra = c.extra if isinstance(c.extra, dict) else {}
+                wanted.update(v for v in [extra.get("var_name"), *(extra.get("vars") or [])] if v)
+        rows = []
+        for path, keys in ca.within_store_duplicates():
+            keys = [k for k in keys if wanted is None or k in wanted]
+            if keys:
+                rows.append((path, keys))
+        if not rows:
+            return
+        print("\n  WARNING: keys duplicated within one store (the LAST line wins; "
+              "delete the earlier ones):")
+        for path, keys in rows:
+            print(f"    {path}: {', '.join(keys)}")
 
 
     def cmd_adopt_token(self, cred_id: str = "claude-code-oauth") -> int:
@@ -819,27 +1052,30 @@ class CredentialManager:
                   f"single-use refresh chain.", file=sys.stderr)
             return 1
 
-        store = ca._store_for(entry)
-        if not store.startswith("json:"):
-            print(f"{cred_id} declares storage {store!r}; adopt-token only "
-                  f"handles a json: store", file=sys.stderr)
-            return 1
-        path = Path(store.split(":", 1)[1]).expanduser()
+        # Same lock as `get`, keyed on the same id: a token must not be
+        # swapped underneath a broker call that is serving or verifying it.
+        with self._cred_lock(str(entry.get("id") or cred_id)):
+            store = ca._store_for(entry)
+            if not store.startswith("json:"):
+                print(f"{cred_id} declares storage {store!r}; adopt-token only "
+                      f"handles a json: store", file=sys.stderr)
+                return 1
+            path = Path(store.split(":", 1)[1]).expanduser()
 
-        # A rejected or unverifiable replacement must not displace the
-        # currently usable store. Probe only the candidate value.
-        state, detail = ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", token)
-        if state != "ok":
-            print(f"  candidate token not verified ({state}); store unchanged", file=sys.stderr)
-            return 1
-        from credential_store import adopt_oauth_token
-        try:
-            old = adopt_oauth_token(path, token)
-        except (OSError, ValueError) as exc:
-            print(f"  credential update failed ({type(exc).__name__}); preserve the store and backups", file=sys.stderr)
-            return 1
-        print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}", file=sys.stderr)
-        return 0
+            # A rejected or unverifiable replacement must not displace the
+            # currently usable store. Probe only the candidate value.
+            state, detail = ca.verify_value("CLAUDE_CODE_OAUTH_TOKEN", token)
+            if state != "ok":
+                print(f"  candidate token not verified ({state}); store unchanged", file=sys.stderr)
+                return 1
+            from credential_store import adopt_oauth_token
+            try:
+                old = adopt_oauth_token(path, token)
+            except (OSError, ValueError) as exc:
+                print(f"  credential update failed ({type(exc).__name__}); preserve the store and backups", file=sys.stderr)
+                return 1
+            print(f"  wrote {ca.fingerprint(old)} -> {ca.fingerprint(token)}  {path}", file=sys.stderr)
+            return 0
 
     def cmd_sync(self, instance: str = None) -> int:
         """Run sync.sh from the secrets repo."""
@@ -848,7 +1084,9 @@ class CredentialManager:
 
         if not secrets_dir.exists():
             print("Secrets repo not found at .datacore/secrets/")
-            print("Bootstrap with: git clone gregor@blackpi.local:~/secrets.git .datacore/secrets")
+            # The secrets remote is the install's own (INS-3: none of ours ships).
+            remote = os.environ.get("DATACORE_SECRETS_REMOTE") or "<your-secrets-remote>"
+            print(f"Bootstrap with: git clone {remote} .datacore/secrets")
             return 1
 
         if not sync_script.exists():
@@ -856,12 +1094,68 @@ class CredentialManager:
             return 1
 
         import subprocess
+        # Commit before sync.sh pulls, push after: an edit made in a store file
+        # used to be assembled here and reach no other host, and `creds add`
+        # committed without pushing (the Mac was 12 commits ahead, 2026-10-22).
+        committed = self._commit_store_edits(secrets_dir)
         cmd = [str(sync_script)]
         if instance:
             cmd.append(instance)
 
         result = subprocess.run(cmd, cwd=str(secrets_dir))
-        return result.returncode
+        if result.returncode != 0:
+            return result.returncode
+        return self._push_store(secrets_dir, committed)
+
+    STORE_PATTERNS = ("global.env", "credential-index.yaml", "spaces/*.env",
+                      "projects/*.env", "projects/*/*.env", "instances/*.yaml")
+
+    def _git_secrets(self, secrets_dir: Path, *args, timeout: int = 30):
+        import subprocess
+        return subprocess.run(["git", "-C", str(secrets_dir), *args], capture_output=True,
+                              text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+
+    def _commit_store_edits(self, secrets_dir: Path) -> list[str]:
+        """Commit changed store files by explicit path. Names only, never values."""
+        from fnmatch import fnmatch
+        st = self._git_secrets(secrets_dir, "status", "--porcelain", "--untracked-files=all")
+        if st.returncode != 0:
+            return []
+        paths = sorted({line[3:].split(" -> ")[-1].strip('"') for line in st.stdout.splitlines()})
+        paths = [p for p in paths
+                 if any(fnmatch(p, pat) and p.count("/") == pat.count("/") for pat in self.STORE_PATTERNS)]
+        if not paths:
+            return []
+        msg = (f"sync: store edits from {self._instance_label(secrets_dir)}\n\n"
+               + "\n".join(f"- {p}" for p in paths))
+        add = self._git_secrets(secrets_dir, "add", "--", *paths)
+        commit = self._git_secrets(secrets_dir, "commit", "--only", "-m", msg, "--", *paths)
+        if add.returncode or commit.returncode:
+            print("WARNING: could not commit store edits; they stay local and reach no "
+                  "other host: " + ", ".join(paths), file=sys.stderr)
+            return []
+        print(f"Committed store edits: {', '.join(paths)}")
+        return paths
+
+    def _instance_label(self, secrets_dir: Path) -> str:
+        f = secrets_dir / ".instance"
+        return f.read_text().strip() if f.exists() else "this host"
+
+    def _push_store(self, secrets_dir: Path, committed: list[str]) -> int:
+        """Push when this host is ahead of central. A failure is loud and non-zero."""
+        ahead = self._git_secrets(secrets_dir, "rev-list", "--count", "origin/main..HEAD")
+        if ahead.returncode != 0 or ahead.stdout.strip() in ("", "0"):
+            return 0
+        push = self._git_secrets(secrets_dir, "push", "--quiet", "origin", "HEAD:main")
+        if push.returncode != 0:
+            print(f"ERROR: secrets push FAILED — {ahead.stdout.strip()} commit(s) stay on this host "
+                  "and other hosts keep the old values. Resolve and rerun 'creds sync'.",
+                  file=sys.stderr)
+            for line in push.stderr.splitlines()[-3:]:
+                print(f"  git: {line}", file=sys.stderr)
+            return 1
+        print(f"Pushed {ahead.stdout.strip()} commit(s) to the secrets central repo")
+        return 0
 
     def _bootstrap_rotation(self, rotation: RotationIndex, env_path: Path) -> int:
         """Parse .env and create rotation entries from known patterns."""
@@ -944,12 +1238,24 @@ class CredentialManager:
     def cmd_add(self, cred_id: str, var_name: str = None, value: str = None,
                 scope: str = None, space: str = None, project: str = None,
                 tier: str = None, category: str = None, provider: str = None,
-                description: str = None) -> int:
-        """Add a credential to the secrets repo and index."""
+                description: str = None, existing: bool = False,
+                overwrite: bool = False) -> int:
+        """Add a credential to the secrets repo and index.
+
+        existing=True indexes a variable already in the target store: no value
+        is asked for or written, and the value is never read or printed.
+        overwrite=True replaces the value of a credential already indexed, in
+        the store its index row names; the index is not changed.
+        """
         secrets_dir = self.data_dir / ".datacore" / "secrets"
         if not secrets_dir.exists():
             print("Secrets repo not found at .datacore/secrets/")
             return 1
+        if overwrite:
+            if existing:
+                print("Refusing: --overwrite writes a new value; --existing writes none.")
+                return 1
+            return self._overwrite(secrets_dir, cred_id, value)
 
         # Interactive prompts for missing fields
         if not var_name:
@@ -974,7 +1280,11 @@ class CredentialManager:
             print("Did you pass the secret to --var instead of --value?")
             return 1
 
-        if not value:
+        if existing:
+            if value:
+                print("Refusing: --existing indexes a value already in the store; do not pass --value.")
+                return 1
+        elif not value:
             import getpass
             value = getpass.getpass(f"Value for {var_name}: ")
             if not value:
@@ -1005,7 +1315,7 @@ class CredentialManager:
                 return 1
 
         if scope == "project" and not project:
-            project = input("Project path (e.g. 3-fds/fairdrop): ").strip()
+            project = input("Project path (e.g. 1-myteam/myproject): ").strip()
             if not project:
                 print("Project path is required.")
                 return 1
@@ -1045,11 +1355,14 @@ class CredentialManager:
             entry["project"] = project
         from credential_store import add_credential
         try:
-            env_file, index_file = add_credential(secrets_dir, env_file, entry, value)
+            env_file, index_file = add_credential(secrets_dir, env_file, entry, None if existing else value)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             print(f"Credential addition refused ({type(exc).__name__}); existing data preserved.", file=sys.stderr)
             return 1
-        print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
+        if existing:
+            print(f"Indexed {var_name} from {env_file.relative_to(secrets_dir)}; the store is unchanged")
+        else:
+            print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
 
         import subprocess
         files = [str(path.relative_to(secrets_dir.resolve())) for path in (env_file, index_file)]
@@ -1061,7 +1374,56 @@ class CredentialManager:
             print("Credential stored durably, but Git commit failed; review the retained changes before retrying.", file=sys.stderr)
             return 1
         print("Committed the credential store and index to the secrets repo")
-        print(f"\nNext: run 'creds sync' to assemble, then push to BlackPi")
+        return self._sync_after_write()
+
+    def _overwrite(self, secrets_dir, cred_id: str, value: str = None) -> int:
+        """Replace an indexed credential's value in its declared store and commit it."""
+        from credential_store import overwrite_credential
+        index = yaml.safe_load((secrets_dir / "credential-index.yaml").read_text()) or {}
+        row = next((r for r in index.get("credentials") or [] if isinstance(r, dict) and r.get("id") == cred_id), None)
+        if not row:
+            print(f"Refusing: {cred_id} is not indexed; add it without --overwrite.", file=sys.stderr)
+            return 1
+        scope = row.get("scope")
+        env_file = {"global": secrets_dir / "global.env",
+                    "space": secrets_dir / "spaces" / f"{row.get('space')}.env",
+                    "project": secrets_dir / "projects" / f"{row.get('project')}.env"}.get(scope)
+        if env_file is None or not env_file.exists():
+            print(f"Refusing: {cred_id} has no store file for scope {scope!r}.", file=sys.stderr)
+            return 1
+        if not value:
+            import getpass
+            value = getpass.getpass(f"New value for {row.get('var_name')}: ")
+        try:
+            overwrite_credential(secrets_dir, env_file, row.get("var_name"), value)
+        except (OSError, ValueError) as exc:
+            print(f"Overwrite refused ({exc}); existing data preserved.", file=sys.stderr)
+            return 1
+        rel = str(env_file.resolve().relative_to(secrets_dir.resolve()))
+        print(f"Replaced {row.get('var_name')} in {rel}")
+        import subprocess
+        try:
+            subprocess.run(["git", "commit", "--only", "-m", f"chore: overwrite credential {cred_id}", "--", rel],
+                           cwd=str(secrets_dir), capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            print("Value stored, but Git commit failed; review the retained change before retrying.", file=sys.stderr)
+            return 1
+        print("Committed the credential store to the secrets repo")
+        return self._sync_after_write()
+
+    def _sync_after_write(self) -> int:
+        secrets_dir = self.data_dir / ".datacore" / "secrets"
+        # Assemble the env here: a value is not served by `get` until sync runs,
+        # and a printed "Next: run creds sync" was skipped often enough that the
+        # owner's first `get` failed on a credential just added (2026-10-14).
+        if not (secrets_dir / "scripts" / "sync.sh").exists():
+            print(f"\nNext: run 'creds sync' to assemble, then push to the secrets host")
+            return 0
+        if self.cmd_sync() != 0:
+            print("Credential committed, but 'creds sync' failed, so 'creds get' does not "
+                  "serve it yet. Fix the sync and run 'creds sync'.", file=sys.stderr)
+            return 1
+        print("Synced: 'creds get' serves it on this host. Other hosts: distribute.sh")
         return 0
 
     def _print_bootstrap(self):
@@ -1070,6 +1432,40 @@ class CredentialManager:
         print(f"  cp {self.example_path} {self.index_path}")
         print(f"\nThen edit {self.index_path} with your credentials.")
         print(f"See DIP-0018 for schema documentation.")
+
+
+# Decision C1 (2026-09-23): n-a is served (exit 0) by default and flagged on
+# stderr. The prefix is fixed so a caller or a log search can tell "served but
+# unverified" from every other outcome; nothing else `creds get` prints uses it.
+NA_NOTICE_PREFIX = "creds get: n-a:"
+
+# A SUCCESSFUL provider verification is reused by `creds get` for this long.
+# The Claude login's verifier is a whole `claude -p` session (~36 s measured
+# 2026-09-27), and paying it on every get made the agent-eval harness's 60 s
+# broker limit time out before any eval ran. Only "ok" is remembered, keyed by
+# index id + variable + sha256 of the value (never the value), in an owner-only
+# file; a changed value, an expired or future-dated entry, n-a and FAIL all go
+# back to the provider. DATACORE_CREDS_VERIFY_TTL overrides it (0 = off).
+# `creds doctor` never reads it: doctor is the live check.
+VERIFY_CACHE_TTL_S = 600
+
+GET_EPILOG = f"""\
+outcomes (stdout carries the value only when it is served):
+  ok         served, exit 0, stderr silent
+  n-a        served, exit 0, and exactly one stderr line:
+               {NA_NOTICE_PREFIX} <id>: served UNVERIFIED on stdout, exit 0 — <why>. ...
+             n-a means "could not tell": no free probe by design (NO_PROBE),
+             disabled by decision, or the provider was unreachable. It is
+             never a pass. Callers that need a confirmed value use --strict.
+  n-a        with --strict: NOT served, exit 3
+  FAIL       the provider says the value is dead: NOT served, exit 1
+  not found  not indexed or unresolvable: exit 1
+  --no-verify  served, exit 0, no check made and no n-a line
+
+an ok verdict is reused for {VERIFY_CACHE_TTL_S}s for the same value (sha256 match,
+owner-only file ~/.datacore/state/creds-verified.json; DATACORE_CREDS_VERIFY_TTL,
+0 disables). n-a and FAIL are never reused; `creds doctor` always asks the provider.
+"""
 
 
 def main():
@@ -1118,16 +1514,30 @@ def main():
     add_p.add_argument("--category", help="Category")
     add_p.add_argument("--provider", help="Provider name")
     add_p.add_argument("--description", help="Description")
+    add_p.add_argument("--existing", action="store_true",
+                       help="Index a variable already in the target store; no value is asked for or written")
+    add_p.add_argument("--overwrite", action="store_true",
+                       help="Replace the value of a credential already indexed; asks for it at a hidden prompt")
 
     # sync
-    get_p = subparsers.add_parser("get", help="Serve a verified credential value (broker)")
+    get_p = subparsers.add_parser(
+        "get", help="Serve a verified credential value (broker)",
+        description="Serve a credential value on stdout. Every diagnostic goes "
+                    "to stderr, so X=$(creds get ID) captures the value only.",
+        epilog=GET_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     get_p.add_argument("credential")
     get_p.add_argument("--consumer", default="cli", help="who is asking — recorded in the ledger")
     get_p.add_argument("--no-verify", action="store_true", help="skip the liveness call")
+    get_p.add_argument("--strict", action="store_true",
+                       help="refuse an unverifiable (n-a) value too; exit 3")
 
     adopt_p = subparsers.add_parser("adopt-token",
         help="Install a freshly minted token from stdin into its declared store")
     adopt_p.add_argument("--id", dest="adopt_id", default="claude-code-oauth")
+
+    compare_p = subparsers.add_parser(
+        "compare", help="Fingerprint a credential on every declared host (read-only)")
+    compare_p.add_argument("credential")
 
     doctor_p = subparsers.add_parser("doctor", help="Liveness for every credential (ok/FAIL/n-a)")
     doctor_p.add_argument("--id", dest="doctor_id", default=None)
@@ -1160,12 +1570,15 @@ def main():
             cred_id=args.id, var_name=args.var_name, value=args.value,
             scope=args.scope, space=args.space, project=args.project,
             tier=args.tier, category=args.category, provider=args.provider,
-            description=args.description)
+            description=args.description, existing=args.existing,
+            overwrite=args.overwrite)
     elif args.command == "get":
         return mgr.cmd_get(args.credential, consumer=args.consumer,
-                           no_verify=args.no_verify)
+                           no_verify=args.no_verify, strict=args.strict)
     elif args.command == "adopt-token":
         return mgr.cmd_adopt_token(args.adopt_id)
+    elif args.command == "compare":
+        return mgr.cmd_compare(args.credential)
     elif args.command == "doctor":
         return mgr.cmd_doctor(args.doctor_id)
     elif args.command == "sync":

@@ -116,10 +116,19 @@ def test_real_host_installer_reconciles_and_verifies_fake_crontab(tmp_path):
     lib.mkdir(parents=True); registry.mkdir()
     registry.joinpath('infrastructure.yaml').write_text('servers:\n  hermes:\n    access: {actor: fixture}\n')
     home.joinpath('.datacore/identity.env').write_text('DATACORE_ACTOR=fixture\nDATACORE_LEDGER_SIGN=1\n')
-    lib.joinpath('actor_identity.py').write_text('print("fixture identity.env")\n')
+    # Like the real module: importable (the installer reads REGISTRY_DIR, which
+    # resolves where the private registry lives) and a resolver when run.
+    lib.joinpath('actor_identity.py').write_text(
+        'from pathlib import Path\n'
+        f'REGISTRY_DIR = Path({str(registry)!r})\n'
+        'if __name__ == "__main__":\n    print("fixture identity.env")\n')
     lib.joinpath('ledger_phase1_cycle.sh').write_text('#!/bin/sh\nexit 0\n')
     lib.joinpath('ledger_phase1_cycle.sh').chmod(0o755)
     shutil.copyfile(Path(C.__file__), lib / 'cron_install.py')
+    # Host setup wires the safety guard from the runner's own hooks (e9cc8c7).
+    (lib / 'hooks').mkdir()
+    for name in ('install_redaction_guards.py', 'tool_policy_guard.py'):
+        shutil.copyfile(Path(C.__file__).with_name('hooks') / name, lib / 'hooks' / name)
     bindir = tmp_path / 'bin'; bindir.mkdir()
     bindir.joinpath('python3').symlink_to(sys.executable)
     bindir.joinpath('systemctl').write_text('#!/bin/sh\nexit 0\n')
@@ -173,3 +182,101 @@ def test_the_same_artifact_twice_is_still_ambiguous():
     with pytest.raises(ValueError):
         ci.reconcile("", {"job-a": "25 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/x.py",
                           "job-b": "40 * * * * /h/.datacore/lib/atomic_out.sh /s/a.log -- python3 /h/y.py"})
+
+
+def test_rsync_jobs_are_told_apart_by_what_they_copy():
+    """Several unrelated jobs are plain rsync lines. Identified by the executable
+    alone they were one job, so tagging the one that pulls state would have
+    dropped every other rsync line from the crontab (2026-09-28, OPS-1)."""
+    pull = "15 * * * * /usr/bin/rsync -az host:'~/state/mail/' $HOME/state/mail/ >/dev/null 2>&1"
+    push_a = '0 */6 * * * /usr/bin/rsync -az $HOME/a/ user@10.0.0.1:/x/a/ >/dev/null 2>&1\n'
+    push_b = '30 */6 * * * /usr/bin/rsync -az $HOME/b/ user@10.0.0.1:/x/b/ >/dev/null 2>&1\n'
+    current = push_a + pull + '\n' + push_b
+    result = C.reconcile(current, {'mail-pull': pull})
+    assert push_a in result and push_b in result
+    assert result.count('mail/') == 2 and result.endswith(pull + ' # datacore-job:mail-pull\n')
+    assert C.reconcile(result, {'mail-pull': pull}) == result
+    # flags before the source are not what tells jobs apart
+    assert C.invocation('1 * * * * rsync -a --delete /src/ /dst/') == ('rsync', '/src/')
+
+
+def test_cross_model_audit_jobs_are_told_apart_by_their_arguments():
+    """One script, many jobs: each agent's nightly slice and calibration, the
+    morning check that alerts and the one that publishes. By executable alone,
+    installing one would drop all the others."""
+    base = '0 1 * * * DATACORE_ROOT=/h/Data /usr/bin/python3 /h/Data/.datacore/lib/cross_model_audit.py '
+    lines = {'nightly-a': base + 'nightly --agent a --commit >> /h/log 2>&1',
+             'nightly-b': base + 'nightly --agent b --commit >> /h/log 2>&1',
+             'calibrate-a': base + 'calibrate --agent a --commit >> /h/log 2>&1',
+             'publish': base + 'check --write >> /h/log 2>&1'}
+    other = base + 'check --send >> /h/other.log 2>&1 # datacore-job:someone-elses-check\n'
+    result = C.reconcile(other, lines)
+    assert result.startswith(other), "another job on the same script was dropped"
+    assert all(f'# datacore-job:{k}\n' in result for k in lines)
+    with pytest.raises(ValueError, match='ambiguous'):
+        C.reconcile('', {'x': base + 'nightly --agent a', 'y': base + 'nightly --agent a'})
+
+
+def test_retiring_one_managed_key_keeps_every_other_job_of_the_same_script():
+    """cross_model_audit.py runs several agents' slices on one host. Retiring by
+    executable (--retire) would drop them all; a job that moved to another host
+    is retired by its own marker and nothing else (2026-09-29, Tris's slice)."""
+    winston = '25 1 * * * /d/.datacore/lib/cross_model_audit.py nightly --agent winston --commit # datacore-job:box-audit-nightly\n'
+    tris = '30 1 * * * /d/.datacore/lib/cross_model_audit.py nightly --agent tris --commit # datacore-job:box-audit-nightly-tris\n'
+    check = '40 6 * * * /d/.datacore/lib/cross_model_audit.py check # datacore-job:box-audit-check\n'
+    result = C.reconcile(winston + tris + check, {}, retire_keys=('box-audit-nightly-tris',))
+    assert result == winston + check
+    assert C.reconcile(result, {}, retire_keys=('box-audit-nightly-tris',)) == result
+
+
+# ── order is not a difference (board D5, 2026-10-01) ─────────────────────────
+# Two installers write one crontab: the host setup's entries and the jobs
+# manifest's. Each appends its own lines at the end, so whichever ran last owns
+# the tail and the other one's --verify read "missing, stale or duplicate" on
+# box and nightshift while every entry was present, correct and single.
+
+OTHER = '*/5 * * * * touch /state/heartbeat # datacore-job:box-heartbeat\n'
+
+
+def test_present_entries_followed_by_another_installers_line_verify(monkeypatch):
+    settled = C.reconcile('', ENTRY) + OTHER
+    monkeypatch.setattr(C, 'read_crontab', lambda: settled)
+    assert C.install(ENTRY, Path('/nonexistent-state'), verify=True)
+
+
+def test_install_does_not_rewrite_a_crontab_that_differs_only_in_order(tmp_path, monkeypatch):
+    settled = C.reconcile('', ENTRY) + OTHER
+    monkeypatch.setattr(C, 'read_crontab', lambda: settled)
+    monkeypatch.setattr(C.subprocess, 'run', lambda *a, **k: pytest.fail('rewrote a settled crontab'))
+    assert C.install(ENTRY, tmp_path / 'private')
+
+
+def test_order_tolerance_still_catches_stale_and_duplicate_entries(monkeypatch):
+    stale = LINE.replace('25 *', '30 *') + ' # datacore-job:phase1-cycle\n' + OTHER
+    monkeypatch.setattr(C, 'read_crontab', lambda: stale)
+    assert C.install(ENTRY, Path('/nonexistent-state'), verify=True) is False
+    twice = C.reconcile('', ENTRY) + OTHER + LINE + '\n'
+    monkeypatch.setattr(C, 'read_crontab', lambda: twice)
+    assert C.install(ENTRY, Path('/nonexistent-state'), verify=True) is False
+
+
+def test_the_weekly_agent_board_does_not_replace_the_nightly_scoreboard():
+    """Both run promise_nightly.py; only --agents tells them apart. By the
+    executable alone, installing the weekly job dropped the nightly one (D14)."""
+    nightly = ('30 4 * * * python3 /h/Data/.datacore/lib/promise_nightly.py >> /s/promise-nightly.log 2>&1'
+               ' # datacore-job:nightshift-promise-scoreboard\n')
+    weekly = '20 13 * * 0 python3 /h/Data/.datacore/lib/promise_nightly.py --agents >> /s/agent-evals.log 2>&1'
+    out = C.reconcile(nightly, {'nightshift-agent-evals': weekly})
+    assert out.startswith(nightly) and out.count('promise_nightly.py') == 2
+
+
+def test_jimo_instance_jobs_are_told_apart_by_instance_and_job():
+    """Every Jimo loop/ctrl job runs loop/run-instance.sh; the instance and job
+    arguments are the job. By the executable alone, eleven jobs were one
+    ambiguous invocation and the installer refused all of them."""
+    w = '/bin/bash /h/jimo-loop/loop/run-instance.sh'
+    tick = f'*/5 * * * * {w} loop tick >> /s/jimo-loop/tick.log 2>&1 # datacore-job:jimo-loop-tick\n'
+    entries = {'jimo-ctrl-tick': f'*/5 * * * * {w} ctrl tick >> /s/jimo-ctrl/tick.log 2>&1',
+               'jimo-loop-dream': f'30 2 * * * {w} loop dream >> /s/jimo-loop/dream.log 2>&1'}
+    out = C.reconcile(tick, entries)
+    assert out.startswith(tick) and out.count('run-instance.sh') == 3

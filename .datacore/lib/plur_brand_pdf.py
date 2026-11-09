@@ -40,8 +40,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BRAND = ROOT / "5-plur/1-tracks/comms/brand"
-FONT = ROOT / "5-plur/2-projects/website/scripts/Outfit.ttf"
+sys.path.insert(0, str(ROOT / ".datacore/lib"))
+from spaces import space_for  # noqa: E402
+
+#: Brand assets live in the install's product space (install.yaml roles.product).
+PRODUCT = ROOT / space_for("product", ROOT, "0-personal")
+BRAND = PRODUCT / "1-tracks/comms/brand"
+FONT = PRODUCT / "2-projects/website/scripts/Outfit.ttf"
 PAGEDJS = ROOT / ".datacore/assets/vendor/paged.polyfill.js"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 

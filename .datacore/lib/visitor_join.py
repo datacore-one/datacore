@@ -34,6 +34,21 @@ visitor is silence.
 
 A closed lid is a LEAVE, not a failure. Nothing here runs in a dark wake.
 
+A VISITOR'S DUTIES HANG OFF THE JOIN (2026-09-22). A visitor carries no clock:
+nothing on it runs "at 07:35". What it does carry -- validating its module set,
+pulling the morning's briefing, probing its own config -- happens because a
+person arrived, so after a converged join this runs every manifest job for this
+machine whose `trigger` is `join`, and on the first join of a session those
+whose trigger is `arrival` too, each through the execution envelope (jobs/run.py).
+An arrival duty with a gate (`every: day|week|month`, `after: "HH:MM"`) runs at
+the first presence inside its window instead -- a join or, between joins, a
+tick -- so the morning journal opens at the first arrival after 08:30 and a
+monthly backup does not repeat every session (owner decision 2026-10-02).
+The record is written AFTER them, with `joined_at` taken before the cycle, so
+every duty artifact of this join is newer than the record that names it and a
+verifier reading mid-join still sees the previous record: a `since: join`
+contract cannot read a running duty as late.
+
     visitor_join.py --tick      what launchd calls every few minutes
     visitor_join.py --now       join regardless of whether one is due
     visitor_join.py --status    print the last record
@@ -41,6 +56,8 @@ A closed lid is a LEAVE, not a failure. Nothing here runs in a dark wake.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -55,6 +72,10 @@ if str(LIB) not in sys.path:
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
 STATE = Path(os.environ.get("DATACORE_STATE", str(Path.home() / ".datacore" / "state")))
 RECORD = STATE / "join.json"
+#: Each duty's last outcome, kept apart from join.json on purpose: that file's
+#: age is the one alarm, so a retry must never rewrite it.
+DUTIES = STATE / "join-duties.json"
+MANIFEST = LIB / "jobs" / "manifest.yaml"
 ATTEMPT = STATE / "join-attempt.json"
 LOG = STATE / "join.log"
 
@@ -64,6 +85,14 @@ REFRESH_AWAKE_H = 4.0
 #: Never attempt more often than this. A lid flapping on a bad network must not
 #: turn into a git operation across ten repositories every few minutes.
 MIN_SPACING_S = 600
+#: One duty may not hold the join past this. The longest, the suite audit, takes
+#: about ten minutes; run.py's own default timeout is an hour.
+DUTY_TIMEOUT_S = 3900
+#: A duty that failed at a join is retried on a later tick rather than waiting
+#: up to four waking hours for the next join (2026-09-23: one rsync warning at
+#: 09:24 left mac-artifact-pull red until 11:36). Per trigger, because an
+#: arrival duty is the ten-to-fifteen-minute suite audit.
+RETRY_S = {"join": 900, "arrival": 7200}
 
 
 def _load(path: Path) -> dict:
@@ -75,7 +104,7 @@ def _load(path: Path) -> dict:
 
 def _write_atomic(path: Path, payload: dict) -> None:
     """A reader sees the previous complete record or the new one, never half."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}")
     tmp.write_text(json.dumps(payload, indent=2) + "\n")
     os.replace(tmp, path)
@@ -124,12 +153,273 @@ def converge() -> tuple[int, str]:
     return proc.returncode, tail[0][:200]
 
 
-def join(*, now: float | None = None) -> dict:
+def duties(triggers: set[str], *, machine: str | None = None,
+           manifest: Path | None = None) -> list[str]:
+    """This machine's jobs fired by `triggers`, `join` ones before `arrival` ones
+    (the suite audit is the long one; nothing short should wait behind it)."""
+    import yaml
+    if machine is None:
+        from actor_identity import this_actor
+        machine = this_actor()
+    from jobs.manifest import effective_doc
+    jobs = (effective_doc(manifest or MANIFEST) or {}).get("jobs") or []
+    mine = [j for j in jobs if j.get("machine") == machine and j.get("trigger") in triggers]
+    order = {"join": 0, "arrival": 1}
+    return [j["name"] for j in sorted(mine, key=lambda j: order.get(j["trigger"], 9))]
+
+
+def gates(*, machine: str | None = None, manifest: Path | None = None) -> dict[str, tuple[str, str | None]]:
+    """This machine's GATED arrival duties: {name: (every, after)}. A gated duty
+    runs at the first presence inside its window (jobs.manifest.gate_window) --
+    "the first arrival after its hour" -- not at every arrival."""
+    if machine is None:
+        from actor_identity import this_actor
+        machine = this_actor()
+    from jobs.manifest import effective_doc
+    jobs = (effective_doc(manifest or MANIFEST) or {}).get("jobs") or []
+    return {j["name"]: (j.get("every") or "day", j.get("after")) for j in jobs
+            if j.get("machine") == machine and j.get("trigger") == "arrival"
+            and (j.get("every") or j.get("after"))}
+
+
+def _clock() -> float:
+    return time.time()
+
+
+def _gate_due(name: str, gate: tuple[str, str | None], last: dict, now: float) -> bool:
+    """Its window is open and it has not been started inside it."""
+    from jobs.manifest import gate_window
+    start = gate_window(now, *gate)
+    prev = last.get(name)
+    return start is not None and float((prev or {}).get("at") or 0) < start
+
+
+def run_duty(name: str) -> dict:
+    """One duty through the envelope (jobs/run.py, which judges it with
+    job_verify's own checks). Never raises."""
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(LIB / "jobs" / "run.py"), "--manifest", str(MANIFEST), name],
+            capture_output=True, text=True, timeout=DUTY_TIMEOUT_S,
+            env={**os.environ, "DATACORE_ROOT": str(ROOT)}, cwd=str(ROOT))
+        rc, tail = proc.returncode, ((proc.stdout + proc.stderr).strip().splitlines() or [""])[-1]
+    except (OSError, subprocess.SubprocessError) as exc:
+        rc, tail = 2, f"{type(exc).__name__}: {exc}"
+    return {"rc": rc, "at": started, "seconds": round(time.time() - started, 1), "last": tail[:160]}
+
+
+def _remember(results: dict) -> None:
+    state = _load(DUTIES)
+    state.update(results)
+    _write_atomic(DUTIES, state)
+
+
+def run_duties(*, arrival: bool) -> dict:
+    """Run each duty; record how it went, never raise. A duty's verdict is its
+    own contract's business -- a red duty does not make the join unconverged,
+    and the join's alarm stays about convergence only."""
+    now, gated, last = _clock(), gates(), _load(DUTIES)
+    on_join = set(duties({"join"}))
+    todo = [n for n in duties({"join", "arrival"})
+            if (_gate_due(n, gated[n], last, now) if n in gated else arrival or n in on_join)]
+    out = {name: run_duty(name) for name in todo}
+    _remember(out)
+    return out
+
+
+def run_due_gated() -> dict:
+    """Between joins: run a gated duty whose window opened while a person is at
+    the machine (arrived 07:00, the 08:30 journal runs at the first tick after
+    08:30, not at the next join hours later). Never with the lid shut, never
+    before a join has converged, never beside a running join."""
+    from jobs import awake
+    if not _load(RECORD).get("joined_at") or awake.in_dark_wake():
+        return {}
+    now, last, gated = _clock(), _load(DUTIES), gates()
+    todo = [n for n, g in gated.items() if _gate_due(n, g, last, now)]
+    if not todo:
+        return {}
+    with _exclusive() as mine:
+        if not mine:
+            return {}
+        out = {name: run_duty(name) for name in todo}
+    _remember(out)
+    return out
+
+
+def run_independent_checker() -> dict:
+    """Run the job checker regardless of join convergence status. The checker must
+    run even when the join failed, so job status is reported and alerts are sent.
+    Only runs for duties with trigger: join, never raises."""
+    from jobs import awake
+    from actor_identity import this_actor
+    import yaml
+
+    if awake.in_dark_wake():
+        return {}
+
+    machine = this_actor()
+    try:
+        manifest_data = yaml.safe_load(MANIFEST.read_text()) or {}
+        jobs_list = manifest_data.get("jobs") or []
+    except (OSError, yaml.YAMLError, AttributeError):
+        return {}
+
+    # Find job-verify checker duties for this machine that have trigger: join.
+    # These should run on every join attempt (converged or not) to report job status.
+    checkers = [j for j in jobs_list
+                if j.get("machine") == machine
+                and j.get("trigger") == "join"
+                and "job_verify" in j.get("cmd", "")]
+
+    if not checkers:
+        return {}
+
+    out = {}
+    for checker in checkers:
+        out[checker["name"]] = run_duty(checker["name"])
+    _remember(out)
+    return out
+
+
+def retry_failed(*, now: float | None = None) -> dict:
+    """Re-run duties whose last run failed, only when something could have changed
+    that might fix them. Between joins only, while a person is at the machine.
+    OPS-18: do not retry when nothing changed."""
+    from jobs import awake
     now = time.time() if now is None else now
+    if not _load(RECORD).get("joined_at") or awake.in_dark_wake():
+        return {}
+    trigger = {name: "join" for name in duties({"join"})}
+    trigger.update({name: "arrival" for name in duties({"arrival"})})
+    last = _load(DUTIES)
+    # A gated duty is retried only inside the window it failed in; outside it,
+    # the gate decides (a journal that failed yesterday waits for today's hour).
+    from jobs.manifest import gate_window
+    gated = gates()
+    def in_window(n: str) -> bool:
+        start = gate_window(now, *gated[n]) if n in gated else 0.0
+        return start is not None and float(last[n].get("at") or 0) >= start
+
+    # Retry only once per session for arrival duties, unless we detect a change.
+    # OPS-18: a failed run is retried only when something that could change the
+    # outcome has changed. For arrival duties without explicit state changes,
+    # retry at most once per session (8+ hours awake).
+    arrival_retries = {n: last[n].get("retried_at") for n in trigger
+                      if trigger[n] == "arrival" and isinstance(last.get(n), dict)}
+
+    todo = []
+    for n, t in trigger.items():
+        if not (isinstance(last.get(n), dict) and last[n].get("rc") != 0):
+            continue
+        if now - float(last[n].get("at") or 0) < RETRY_S[t]:
+            continue
+        if not in_window(n):
+            continue
+        # For arrival duties, don't retry more than once unless something changed
+        if t == "arrival" and n in arrival_retries and arrival_retries[n]:
+            continue
+        todo.append(n)
+
+    if not todo:
+        return {}
+    with _exclusive() as mine:
+        if not mine:
+            return {}
+        out = {}
+        for name in todo:
+            result = run_duty(name)
+            out[name] = result
+            # Mark that this arrival duty was retried, to prevent re-retrying
+            if trigger[name] == "arrival":
+                result["retried_at"] = now
+    _remember(out)
+    return out
+
+
+def is_arrival(prev: dict, *, log: str | None = None) -> bool:
+    """Does this join begin a session? Yes if no session is on record, or the
+    machine has fully woken since the last converged join. Decided from the
+    record, not from why this tick was due: a join after a failed one on a
+    train is still the session's first."""
+    from jobs import awake
+    last = float(prev.get("joined_at") or 0)
+    if not last or not prev.get("arrived_at"):
+        return True
+    wake = awake.last_full_wake(log=log)
+    return bool(wake and wake > last)
+
+
+def _lock_path() -> Path:
+    # Beside the attempt marker, resolved at call time (tests repoint ATTEMPT).
+    return ATTEMPT.with_name("join.lock")
+
+
+@contextlib.contextmanager
+def _exclusive():
+    """Hold the join lock, or yield False if another join holds it.
+
+    ONE JOIN AT A TIME. The attempt marker is written after converge (up to
+    1500 s) and the duties run after it (up to 3900 s each), so MIN_SPACING_S
+    spaces joins that have ENDED; a tick that fires mid-join saw the previous
+    attempt, or none, and started a second join over the first -- two phase-1
+    cycles and every duty twice (GitFleet.lean `join_mutual_exclusion`).
+    """
+    path = _lock_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def join(*, now: float | None = None, log: str | None = None) -> dict:
+    with _exclusive() as mine:
+        if not mine:
+            return {"busy": True, "converged": False}
+        return _join(now=now, log=log)
+
+
+def _parse_ingest_log(state_dir: Path) -> tuple[list[str], bool]:
+    """Return (failed_space_names, any_ok) from the last phase-1 ingest log.
+
+    Used to detect partial convergence: some spaces ingest-failed but were
+    named, while others succeeded. The whole-cycle-failed case (no ok lines,
+    no named failures) is left as unconverged.
+    """
+    try:
+        lines = (state_dir / "phase1-ingest.log").read_text().splitlines()
+    except OSError:
+        return [], False
+    failed = [line.split()[0] for line in lines if "FAILED:" in line]
+    has_ok = any(line.rstrip().endswith("ok") for line in lines)
+    return failed, has_ok
+
+
+def _join(*, now: float | None = None, log: str | None = None) -> dict:
+    now = time.time() if now is None else now
+    prev = _load(RECORD)
+    arrival = is_arrival(prev, log=log)
     before = measure(fetch=True)
     rc, detail = converge()
     after = measure(fetch=False)
     converged = rc == 0 and after["gap"] == 0 and not after["errors"]
+
+    # Partial convergence: one or more named spaces failed but others converged.
+    # Duties still run; the record names the waiting space(s) but is not written
+    # (the join record's age is the alarm -- only a full success resets it).
+    failed_spaces: list[str] = []
+    partial = False
+    if not converged:
+        failed_spaces, has_ok = _parse_ingest_log(STATE)
+        partial = bool(failed_spaces) and has_ok
 
     record = {
         "joined_at": now,
@@ -145,19 +435,38 @@ def join(*, now: float | None = None) -> dict:
         "cycle": detail,
         "blocked": after["blocked"],
         "errors": after["errors"],
+        "arrival": arrival,
+        "arrived_at": now if arrival else prev.get("arrived_at", now),
     }
+    if failed_spaces:
+        record["failed_spaces"] = failed_spaces
     _write_atomic(ATTEMPT, {"at": now, "ok": converged})
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    LOG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with LOG.open("a") as fh:
         fh.write(f"{record['iso']} converged={converged} ahead_by={before['ahead']} "
                  f"behind_by={before['behind']} still_gap={after['gap']} rc={rc}"
                  + (f" blocked={after['blocked'][0]}" if after["blocked"] else "") + "\n")
+
+    # The checker runs regardless of convergence: a machine's job status must
+    # be reported even if the join failed. OPS-16.
+    checker_result = run_independent_checker()
+
     if converged:
+        # Duties first, record last -- see the module docstring.
+        record["duties"] = run_duties(arrival=arrival)
+        # Merge checker results with duty results
+        if checker_result:
+            record["duties"].update(checker_result)
         # ONLY a successful join replaces the record. A run that learned nothing
         # -- no network, a held publisher -- must not overwrite the last one that
         # did; the record's age is the alarm, and rewriting it on failure would
         # reset the very clock that is meant to be running.
         _write_atomic(RECORD, record)
+    elif partial:
+        # Some spaces converged; run duties for them. Do not write RECORD --
+        # the waiting space(s) mean this was not a full join, and the record's
+        # age must keep running.
+        record["duties"] = run_duties(arrival=arrival)
     return record
 
 
@@ -168,6 +477,9 @@ def due(*, now: float | None = None, log: str | None = None) -> tuple[bool, str]
     now = time.time() if now is None else now
     if awake.in_dark_wake(log=log):
         return False, "dark wake: the lid is shut, nobody has arrived"
+    with _exclusive() as free:
+        if not free:
+            return False, "a join is already running"
     attempt = _load(ATTEMPT)
     if attempt and now - float(attempt.get("at", 0)) < MIN_SPACING_S:
         return False, "attempted within the last ten minutes"
@@ -200,6 +512,10 @@ def main() -> int:
         ok, why = due()
         if not ok:
             print(f"join: not due — {why}")
+            for name, d in retry_failed().items():
+                print(f"  retried duty {name}: rc={d['rc']} {d['seconds']}s  {d['last']}")
+            for name, d in run_due_gated().items():
+                print(f"  duty {name} (its window opened): rc={d['rc']} {d['seconds']}s  {d['last']}")
             return 0
         print(f"join: due — {why}")
     elif not a.now:
@@ -207,10 +523,15 @@ def main() -> int:
         return 0
 
     rec = join()
+    if rec.get("busy"):
+        print("join: another join is running — not starting a second")
+        return 0
     print(f"join: converged={rec['converged']} ahead_by={rec['ahead_by']} "
           f"behind_by={rec['behind_by']} still_unpublished_past_grace="
-          f"{rec['still_unpublished_past_grace']}"
+          f"{rec['still_unpublished_past_grace']} arrival={rec['arrival']}"
           + (f"\n  blocked: {rec['blocked'][0]}" if rec["blocked"] else ""))
+    for name, d in (rec.get("duties") or {}).items():
+        print(f"  duty {name}: rc={d['rc']} {d['seconds']}s  {d['last']}")
     # Not converging is a condition, not a crash: the contract on join.json's age
     # is what decides whether it has gone on long enough to matter.
     return 0

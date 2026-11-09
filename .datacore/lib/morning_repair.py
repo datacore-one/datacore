@@ -1,0 +1,772 @@
+#!/usr/bin/env python3
+"""Fix the fleet's errors before the owner wakes (spec: .datacore/specs/morning-repair.md).
+
+    morning_repair.py sweep     # 02:00 UTC: find, remediate safely, delegate the rest
+    morning_repair.py recheck   # 03:30 UTC: re-check, write the fragment the briefing reads
+    morning_repair.py findings  # print what is failing now; changes nothing
+
+A FINDING is one thing that is failing now, with the evidence and a way to check it
+again that is fixed when the finding is made. The sweep tries one safe remediation
+per kind (re-run a failed one-shot unit; re-run a failed briefing input) and hands
+whatever is still failing to its agent (a red duty to the duty's owner, the rest to
+Miles) as a repair item: fix it, and if that needs a code
+change, open a pull request -- never merge (owner, 2026-09-25). The re-check decides
+what was repaired; nobody's word does, and a check that could not run is "could not
+tell". The owner is paged only for what needs a person, or a repair that failed three
+times or has taken 24 hours (DIP-0050).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+LIB = Path(__file__).resolve().parent
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+ROOT = Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+STATE = Path.home() / ".datacore" / "state" / "morning-repair"
+FRAGMENTS = Path.home() / ".datacore" / "cos" / "fragments"
+TRIAGE_LOG = Path.home() / ".datacore" / "cos" / "email-triage.log"
+V2_LOG = Path.home() / ".datacore" / "state" / "v2-verify.log"
+MAX_ITEMS = 10
+PR_RULE = ("If the fix needs a code change, open a pull request whose title carries this item's id and "
+           "STOP -- do not merge; the owner merges (owner, 2026-09-25). Fix the producer, never the "
+           "check: a repair that edits the check that found it does not count. Never rotate credentials, "
+           "spend money, touch trading, or delete data.")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _run(cmd: list[str] | str, timeout: int = 900, shell: bool = False) -> tuple[int, str]:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=shell)
+        return r.returncode, (r.stdout + r.stderr)
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout}s"
+
+
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:60]
+
+
+#: FAULTS NO AGENT CAN REPAIR, in one table (W2, 2026-10-23). The briefing said "in
+#: repair: miles is on it" for a rewound ledger log (only the owner repairs it, by
+#: recovery.md) and for a venture heartbeat refusing an invalid hypothesis board for
+#: 21 days. A finding in one of these classes is never handed out as a repair and
+#: never says "in repair". `diag` is the kind check_diagnosis.agent_failure gives the
+#: finding's text; `markers` are further lowercase phrases. First match wins, so the
+#: cause a person must act on is listed before the usage limit.
+FAULT_CLASSES: dict[str, dict] = {
+    "stale-log": {"diag": "ledger_stop", "markers": ("stalelogerror", "already wrote seq"), "owner": True,
+                  "needs": "needs the owner: the ledger refused a rewound log; only the owner repairs it "
+                           "(recovery.md, stale log)"},
+    "venture-data": {"diag": None, "owner": True,
+                     "markers": ("sense_error", "invalid hypothesis board", "hypotheses.yaml",
+                                 "venture.yaml is rejected", "venture.yaml unreadable"),
+                     "needs": "needs the owner: a venture's own files are invalid and the heartbeat "
+                              "will not touch them"},
+    "login": {"diag": "login", "markers": ("credential", "invalid api key"), "owner": True,
+              "needs": "needs the owner: a login or credential stopped working; retrying cannot help"},
+    "credit": {"diag": "credit", "markers": (), "owner": True,
+               "needs": "needs the owner: the provider account has no credit left"},
+    "usage-limit": {"diag": "usage_limit", "markers": ("waiting on quota",), "owner": False,
+                    "needs": "waiting on the usage limit: nothing runs until it resets (not a repair)"},
+}
+
+
+def fault_class(f: dict) -> str:
+    """The FAULT_CLASSES row a finding's own words name, or '' for an ordinary fault."""
+    from check_diagnosis import agent_failure
+    text = " ".join(str(f.get(k) or "") for k in ("title", "evidence", "evidence_now"))
+    low, diag = text.lower(), agent_failure(text)[0]
+    return next((c for c, row in FAULT_CLASSES.items()
+                 if diag == row["diag"] or any(m in low for m in row["markers"])), "")
+
+
+# ---- collectors: each returns findings {id, kind, title, evidence} -------------------
+
+def v2_checklist(run: bool = True) -> list[dict]:
+    """FAIL lines of the v2 checklist. Re-run it: an old log is not today's state."""
+    if run:
+        _run([str(LIB / "v2_verify_run.sh")], timeout=900)
+    try:
+        text = _ANSI.sub("", V2_LOG.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        return [{"id": "v2-verify-unreadable", "kind": "v2", "title": "v2-verify log unreadable",
+                 "evidence": str(exc)}]
+    # ONE RUN, EACH CHECK ONCE (2026-11-01). The box's log held many runs, and every
+    # FAIL line of every run became a finding: the briefing listed one check 18 times.
+    # Only the newest run (after the last "=== ... v2 verify on" header) is today's.
+    lines = text.splitlines()
+    start = max((i for i, l in enumerate(lines) if l.startswith("=== ") and "v2 verify on" in l), default=0)
+    out = []
+    for line in lines[start:]:
+        m = re.match(r"\s*FAIL\s+(.+?)\s{2,}(.*)$", line)
+        if m:
+            out.append({"id": f"v2-{_slug(m.group(1))}", "kind": "v2", "title": f"v2-verify: {m.group(1)}",
+                        "evidence": m.group(2).strip()[:300]})
+    return _unique(out)
+
+
+def _unique(found: list[dict]) -> list[dict]:
+    """Each finding id once, in first-seen order. The copy that carries a repair item
+    wins: it is the one the night handed over."""
+    by: dict[str, dict] = {}
+    for f in found:
+        fid = f.get("id")
+        if fid not in by or (f.get("item") and not by[fid].get("item")):
+            by[fid] = f
+    return list(by.values())
+
+
+def failed_units() -> list[dict]:
+    rc, out = _run(["systemctl", "list-units", "--failed", "--no-legend", "--plain"], timeout=30)
+    if rc != 0:
+        # A check that could not run is "could not tell", never an empty list (DAY-6):
+        # [] here read as "no unit failed" on a host whose systemctl was not there.
+        return [{"id": "units-unreadable", "kind": "check", "title": "failed-unit check could not run",
+                 "evidence": f"could not tell: systemctl rc {rc}: {out.strip()[-240:]}"}]
+    found = []
+    for line in out.splitlines():
+        unit = line.split()[0] if line.split() else ""
+        if unit.endswith(".service") and not unit.startswith("alert@"):
+            _, why = _run(["journalctl", "-u", unit, "-n", "5", "--no-pager"], timeout=30)
+            found.append({"id": f"unit-{_slug(unit)}", "kind": "unit", "unit": unit,
+                          "title": f"unit {unit} failed", "evidence": why.strip()[-300:]})
+    return found
+
+
+def red_cadences() -> list[dict]:
+    import cadence_liveness as L
+    try:
+        red, _ = L.collect_states(ROOT, 1)
+    except Exception as exc:  # noqa: BLE001 -- an unreadable judge is itself a finding
+        return [{"id": "cadence-liveness-unreadable", "kind": "cadence", "title": "cadence liveness failed",
+                 "evidence": f"{type(exc).__name__}: {exc}"[:300]}]
+    # The id names the duty, not its state: "late: tris (never ran)" in the id made a
+    # new finding every time the reason's wording changed.
+    return [{"id": f"cadence-{_slug(v + '-' + r + '-' + c.split(' [', 1)[0])}", "kind": "cadence",
+             "title": f"cadence {v} {r} {c} is red", "evidence": f"{days} day(s) late ({f})",
+             "owner": L.duty_owner(ROOT, v, r, f, c) or ""}
+            for days, v, r, f, c in red]
+
+
+def mail_triage(today: date | None = None) -> list[dict]:
+    """The briefing's inbox section is only as true as the last triage."""
+    today = (today or datetime.now(timezone.utc).date()).isoformat()
+    try:
+        tail = TRIAGE_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+    except OSError:
+        tail = []
+    done = [l for l in tail if "Completed at" in l]
+    last = done[-1] if done else ""
+    ok = last and (today in last or (datetime.now(timezone.utc).hour < 4)) and "errors=0" in last \
+        and not re.search(r"scanned=0\b", last)
+    if ok:
+        return []
+    why = next((l for l in reversed(tail) if "ERROR" in l or "not configured" in l), last or "no completed run")
+    return [{"id": "input-mail-triage", "kind": "input", "title": "mail triage did not complete cleanly",
+             "evidence": why.strip()[:300],
+             "rerun": "cd ~/Data && DATACORE_ROOT=$HOME/Data bash ~/Data/.datacore/modules/mail/server/"
+                      "triage-email.sh >> ~/.datacore/cos/email-triage.log 2>&1"}]
+
+
+ESCALATIONS_LOG = Path.home() / ".datacore" / "state" / "autofix-escalations.log"
+
+
+def escalations() -> list[dict]:
+    """Repairs Miles gave up on: the autofix pipeline's own "needs a person" list.
+
+    The spec named this source and the first version left it out, so 13 stuck
+    repairs (six failing jobs) stayed in a log whose alerts were suppressed as
+    repeats (found 2026-09-25). They are findings too, each with no safe remediation.
+    """
+    try:
+        lines = ESCALATIONS_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    last = max((i for i, l in enumerate(lines) if l.startswith("autofix: ")), default=None)
+    if last is None:
+        return []
+    jobs: dict[str, str] = {}
+    for l in lines[last + 1:]:
+        m = re.match(r"\s+([a-z0-9-]+):\s*(.+)$", l)
+        if m:
+            jobs.setdefault(m.group(1), m.group(2).strip())
+    return [{"id": f"escalation-{job}", "kind": "escalation", "title": f"job {job}: repair gave up",
+             "evidence": why[:300]} for job, why in sorted(jobs.items())]
+
+
+# A reason that names a code error is a repair for Miles; a refused token, a missing
+# group id or an unreachable Telegram is not -- those need a person (MSG-10).
+_TRANSPORT = re.compile(r"^exception: (URLError|HTTPError|TimeoutError|timeout|Connection\w*|OSError|SSL\w*|"
+                        r"RemoteDisconnected|IncompleteRead|gaierror)\b")
+
+# Evidence patterns that mean a refused git/remote login — nobody an agent can reach
+# will fix this; only the person who holds the credential can (MSG-10, L4 audit 2026-10-17).
+_AUTH_REFUSAL = re.compile(
+    r"Invalid username or token|authentication failed|NO ACCESS|"
+    r"remote: Invalid|could not read Username|Permission denied \(publickey\)",
+    re.IGNORECASE,
+)
+
+
+def _owner() -> str | None:
+    """The human principal with final decision authority; None when the registry names none."""
+    import roster
+    return roster.owner()
+
+
+def _needs_owner(f: dict) -> bool:
+    """True for findings the repairer cannot reach from a different host.
+
+    Unit failures require systemctl access on the host where the service runs.
+    Auth-refusal evidence (refused git login, NO ACCESS) requires the credential
+    holder — only the owner can rotate or restore it.
+    """
+    if f.get("kind") == "unit":
+        return True
+    return bool(_AUTH_REFUSAL.search(f.get("evidence", "")))
+
+
+def _undelivered_log() -> Path:
+    return Path(os.environ.get("DATACORE_UNDELIVERED_LOG")
+                or Path.home() / ".datacore" / "state" / "undelivered-alerts.jsonl")
+
+
+def _last_sweep() -> float | None:
+    """When the previous day's sweep ran. Today's sweep and 03:30 re-check read the
+    same window, so a delivery failure is never "repaired" by being re-read."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    at = []
+    for p in STATE.glob("*.json"):
+        if p.stem < today:
+            try:
+                at.append(float(json.loads(p.read_text())["swept_at"]))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    return max(at) if at else None
+
+
+def undelivered() -> list[dict]:
+    """Alerts and briefings that reached nobody since the last sweep, one finding per sender.
+
+    Every sender that cannot deliver appends a line to undelivered-alerts.jsonl
+    (tg_format.record_undelivered). Before this, a failed delivery ended as a local
+    log line or stderr (AM-20), so the owner never learned an alert was lost.
+    Without a previous sweep, the last day is read.
+    """
+    since = _last_sweep() or time.time() - 86400
+    try:
+        lines = _undelivered_log().read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    by: dict[str, list[dict]] = {}
+    for line in lines:
+        try:
+            r = json.loads(line)
+            at = datetime.fromisoformat(str(r["at"]).replace("Z", "+00:00")).timestamp()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if at > since:
+            by.setdefault(str(r.get("sender") or "unknown"), []).append(r)
+    out = []
+    for sender, rs in sorted(by.items()):
+        last = rs[-1]
+        out.append({"id": f"delivery-{_slug(sender)}", "kind": "delivery",
+                    "code": any(str(r.get("reason", "")).startswith("exception:")
+                                and not _TRANSPORT.match(str(r.get("reason", ""))) for r in rs),
+                    "title": f"{sender}: {len(rs)} alert(s) not delivered",
+                    "evidence": (f"last on {last.get('host', '?')} at {last.get('at', '?')}: "
+                                 f"{last.get('reason', '')} -- {last.get('text_head', '')}")[:300]})
+    return out
+
+
+#: Heartbeat outcomes that never clear by themselves: the venture's own data is refused.
+#: A timeout or a usage limit clears on a later tick and is not a finding here.
+_HEARTBEAT_DATA_ERRORS = ("sense_error", "capture_error")
+
+
+def venture_heartbeats() -> list[dict]:
+    """Ventures whose heartbeat refuses their own data (W2). The scoreboard printed a
+    heartbeat parse error for ten days and nothing alerted: printed is not reported."""
+    out = []
+    for p in sorted(ROOT.glob("[0-9]-*/.datacore/state/heartbeat.json")):
+        try:
+            hb = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(hb, dict) or hb.get("last_status") != "error" \
+                or hb.get("last_error") not in _HEARTBEAT_DATA_ERRORS:
+            continue
+        v = str(hb.get("venture") or p.parents[2].name)
+        out.append({"id": f"heartbeat-{_slug(v)}", "kind": "heartbeat",
+                    "title": f"venture heartbeat {v} failed: {hb['last_error']}",
+                    "evidence": f"last tick {hb.get('last_fire', '?')}: {hb['last_error']}"})
+    return out
+
+
+def findings(run_v2: bool = True) -> list[dict]:
+    return _unique(v2_checklist(run_v2) + failed_units() + red_cadences() + mail_triage() + escalations()
+                   + undelivered() + venture_heartbeats())
+
+
+# ---- remediation, delegation, reporting ------------------------------------------------
+
+def remediate(f: dict) -> str:
+    """One safe attempt. Returns what was tried, or '' when nothing is safe to try."""
+    if f["kind"] == "unit":
+        typ = _run(["systemctl", "show", "-p", "Type", "--value", f["unit"]], timeout=30)[1].strip()
+        if typ != "oneshot":
+            return ""  # a long-running service is restarted by a person, not a sweep
+        rc, _ = _run(["sudo", "-n", "systemctl", "start", f["unit"]], timeout=1800)
+        return f"re-ran {f['unit']} (rc {rc})"
+    if f["kind"] == "input" and f.get("rerun"):
+        rc, _ = _run(f["rerun"], timeout=1800, shell=True)
+        return f"re-ran its producer (rc {rc})"
+    return ""
+
+
+def _repairer() -> str | None:
+    """The install's chief of operations (principals.yaml), who takes every repair
+    that is not some agent's own duty; None when the install names none."""
+    import roster
+    return roster.by_role("chief of operations")
+
+
+# ── ONE FAULT, ONE OPEN ITEM (owner, 2026-11-05) ─────────────────────────────
+# A check reports and alerts; it does not file a new task per failure per day,
+# and a repair closes itself when its re-check passes. Items used to be named
+# repair-<fault>-<date>, so every red night filed another one for the same
+# fault (14 claimed by Miles from one night, 2026-11-04).
+
+OPEN_STATES = ("created", "claimed")
+
+
+def fault_of(iid: str, payload: dict) -> str:
+    """The fault a repair item is for: its `fault`, or its legacy dated id."""
+    import re
+    if payload.get("fault"):
+        return str(payload["fault"])
+    return re.sub(r"-\d{8}$", "", iid[len("repair-"):] if iid.startswith("repair-") else iid)
+
+
+def _repair_items() -> dict:
+    """{fault: [(item id, status), ...]} for the sweep's own items in the repair
+    space. Unreadable ledger -> {}: the sweep then files as before, never crashes."""
+    try:
+        from jobs.autofix import _space
+        from ledger.hub import authoritative_state
+        state = authoritative_state(_space(ROOT))
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict = {}
+    for iid, it in state.items.items():
+        p = it.payload or {}
+        if p.get("morning_repair"):
+            out.setdefault(fault_of(iid, p), []).append((iid, it.status))
+    return out
+
+
+def _open_items(existing: dict, fid: str) -> list[str]:
+    return sorted(i for i, st in existing.get(fid, []) if st in OPEN_STATES)
+
+
+def delegate(f: dict, day: str, existing: dict | None = None) -> str:
+    """A repair item for the finding's own agent -- a red duty goes to the agent whose
+    duty it is (CAD-6), everything else to the chief of operations. Returns the item
+    id, or ''."""
+    from actor_identity import this_actor
+    from ledger.log import EventLog
+    from ledger.policy import guarded_append
+    from jobs.autofix import _space
+    existing = _repair_items() if existing is None else existing
+    already = _open_items(existing, f["id"])
+    if already:
+        f["reused"] = True          # one fault, one open item: no second task
+        return already[-1]
+    used = {i for i, _ in existing.get(f["id"], [])}
+    iid = f"repair-{f['id']}"
+    if iid in used:                 # its earlier item closed; the fault came back
+        iid = f"repair-{f['id']}-{day.replace('-', '')}"
+    f["assignee"] = f.get("owner") or _repairer()
+    if not f["assignee"]:
+        f["delegation_error"] = "no principal has the role 'chief of operations' in principals.yaml"
+        return ""
+    # One live item per finding, not one per day (audit 2026-10-17, section 3 item 3).
+    # The "already handed over tonight" check in sweep() reads tonight's state file, which
+    # only holds items created in this sweep -- it misses items from previous nights.
+    # Look in the ledger directly: if an open repair item for this finding exists, reuse it.
+    space = _space(ROOT)
+    prefix = f"repair-{f['id']}-"
+    try:
+        from ledger.fold import fold
+        from ledger.log import read_events
+        if (space / ".datacore" / "events").is_dir():
+            state = fold(read_events(space))
+            for existing_id, item in state.items.items():
+                if existing_id.startswith(prefix) and item.status in ("created", "claimed"):
+                    return existing_id
+    except Exception:  # noqa: BLE001 -- unreadable ledger falls through to create
+        pass
+    body = "\n".join(["The morning repair sweep found this failing at 02:00 UTC, and one safe "
+                      "remediation did not clear it.", "", f"What: {f['title']}",
+                      f"Evidence: {f.get('evidence', '')}", *(["Tried: " + f["tried"]] if f.get("tried") else []),
+                      "", "Done means the sweep's 03:30 re-check no longer finds it.", "", PR_RULE])
+    # Unit and v2 findings require access to the root install (systemctl, .datacore/lib,
+    # module configs) — outside any individual space checkout. The claim job uses
+    # code_root to refuse a dev item it cannot reach from its own space.
+    extra: dict = {}
+    if f.get("kind") in ("unit", "v2"):
+        extra["code_root"] = str(ROOT)
+    # Pass when the detector no longer reports this finding: the claim job can
+    # complete the item on evidence instead of writing a needs_review verify and
+    # leaving it permanently claimed (audit 2026-10-17: 103 stuck verifies).
+    check = f"! python3 .datacore/lib/morning_repair.py findings 2>/dev/null | grep -q '^{f['id']} '"
+    try:
+        guarded_append(EventLog(space, this_actor()), "item.create",
+                       {"id": iid, "title": f"Repair: {f['title']}", "assignee": f["assignee"], "route": "dev",
+                        "body": body, "requested_by": this_actor(), "morning_repair": True,
+                        "fault": f["id"], "check": check, **extra})
+    except Exception as exc:  # noqa: BLE001 -- report, never crash the sweep
+        f["delegation_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        return ""
+    return iid
+
+
+def _alert_group(text: str) -> None:
+    subprocess.run([sys.executable, str(LIB / "winston_send.py"), "--alert"], input=text, text=True,
+                   capture_output=True, timeout=120)
+
+
+def pull_latest() -> str:
+    """Step 0: bring this host up to date. Many morning failures are already fixed
+    upstream and only wait for a pull (2026-09-25: the egress declarations landed at
+    07:00, the box still ran yesterday's module). It is the host's own fleet sync."""
+    rc, out = _run([sys.executable, str(LIB / "git_fleet_sync.py"), str(ROOT), "--execute", "--pull"],
+                   timeout=1200)
+    return f"fleet sync rc {rc}"
+
+
+def sweep() -> int:
+    day = datetime.now(timezone.utc).date().isoformat()
+    STATE.mkdir(parents=True, exist_ok=True)
+    pulled = pull_latest()
+    print(f"morning_repair: {pulled}")
+    # The budget is PER NIGHT, not per invocation: a manual re-run or a
+    # restarted unit must not hand Miles another ten (MEM-66). What earlier
+    # sweeps tonight already delegated is read back from tonight's state file.
+    try:
+        earlier = _unique([e for e in json.loads((STATE / f"{day}.json").read_text()).get("findings") or []
+                           if isinstance(e, dict)])
+    except (OSError, ValueError):
+        earlier = []
+    handed = {e["id"]: e["item"] for e in earlier if isinstance(e, dict) and e.get("item")}
+    # Each finding once: a copy delegated on its own spent the night's budget on
+    # one finding and left the rest "nothing could be delegated" (2026-11-01).
+    found, delegated = _unique(findings()), 0
+    existing = _repair_items()
+    for f in found:
+        f["tried"] = remediate(f)
+    # One re-check after the remediations; only what is still failing goes to Miles.
+    still = {f["id"] for f in findings(run_v2=any(f["kind"] == "v2" for f in found))}
+    for f in found:
+        f["cleared_by_sweep"] = f["id"] not in still
+        if f["id"] in still and fault_class(f):
+            f["fault"], f["item"] = fault_class(f), ""   # the owner's, or waiting: never a repair
+        elif f["id"] in still and f["kind"] == "escalation":
+            f["item"] = ""          # miles already gave up; handing it back is a loop, not a repair
+        elif f["id"] in still and f["kind"] == "delivery" and not f.get("code"):
+            f["item"] = ""          # a refused token or missing group id needs a person, not a code repair
+        elif f["id"] in still and f["id"] in handed:
+            f["item"] = handed[f["id"]]    # already Miles's tonight: not a second hand-off
+        elif f["id"] in still:
+            if _open_items(existing, f["id"]):
+                # One fault, one open item: its open item, not a new one; no budget spent.
+                f["item"], f["reused"] = _open_items(existing, f["id"])[-1], True
+            elif len(handed) + delegated < MAX_ITEMS:
+                # Unit failures need systemctl on this host; refused-login evidence needs
+                # the credential holder. Neither can be reached by an agent on another
+                # machine. Route to the owner; they will see it in their item inbox.
+                if not f.get("owner") and _needs_owner(f):
+                    f["owner"] = _owner()
+                f["item"] = delegate(f, day)
+                delegated += bool(f["item"])
+            else:
+                f["item"] = ""
+                f["over_budget"] = True
+    # Keep tonight's earlier hand-offs on record even if their finding cleared
+    # since, so a later sweep still counts them against the budget.
+    seen = {f["id"] for f in found}
+    found += [dict(e, cleared_by_sweep=True) for e in earlier
+              if isinstance(e, dict) and e.get("item") and e.get("id") not in seen]
+    (STATE / f"{day}.json").write_text(json.dumps({"swept_at": time.time(), "findings": found}, indent=1))
+    print(f"morning_repair sweep: {len(found)} finding(s), {sum(f['cleared_by_sweep'] for f in found)} "
+          f"cleared by one safe remediation, {delegated} delegated for repair")
+    return 0
+
+
+#: The collector finding that means a kind's own check could not run at all. A finding
+#: of that kind absent while it is present was not repaired: nobody could tell (DAY-6).
+CHECK_OF = {"v2": "v2-verify-unreadable", "unit": "units-unreadable", "cadence": "cadence-liveness-unreadable"}
+
+
+def _pull_request(iid: str) -> tuple[bool, str]:
+    """(could ask, url) of an open pull request naming the item; url '' when none."""
+    rc, out = _run(["gh", "search", "prs", iid, "--state", "open", "--json", "url,title", "--limit", "5"],
+                   timeout=30)
+    try:
+        prs = json.loads(out) if rc == 0 else None
+    except ValueError:
+        prs = None
+    if not isinstance(prs, list):
+        return False, ""
+    return True, next((p.get("url", "") for p in prs if iid in str(p.get("title", ""))), "")
+
+
+def _needs(f: dict) -> str:
+    """What the owner has to do, from evidence -- never a pull request that does not exist (MSG-8)."""
+    if f.get("could_not_tell"):
+        return "could not tell: its check could not run at 03:30"
+    if fault_class(f):
+        return FAULT_CLASSES[fault_class(f)]["needs"]
+    if f.get("item") and _dead_lettered(f["item"]):
+        return "needs the owner: the repair was given up after three failed attempts"
+    if f.get("item"):
+        who = f.get("assignee") or _repairer() or "the chief of operations"
+        asked, url = _pull_request(f["item"])
+        if url:
+            # AUD-5: an agent's pull request reaches the owner only after a second
+            # model family has commented on it (cross_model_audit.review).
+            from cross_model_audit import AGENTS, pr_ready
+            ready = pr_ready(url, AGENTS.get(who, "claude"))
+            if ready is False:
+                return f"in review: a second model reviews the pull request {url} before you do"
+            return f"review the pull request {url}" + ("" if ready else " (could not tell whether a second model reviewed it)")
+        return (f"in repair: {who} is on it" if asked
+                else f"in repair: {who} is on it (could not tell whether a fix is waiting for review)")
+    if f.get("kind") == "escalation":
+        import roster
+        who = _repairer()
+        return f"a person: {roster.display(who) if who else 'the repairer'} gave up after three attempts"
+    if f.get("kind") == "delivery":
+        return "a person: an alert or briefing reached nobody"
+    return "a person: nothing could be delegated"
+
+
+def _dead_lettered(iid: str) -> bool:
+    """The repair item was given up on (three failed attempts), per the ledger."""
+    try:
+        from ledger.fold import fold
+        from ledger.log import read_events
+        from jobs.autofix import _space
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(_space(ROOT)).items.get(iid)
+    except Exception:  # noqa: BLE001 -- unreadable: the 24-hour rule still catches it tomorrow
+        return False
+    return bool(item) and item.status == "dismissed" and item.closed_kind == "dropped"
+
+
+def _in_repair_since_yesterday(fid: str, day: str) -> bool:
+    """Yesterday's sweep already handed this finding over: the repair has taken 24 hours."""
+    from datetime import timedelta
+    prev = (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+    try:
+        old = json.loads((STATE / f"{prev}.json").read_text())["findings"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return any(o.get("id") == fid and o.get("item") for o in old)
+
+
+def nights_red(fid: str, day: str) -> int:
+    """How many nights in a row before `day` the sweep found this still failing: what
+    the sweep itself has seen, so >= 1 means red for more than 24 hours."""
+    from datetime import timedelta
+    n, d = 0, date.fromisoformat(day)
+    while n < 400:
+        try:
+            old = json.loads((STATE / f"{(d - timedelta(days=n + 1)).isoformat()}.json").read_text())["findings"]
+        except (OSError, ValueError, KeyError, TypeError):
+            break
+        if not any(isinstance(o, dict) and o.get("id") == fid and not o.get("cleared_by_sweep") for o in old):
+            break
+        n += 1
+    return n
+
+
+def days_red(f: dict, day: str) -> int:
+    """Whole days this finding has been red: the nights the sweep saw it, or a
+    cadence's own days late, whichever is longer."""
+    n = nights_red(f["id"], day)
+    m = re.match(r"(\d+) day\(s\) late", str(f.get("evidence") or ""))
+    return max(n, int(m.group(1)) if m else 0)
+
+
+def _page_owner(f: dict, day: str) -> bool:
+    """DIP-0050, CAD-6/AGT-8: the owner hears only what needs a person -- no repair item,
+    or a repair that failed three times or has taken 24 hours. A repair handed over at
+    02:00 is not news at 03:30. Anything the sweep has seen red for more than 24 hours
+    is (W2), whoever holds it; a usage limit younger than that is waited out, not paged.
+    Measured by the sweep's own nights, not a cadence's days late: a duty handed to its
+    agent tonight gets its night (CAD-6)."""
+    if nights_red(f["id"], day) >= 1:
+        return True
+    if fault_class(f) == "usage-limit":
+        return False
+    if not f.get("item"):
+        return True
+    return _dead_lettered(f["item"]) or _in_repair_since_yesterday(f["id"], day)
+
+
+def _close_repaired(repaired: list[dict]) -> int:
+    """Dismiss live ledger items for findings the 03:30 re-check no longer reports.
+
+    Each repair item's body says "Done means the sweep's 03:30 re-check no longer
+    finds it." This is the code that acts on that: when recheck() confirms a
+    finding is gone, the live item closes as `kind=done`. A ledger read/write
+    failure must not break the fragment or the alert -- swallowed and counted.
+    Returns the number of items closed.
+    """
+    to_close = [f for f in repaired if f.get("item")]
+    if not to_close:
+        return 0
+    try:
+        from actor_identity import this_actor
+        from ledger.fold import fold
+        from ledger.log import EventLog, read_events
+        from jobs.autofix import _space
+        space = _space(ROOT)
+        state = fold(read_events(space))
+        log = None
+        n = 0
+        for f in to_close:
+            iid = f["item"]
+            item = state.items.get(iid)
+            if item is None or item.status == "dismissed":
+                continue
+            if log is None:
+                log = EventLog(space, this_actor())
+            log.append("item.dismiss", {
+                "id": iid, "kind": "done",
+                "reason": f"03:30 re-check: {f['id']} no longer reported"})
+            n += 1
+        return n
+    except Exception:  # noqa: BLE001 -- ledger errors must not break the fragment
+        return 0
+
+
+def recheck() -> int:
+    day = datetime.now(timezone.utc).date().isoformat()
+    try:
+        swept = json.loads((STATE / f"{day}.json").read_text())["findings"]
+    except (OSError, ValueError, KeyError):
+        swept = None
+    if swept is not None:
+        swept = _unique(swept)   # a state file written before the fix may hold copies
+    now = {f["id"]: f for f in findings()}
+    if swept is None:
+        # The sweep did not run: that is itself the first thing to report.
+        swept = [{"id": "morning-repair-sweep", "kind": "self", "title": "the 02:00 sweep did not run",
+                  "evidence": f"no {STATE / (day + '.json')}"}] + list(now.values())
+    # Repaired means its own check ran at 03:30 and no longer finds it. A finding about
+    # the sweep itself has no re-check, and one whose check could not run is "could not
+    # tell" -- neither is ever "repaired" because it is absent from the checks.
+    unknown = [{**f, "could_not_tell": True,
+                "evidence_now": now[CHECK_OF[f["kind"]]].get("evidence", "")}
+               for f in swept if f["id"] not in now and CHECK_OF.get(f.get("kind")) in now]
+    repaired = [f for f in swept if f["id"] not in now and f["kind"] != "self"
+                and f["id"] not in {u["id"] for u in unknown}]
+    _close_repaired(repaired)
+    failing = [{**f, "evidence_now": now[f["id"]].get("evidence", "")} for f in swept if f["id"] in now]
+    failing += unknown
+    failing += [f for f in swept if f["kind"] == "self"]
+    failing += [f for fid, f in now.items() if fid not in {s["id"] for s in swept}]  # new since 02:00
+    # ONE RED LIST, OLDEST FIRST (W2): what has been red longest is what was missed.
+    for f in failing:
+        f["days_red"] = days_red(f, day)
+    failing.sort(key=lambda f: -f["days_red"])
+    closed = close_cleared(repaired)
+    out = FRAGMENTS / day / "repairs.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "schema_version": "1", "date": day, "composed_by": "morning-repair",
+        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "repaired": [{"title": f["title"], "how": f.get("tried") or f.get("item") or "cleared"} for f in repaired],
+        "still_failing": [{"title": f["title"], "evidence": f.get("evidence_now") or f.get("evidence", ""),
+                           "item": f.get("item", ""), "needs": _needs(f), "days_red": f["days_red"]}
+                          for f in failing],
+    }, indent=1))
+    # ONE ALERT PER DAY (W2): a re-run of the re-check does not page again for what
+    # this day's alert already named. Not *.json: the job contract reads those.
+    sent_file = STATE / f"{day}.alerted"
+    try:
+        sent_ids = set(json.loads(sent_file.read_text()))
+    except (OSError, ValueError, TypeError):
+        sent_ids = set()
+    page = [f for f in failing if _page_owner(f, day) and f["id"] not in sent_ids]
+    if page:
+        STATE.mkdir(parents=True, exist_ok=True)
+        sent_file.write_text(json.dumps(sorted(sent_ids | {f["id"] for f in page})))
+        # MEM-66 (owner 2026-09-27): the group gets a summary with the count; the full
+        # list of every still-failing item lives in repairs.json, which the briefing reads.
+        in_repair = len(failing) - len(page)
+        _alert_group(f"Morning repair, 03:30 UTC: {len(failing)} still failing, {len(page)} need a person"
+                     + (f", {in_repair} in repair" if in_repair else "")
+                     + ": " + "; ".join(f["title"] + (f" (red {f['days_red']} day(s))" if f["days_red"] else "")
+                                        for f in page[:3])
+                     + (f"; and {len(page) - 3} more" if len(page) > 3 else "")
+                     + ". The full list is in the morning briefing.")
+    if closed:
+        print(f"morning_repair recheck: closed {len(closed)} repair item(s) whose fault cleared: "
+              + ", ".join(closed[:10]))
+    print(f"morning_repair recheck: {len(repaired)} repaired, {len(failing)} still failing "
+          f"({len(page)} need a person) -> {out}")
+    return 0
+
+
+def close_cleared(repaired: list[dict]) -> list[str]:
+    """A repair closes itself when its re-check passes: each open item of a fault
+    the 03:30 re-check no longer finds is dismissed as done, with the reason. The
+    box writes as Winston, who precedes the repairer in the arbitration order;
+    a refusal is printed, never raised. item.reopen undoes a close."""
+    ids = {f["id"] for f in repaired if f.get("kind") != "self"}
+    if not ids:
+        return []
+    existing = _repair_items()
+    from actor_identity import this_actor
+    from ledger.log import EventLog
+    from ledger.policy import guarded_append
+    from jobs.autofix import _space
+    closed = []
+    for fid in sorted(ids):
+        for iid in _open_items(existing, fid):
+            try:
+                guarded_append(EventLog(_space(ROOT), this_actor()), "item.dismiss",
+                               {"id": iid, "kind": "done",
+                                "reason": "cleared: the 03:30 re-check no longer finds this fault"})
+                closed.append(iid)
+            except Exception as exc:  # noqa: BLE001 -- report, never crash the re-check
+                print(f"morning_repair recheck: could not close {iid}: {type(exc).__name__}: {exc}")
+    return closed
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("cmd", choices=["sweep", "recheck", "findings"])
+    a = ap.parse_args()
+    if a.cmd == "findings":
+        for f in findings():
+            print(f"{f['id']:44} {f['title']} :: {f.get('evidence', '')[:120]}")
+        return 0
+    return sweep() if a.cmd == "sweep" else recheck()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

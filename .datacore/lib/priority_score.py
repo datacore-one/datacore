@@ -59,6 +59,11 @@ HIGH_LEVERAGE = 8.0        # the source doc's own priority rule
 SPOTLIT = 10.0             # named in this week's spotlight
 
 INTENTS_ORG = ".datacore/intents.org"
+#: Node kinds, most specific first: a transitional `:initiative:project:` is a project.
+NODE_KINDS = ("project", "duty", "cadence", "operations", "constraint", "vision", "intent",
+              "goal", "initiative")
+#: What a leaf may be: work with an end, work that recurs, or a rule the work must keep.
+LEAF_KINDS = {"project", "duty", "cadence", "operations", "constraint"}
 SPOTLIGHT_YAML = ".datacore/cos/priorities.yaml"
 
 
@@ -93,6 +98,12 @@ class Node:
     status: str = ""
     note: str = ""
     source: str = ""
+    #: The project model (owner, 2026-11-05). `kind` comes from the heading's own
+    #: tags. :ROADMAP: names the roadmap item, which owns that project's check.
+    kind: str = ""
+    canvas: str = ""
+    done_when: str = ""
+    roadmap: str = ""
 
 
 def _keywords(title: str) -> tuple[str, ...]:
@@ -246,11 +257,13 @@ class IntentGraph:
                               serves=serves, parent=parent,
                               keywords=_keywords(title),
                               lane_keywords=lane_kw,
+                              kind=next((k for k in NODE_KINDS if k in n.shallow_tags), ""),
                               **{k: (n.get_property(k.upper()) or "").strip()
                                  for k in ("switch", "gate", "target", "metric",
                                            "owner", "benchmark", "window",
                                            "banned", "why", "status", "note",
-                                           "source")})
+                                           "source", "canvas", "done_when",
+                                           "roadmap")})
             if parent and parent in nodes:
                 nodes[parent].children.append(nid)
             stack.append((depth, nid))
@@ -589,6 +602,40 @@ class IntentGraph:
                     out.append({"kind": "ignored_high_leverage", "id": n.id,
                                 "detail": "multi-intent node with no open tasks — "
                                           "the graph's own rule says work these first"})
+        out += self._project_gaps()
+        return out
+
+    def _is_closed(self, nid: str) -> bool:
+        return self.nodes[nid].status.lower().startswith(("done", "cancel", "deferred"))
+
+    def _project_gaps(self) -> list[dict]:
+        """The project model's checks, only in spaces that hold a project node.
+
+        A space opts in by migrating. Reporting every leaf of an unmigrated graph
+        would bury the gaps that matter in hundreds that nobody has decided to fix.
+        """
+        def space(n):
+            return n.id.split(":", 1)[0] if ":" in n.id else ""
+
+        adopted = {space(n) for n in self.nodes.values() if n.kind == "project"}
+        out: list[dict] = []
+        for n in self.nodes.values():
+            if space(n) not in adopted or self._is_closed(n.id):
+                continue
+            if n.children and all(self._is_closed(c) for c in n.children if c in self.nodes):
+                out.append({"kind": "children_closed", "id": n.id,
+                            "detail": "all children are closed: check this node, and if it is "
+                                      "not achieved, the gap is the next project"})
+            if not n.children and n.kind not in LEAF_KINDS:
+                out.append({"kind": "leaf_unclassified", "id": n.id,
+                            "detail": "a leaf must be a project, a duty or a constraint"})
+            if n.kind == "project":
+                if not n.canvas or n.canvas.lower() == "none yet":
+                    out.append({"kind": "project_no_canvas", "id": n.id,
+                                "detail": "every project has a canvas"})
+                if not n.done_when and not n.roadmap:
+                    out.append({"kind": "project_no_done_when", "id": n.id,
+                                "detail": "nothing says when this project is finished"})
         return out
 
     def _descendants(self, nid: str) -> set[str]:

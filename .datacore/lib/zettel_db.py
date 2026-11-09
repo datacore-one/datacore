@@ -1002,6 +1002,19 @@ def get_orphans(space=None, file_type=None):
     return results
 
 
+def drop_other_ids_for_path(cursor, path, file_id):
+    """Delete rows (and their terms, links, tags) that index `path` under an id
+    other than `file_id` -- leftovers of the stem-only ids (KNW-7)."""
+    cursor.execute("SELECT id FROM files WHERE path = ? AND id != ?", (path, file_id))
+    stale = [row[0] for row in cursor.fetchall()]
+    for old in stale:
+        cursor.execute("DELETE FROM terms WHERE file_id = ?", (old,))
+        cursor.execute("DELETE FROM tags WHERE file_id = ?", (old,))
+        cursor.execute("DELETE FROM links WHERE source_id = ?", (old,))
+        cursor.execute("DELETE FROM files WHERE id = ?", (old,))
+    return len(stale)
+
+
 def sync_to_root(space):
     """Sync a space DB to the root DB."""
     if space not in SPACES:
@@ -1020,6 +1033,7 @@ def sync_to_root(space):
         FROM files
     """)
     for row in space_cursor.fetchall():
+        drop_other_ids_for_path(root_cursor, row[1], row[0])
         root_cursor.execute("""
             INSERT INTO files
             (id, path, space, type, title, content, summary, word_count,

@@ -441,7 +441,7 @@ review-required: true
 **Website Update Workflow:**
 
 1. **Locate blog post source**
-   - User saves HTML from `blog.example.com/[article-slug]` to `~/Data/0-personal/4-outbox/archive/blog-pages/`
+   - User saves HTML from `blog.example.com/[article-slug]` to `~/Data/0-personal/4-archive/blog-pages/`
    - Or fetch via RSS/API if available
 
 2. **Extract metadata from saved HTML**

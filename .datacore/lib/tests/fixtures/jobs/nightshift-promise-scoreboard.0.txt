@@ -1,0 +1,7 @@
+# fixture for nightshift-promise-scoreboard artifact[0]
+# producer artifact: ~/.datacore/state/promise-nightly.log on nightshift
+# harvested: 2026-09-30, last line of ~/.datacore/state/promise-nightly.log (the job's own log)
+# regex under test: ^promise-scoreboard: \d+ green, \d+ red, \d+ could not run here; \d+ turned red, \d+ recovered; alert (sent|none)$
+# represents: SUCCESS
+# ---
+promise-scoreboard: 110 green, 89 red, 17 could not run here; 0 turned red, 0 recovered; alert none

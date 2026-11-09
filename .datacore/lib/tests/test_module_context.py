@@ -170,3 +170,60 @@ def test_symlinked_existing_data_does_not_gain_compatibility_exception(layout):
     with pytest.raises(ValueError, match='aliased'):
         resolve('news', code)
     assert list(outside.iterdir()) == []
+
+
+# Owner decision 2026-09-28: when a machine has two personal-type spaces (the Mac
+# has personal and practice), the install's declared default wins --
+# ``roles.personal`` in the gitignored install.yaml, a bare space name
+# (ENG-2026-08-03-047). With no declaration it stays ambiguous (test above).
+@pytest.fixture
+def two_personal(tmp_path, monkeypatch):
+    root = tmp_path / 'root'
+    for folder, name in (('0-personal', 'personal'), ('9-practice', 'practice')):
+        (root / folder / '.datacore').mkdir(parents=True)
+        (root / folder / '.datacore/config.yaml').write_text(
+            f'space: {{name: {name}, type: personal}}\n')
+    code = tmp_path / 'provider'
+    code.mkdir()
+    monkeypatch.setenv('DATACORE_ROOT', str(root))
+    monkeypatch.delenv('DATACORE_SPACE', raising=False)
+    return root, code
+
+
+def test_two_personal_spaces_without_a_declared_default_stay_ambiguous(two_personal):
+    _, code = two_personal
+    with pytest.raises(ValueError, match='ambiguous'):
+        resolve('news', code, create=False)
+
+
+@pytest.mark.parametrize('declared', ['personal', '0-personal', '5-personal'])
+def test_declared_personal_role_picks_the_default_by_bare_name(two_personal, declared):
+    root, code = two_personal
+    (root / 'install.yaml').write_text(f'roles:\n  personal: {declared}\n')
+    value = resolve('news', code, create=False)
+    assert value.name == 'personal'
+    assert value.space == root / '0-personal'
+
+
+def test_declared_role_can_pick_the_other_personal_space(two_personal):
+    root, code = two_personal
+    (root / 'install.yaml').write_text('roles:\n  personal: practice\n')
+    assert resolve('news', code, create=False).name == 'practice'
+
+
+@pytest.mark.parametrize('declared', ['datafund', 'nowhere'])
+def test_declared_role_must_name_one_of_the_personal_spaces(two_personal, declared):
+    root, code = two_personal
+    (root / 'datafund/.datacore').mkdir(parents=True)
+    (root / 'datafund/.datacore/config.yaml').write_text('space: {name: datafund, type: team}\n')
+    (root / 'install.yaml').write_text(f'roles:\n  personal: {declared}\n')
+    with pytest.raises(ValueError, match='ambiguous'):
+        resolve('news', code, create=False)
+
+
+def test_explicit_space_still_beats_the_declared_default(two_personal, monkeypatch):
+    root, code = two_personal
+    (root / 'install.yaml').write_text('roles:\n  personal: personal\n')
+    assert resolve('news', code, space='practice', create=False).name == 'practice'
+    monkeypatch.setenv('DATACORE_SPACE', 'practice')
+    assert resolve('news', code, create=False).name == 'practice'
