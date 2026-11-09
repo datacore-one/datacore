@@ -99,8 +99,14 @@ def test_a_full_disk_on_the_receiving_end_names_the_receiver(monkeypatch, host, 
 
 
 def _run_module():
-    sys.path.insert(0, str(NS_LIB))
-    import run  # noqa: WPS433
+    """nightshift's run.py, loaded by its path. `import run` took whatever module
+    named `run` the full suite had already put on sys.path or in sys.modules (CI,
+    2026-11-09: "module 'run' has no attribute '_disk_preflight'")."""
+    import importlib.util
+    sys.path.insert(0, str(NS_LIB))          # run.py imports its siblings
+    spec = importlib.util.spec_from_file_location("nightshift_run_disk_full", NS_LIB / "run.py")
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
     return run
 
 
