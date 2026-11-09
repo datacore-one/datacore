@@ -281,8 +281,13 @@ fi
 # (saving the edit to a file it names). Nothing is applied here.
 if [ -n "$repo_root" ] && grep -qs '^  org_lists: readonly' "$repo_root/.datacore/config.yaml"; then
   _ro=""
+  # Last, the checkout this hook itself runs from (the githooks dispatcher execs
+  # it by full path): a host whose code is not at ~/Data and whose space is not
+  # beside it otherwise found no checker and skipped this check without a word.
+  _own_lib="$(CDPATH= cd -- "$(dirname -- "$0")/../lib" 2>/dev/null && pwd)"
   for _c in "$HOME/Data/.datacore/lib/org_readonly.py" \
-            "$repo_root/../.datacore/lib/org_readonly.py"; do
+            "$repo_root/../.datacore/lib/org_readonly.py" \
+            "${_own_lib:-/nonexistent}/org_readonly.py"; do
     [ -f "$_c" ] && { _ro="$_c"; break; }
   done
   if [ -n "$_ro" ]; then

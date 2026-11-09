@@ -31,8 +31,14 @@ def test_the_briefing_has_a_catch_up_on_its_own_host():
     assert c, "no catch-up: a reboot during the 04:00 run means no briefing that day"
     assert c["machine"] == jobs["box-briefing"]["machine"]
     assert "cos_morning_run.py catch-up" in c["cmd"]
-    hours = c["schedule"].split()[1]
-    assert hours.startswith("4") or hours.startswith("5"), "the catch-up runs inside the morning window"
+    # Inside the morning window, which follows the briefing's own start (moved to
+    # 06:15 UTC on 2026-10-29): never before it -- a catch-up before the start
+    # reads "never started" and runs the briefing early -- and not hours after.
+    bmin, bhour = (int(x) for x in jobs["box-briefing"]["schedule"].split()[:2])
+    cmin, hours = c["schedule"].split()[:2]
+    first = int(hours.split(",")[0].split("-")[0])
+    assert (first, int(cmin)) > (bhour, bmin), "the catch-up runs after the briefing starts"
+    assert first - bhour <= 2, "the catch-up runs inside the morning window"
     assert any(a.get("check") == "last_line_regex" for a in c.get("artifacts") or [])
 
 
