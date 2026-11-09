@@ -855,7 +855,14 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     _prune_recurrence(jobs)
-    machine_jobs = [job for job in jobs if job.machine == args.machine]
+    # Resolve machine name from actor (OPS-17): if a machine was renamed,
+    # the roster maps its old name to its new actor; check both.
+    machine_name = args.machine
+    from jobs.manifest import actor_to_machine, roster_path
+    resolved = actor_to_machine(args.machine, roster_path())
+    if resolved:
+        machine_name = resolved
+    machine_jobs = [job for job in jobs if job.machine == machine_name]
 
     if not machine_jobs:
         print("OK 0 jobs 0 artifacts")
