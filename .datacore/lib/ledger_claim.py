@@ -293,13 +293,16 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         # itself left there. Until an hourly converge autosaved it, a space
         # could not complete a delegated item twice in a row.
         #
-        # Only this file is staged. `git add -A` here would sweep up whatever
-        # the agent left behind and commit it as though it had been verified,
-        # which is the opposite of what the check exists for.
-        subprocess.run(["git", "-C", str(space), "add", "--", str(path)],
+        # The actor's events file (claim + release written this run) is included
+        # in the SAME commit. Without this the run leaves two records: the
+        # journal commit and a later autosave commit for the uncommitted events.
+        # Only the events file for this actor is staged -- never `git add -A`,
+        # which would sweep up unverified agent artifacts.
+        events_path = space / ".datacore" / "events" / f"{actor}.jsonl"
+        subprocess.run(["git", "-C", str(space), "add", "--", str(path), str(events_path)],
                        capture_output=True, timeout=60)
         subprocess.run(["git", "-C", str(space), "commit", "-q", "-m",
-                        f"journal: {actor} ledger claim run", "--", str(path)],
+                        f"journal: {actor} ledger claim run"],
                        capture_output=True, timeout=60)
     except Exception:  # noqa: BLE001 -- a journal failure must not fail the work
         pass

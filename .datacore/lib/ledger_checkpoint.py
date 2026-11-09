@@ -50,6 +50,7 @@ from pathlib import Path
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
+import ledger_transport as transport  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space  # noqa: E402
 from ledger.log import TELEMETRY_SUFFIX, read_events  # noqa: E402
@@ -283,8 +284,16 @@ def write(space: Path) -> Path:
         if watch_file(archive)['before'] not in (None, superseded):
             raise ValueError('superseded checkpoint archive conflicts')
         write_org_text(archive, superseded)
+    snapshot_text = json.dumps(document, sort_keys=True) + '\n'
+    cap = transport.MAX_SHARED_BYTES
+    for label, content in (("org checkpoint", text), ("ledger snapshot", snapshot_text)):
+        size = len(content.encode('utf-8'))
+        if size >= cap:
+            raise ValueError(
+                f"{label} is too large to share: {size:,} bytes >= {cap:,} bytes share cap "
+                f"({size / 1048576:.1f} MB); the sync would hold it back")
     write_org_text(dest, text)
-    write_org_text(snapshot_path, json.dumps(document, sort_keys=True) + '\n')
+    write_org_text(snapshot_path, snapshot_text)
     return dest
 
 
