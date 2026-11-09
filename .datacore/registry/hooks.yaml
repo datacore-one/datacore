@@ -62,6 +62,20 @@ claude_code:
       scope: user
       installed_by: "hand-wired"
 
+    - matcher: resume
+      type: command
+      command: ~/.plur/bin/plur-hook hook-session-resume
+      purpose: "PLUR: resume the session's memory lifecycle"
+      scope: user
+      installed_by: plur init
+      timeout: 3
+    - matcher: compact
+      type: command
+      command: ~/.plur/bin/plur-hook hook-inject --rehydrate
+      purpose: 'PLUR: re-inject engrams after compaction'
+      scope: user
+      installed_by: plur init
+      timeout: 20
   UserPromptSubmit:
     - type: command
       command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_firstmsg.py"
@@ -114,6 +128,12 @@ claude_code:
       timeout: 15
       async: true
 
+    - type: command
+      command: ~/.plur/bin/plur-hook hook-inject
+      purpose: 'PLUR: per-prompt engram injection'
+      scope: user
+      installed_by: plur init
+      timeout: 20
   PreToolUse:
     - matcher: "EnterPlanMode"
       type: command
@@ -291,6 +311,41 @@ claude_code:
       scope: user
       installed_by: "hand-wired"
 
+    - matcher: Bash|Edit|Write|Read|MultiEdit
+      type: command
+      command: python3 ~/Data/.datacore/lib/hooks/space_policy_guard.py
+      purpose: 'Space isolation: refuse reads and writes across spaces that do not share'
+      scope: user
+      installed_by: hand-wired
+      timeout: 5
+    - matcher: EnterPlanMode
+      type: command
+      command: ~/.plur/bin/plur-hook hook-inject --event plan_mode
+      purpose: 'PLUR: inject engrams on plan mode'
+      scope: user
+      installed_by: plur init
+      timeout: 10
+    - matcher: Skill
+      type: command
+      command: ~/.plur/bin/plur-hook hook-inject --event skill
+      purpose: 'PLUR: inject engrams on skill use'
+      scope: user
+      installed_by: plur init
+      timeout: 10
+    - matcher: Agent
+      type: command
+      command: ~/.plur/bin/plur-hook hook-inject --event agent
+      purpose: 'PLUR: inject engrams on agent spawn'
+      scope: user
+      installed_by: plur init
+      timeout: 10
+    - matcher: Bash|Edit|Write|Agent
+      type: command
+      command: ~/.plur/bin/plur-hook hook-observe
+      purpose: 'PLUR: observe tool calls'
+      scope: user
+      installed_by: plur init
+      timeout: 3
   SubagentStart:
     - matcher: ".*"
       type: command
@@ -307,6 +362,13 @@ claude_code:
       priority: 20
       timeout: 10
 
+    - matcher: .*
+      type: command
+      command: ~/.plur/bin/plur-hook hook-inject --event subagent
+      purpose: 'PLUR: inject engrams into a subagent'
+      scope: user
+      installed_by: plur init
+      timeout: 10
   PostCompact:
     - matcher: "auto|manual"
       type: command
@@ -378,6 +440,20 @@ claude_code:
       scope: user
       installed_by: "hand-wired"
 
+    - matcher: mcp__.*__plur_session_start
+      type: command
+      command: ~/.plur/bin/plur-hook hook-session-mark
+      purpose: 'PLUR: mark the session started'
+      scope: user
+      installed_by: plur init
+      timeout: 3
+    - matcher: Bash|Edit|Write|Agent
+      type: command
+      command: ~/.plur/bin/plur-hook hook-observe --post
+      purpose: 'PLUR: observe tool results'
+      scope: user
+      installed_by: plur init
+      timeout: 3
   SessionEnd:
     - type: command
       command: "python3 \"${CLAUDE_PROJECT_DIR:-${DATACORE_ROOT:-$HOME/Data}}\"/.datacore/lib/session_archive.py"
@@ -451,6 +527,20 @@ claude_code:
       timeout: 10
       async: true
 
+    - matcher: '*'
+      type: command
+      command: ~/.plur/bin/plur-hook hook-learn-check
+      purpose: 'PLUR: remind to learn before stopping'
+      scope: user
+      installed_by: plur init
+      timeout: 2
+    - matcher: '*'
+      type: command
+      command: ~/.plur/bin/plur-hook hook-auto-rate claude
+      purpose: 'PLUR: rate injected engrams'
+      scope: user
+      installed_by: plur init
+      timeout: 10
   PostToolUseFailure:
     - matcher: "mcp__*"
       type: command
@@ -505,3 +595,38 @@ git:
       purpose: "Validate org-mode date accuracy"
       declared_by: DIP-0009
       priority: 200
+
+# -----------------------------------------------------------------------------
+# DIP-0024 amendment 2026-11-09: every hook kind in one registry.
+# -----------------------------------------------------------------------------
+
+# The kinds a module.yaml may declare under `hooks:`, each with the file that
+# runs it. module_manifest_check.py reports any other kind: in 2026-11 twelve
+# modules declared `post_install` and two declared nightshift kinds that nothing
+# ran. A kind comes back only together with the code that runs it.
+module_hook_kinds:
+  today:
+    run_by: .datacore/lib/today_registry.py
+    purpose: "A module's section in the /today briefing"
+  claude_code:
+    run_by: .datacore/lib/hooks_composer.py
+    purpose: "A module's Claude Code hooks, composed into .claude/settings.json"
+
+# DIP-0016 agent lifecycle hooks. Their definitions stay where DIP-0016 puts
+# them (agents.yaml); listed here so the registry names every family.
+lifecycle:
+  run_by: .datacore/lib/hooks.py
+  used_by: [.datacore/modules/nightshift/lib/run.py]
+  kinds: [pre_execution, post_execution, validation, error]
+  declared_by: DIP-0016
+
+# Ledger-event subscribers, run by ledger_subscribers.py: at least once, in log
+# order per writer, a cursor per subscriber/space/writer, failures recorded and
+# retried, an undeclared name refused. A subscriber reads; anything it writes
+# goes through EventLog and its guards.
+ledger_events:
+  - name: request-releases
+    types: [item.release]
+    call: delegation_watch:on_release
+    purpose: "Tell the owner once when a doer releases one of their requests unfinished, with the doer's reason"
+    declared_by: DIP-0024

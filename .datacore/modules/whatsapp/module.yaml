@@ -83,11 +83,6 @@ hooks:
     enabled_setting: morning_briefing
     slot: post
 
-  nightshift_complete:
-    agent: whatsapp-notifications
-    description: "Notify when nightshift tasks complete"
-    enabled_setting: nightshift_alerts
-
 state:
   directory: .datacore/state/whatsapp
   files:
