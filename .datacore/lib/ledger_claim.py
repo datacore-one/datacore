@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import os
 import subprocess
 from process_run import run as run_process
@@ -52,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from briefing.actions import act  # noqa: E402
 from ledger.fold import fold  # noqa: E402
-from ledger.log import EventLog, read_events  # noqa: E402
+from ledger.log import EventLog, read_events, read_task_events  # noqa: E402
 from ledger.policy import guarded_append, PolicyError, approval_payload_hash
 from executors import get_executor  # noqa: E402
 from ops_markers import AUTH_FAILURE_MARKERS  # noqa: E402
@@ -71,7 +72,64 @@ MAX_ATTEMPTS = 3
 #: counted, and later ticks re-run only its CHECK until the owner has acted.
 WAITING_ON_OWNER = 3
 #: Release kinds that are not an attempt at the task (see the dead-letter count).
-NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner")
+#: `usage_limit`: the model allowance ran out (W1) -- the budget, not the task.
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "usage_limit")
+
+
+def _task_text(title: str, payload: dict, last_error: str = "") -> str:
+    """What the agent is told: the title, the item's body, the last failure.
+
+    The prompt used to be the title alone. For a repair that is "Repair X:
+    failing on box since ..." -- the job's real error, carried in the item's
+    body by autofix, never reached the agent, and its retries saw only the
+    check's one-line verdict (W1, 2026-10-23)."""
+    body = str((payload or {}).get("body") or "").strip()
+    parts = [title] + ([body] if body else [])
+    # 2026-11-08: Winston's filings carry done_when and check, not a body, and
+    # the doer never saw them: it learned the check only from a failed attempt.
+    done_when = str((payload or {}).get("done_when") or "").strip()
+    check = str((payload or {}).get("check") or "").strip()
+    if done_when:
+        parts.append(f"Done when: {done_when}")
+    if check:
+        parts.append("The result is accepted only if this check passes, run from the root of "
+                     "this space on your committed work (paths in it are relative to that root; "
+                     f"commit the result):\n{check}")
+    if last_error:
+        parts.append(f"The previous attempt failed: {last_error[:600]}")
+    return "\n\n".join(parts)
+
+
+def _publish_claim(space: Path) -> str:
+    """Publish the claim before the work starts. "published", "skipped" or "failed"; never raises.
+
+    The claim used to leave this machine only with the converge after the work,
+    so for the whole run the owner's watcher saw no claim and the 15-minute
+    "not picked up" (AGT-14) fired on requests being worked (2026-11-08)."""
+    try:
+        r = subprocess.run(["git", "-C", str(space), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return "skipped"
+        transport = Path(__file__).resolve().parent / "ledger_transport.py"
+        r = subprocess.run([sys.executable, str(transport), "converge", "--space", str(space)],
+                           capture_output=True, text=True, timeout=180)
+        return "published" if r.returncode == 0 else "failed"
+    except Exception:  # noqa: BLE001 -- publishing early is a courtesy; the run converges at the end
+        return "failed"
+
+
+def _outcome(payload: dict, outcome: str, detail: str = "", actor: str = "") -> None:
+    """A repair item's outcome becomes a learning candidate (autofix). Never raises."""
+    if not ((payload or {}).get("autofix") or str((payload or {}).get("id", "")).startswith("autofix")):
+        return
+    try:
+        from jobs.autofix import record_outcome
+        record_outcome(payload, outcome, detail, actor=actor)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 TIMEOUT = 600
 
 # Phrases that mean the agent declined or was prevented, in a run that exits 0
@@ -96,8 +154,28 @@ ROUTE_FRAMING = {
     "research": "You are a research assistant. Find and summarise what is known.",
     "strategic": "You are a project manager. Assess status, blockers and next step.",
     "trading": "You are a trading analyst. Report position and risk facts only.",
+    # Every framing above investigates; a delegated action needs one that acts
+    # (Data reported on an approved post instead of posting it, 2026-10-27).
+    "do": ("You are carrying out a task assigned to you. Do exactly what it says, using the "
+           "commands it names, once. Then say what you did and the result, or the exact "
+           "error if a step failed. Do nothing beyond the task."),
 }
 DEFAULT_ROUTE = "research"
+
+
+def _start_time_reached(not_before) -> bool:
+    """True when an item has no start time or it has passed; False when it is
+    still ahead or cannot be read (held rather than run early)."""
+    if not not_before:
+        return True
+    from datetime import datetime, timezone
+    try:
+        start = datetime.fromisoformat(str(not_before))
+    except ValueError:
+        return False
+    if start.tzinfo is None:
+        return False
+    return datetime.now(timezone.utc) >= start
 
 
 def classify_route(text: str) -> tuple[str, str]:
@@ -234,13 +312,16 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         # itself left there. Until an hourly converge autosaved it, a space
         # could not complete a delegated item twice in a row.
         #
-        # Only this file is staged. `git add -A` here would sweep up whatever
-        # the agent left behind and commit it as though it had been verified,
-        # which is the opposite of what the check exists for.
-        subprocess.run(["git", "-C", str(space), "add", "--", str(path)],
+        # The actor's events file (claim + release written this run) is included
+        # in the SAME commit. Without this the run leaves two records: the
+        # journal commit and a later autosave commit for the uncommitted events.
+        # Only the events file for this actor is staged -- never `git add -A`,
+        # which would sweep up unverified agent artifacts.
+        events_path = space / ".datacore" / "events" / f"{actor}.jsonl"
+        subprocess.run(["git", "-C", str(space), "add", "--", str(path), str(events_path)],
                        capture_output=True, timeout=60)
         subprocess.run(["git", "-C", str(space), "commit", "-q", "-m",
-                        f"journal: {actor} ledger claim run", "--", str(path)],
+                        f"journal: {actor} ledger claim run"],
                        capture_output=True, timeout=60)
     except Exception:  # noqa: BLE001 -- a journal failure must not fail the work
         pass
@@ -250,15 +331,19 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
 #: "this task did not work". The distinction decides whether an item counts
 #: down towards being dead-lettered, so it is kept narrow and literal: every
 #: marker below is produced by the executor layer itself, never by a task.
+#:
+#: "timed out after" IS NOT ONE (2026-11-04). A run that hits the timeout reached
+#: the model and spent ten minutes of it, so it is an attempt. Listing it let one
+#: repair item run 14 times and helped burn $29 of credit in 8 hours on 2026-11-03.
 INFRASTRUCTURE_MARKERS = (
     "binary not found",
     "not installed",
-    "timed out after",
     "unknown executor",
     "auth rejected",
     "returned no output",
     "returned an invalid result",
     "execution failed (exit",
+    "incomplete provider result",   # hermes_oneshot: the model never answered (OPS-18)
 )
 
 
@@ -338,9 +423,14 @@ def _artifact_tree_clean(space, offenders: list | None = None):
         return False
     root_path = Path(root.stdout.strip()).resolve()
     try:
-        event_prefix = (Path(space).resolve().relative_to(root_path) / ".datacore/events").as_posix() + "/"
+        rel = Path(space).resolve().relative_to(root_path)
     except ValueError:
         return False
+    # The event logs and the telemetry logs (plan phase C) are both append-only
+    # ledger records, written by the writers themselves -- the verifier's own
+    # writer appends telemetry continuously, so refusing it meant no check ever
+    # ran in that copy (2026-11-06). Neither is the agent's artifact.
+    prefixes = tuple((rel / ".datacore" / d).as_posix() + "/" for d in ("events", "telemetry"))
     paths = []
     for command in (["git", "diff", "--name-only", "-z", "HEAD"],
                     ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
@@ -349,8 +439,8 @@ def _artifact_tree_clean(space, offenders: list | None = None):
             return False
         paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
     def permitted(name: str) -> bool:
-        return (name.startswith(event_prefix) and "/" not in name[len(event_prefix):]
-                and (name.endswith(".jsonl") or name.endswith(".lock")))
+        return any(name.startswith(pre) and "/" not in name[len(pre):]
+                   and (name.endswith(".jsonl") or name.endswith(".lock")) for pre in prefixes)
     bad = [name for name in paths if not permitted(name)]
     if offenders is not None:
         offenders.extend(bad)
@@ -512,30 +602,36 @@ def chain_follow_up(space: Path, actor: str, payload: dict) -> tuple[bool, str]:
     return True, f"CHAINED  {then['id']} -> {then['assignee']}"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--space", required=True, type=Path)
-    ap.add_argument("--actor", default=None,
-                    help="writer name (default: this machine's declared actor, resolved strictly)")
-    ap.add_argument("--limit", type=int, default=3)
-    ap.add_argument("--execute", action="store_true",
-                    help="actually claim and run; without it, plan only and write nothing")
-    args = ap.parse_args()
-    # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
-    # here, naming identity.env and the registry, rather than dispatching as a
-    # guessed hostname (the default used to be evaluated non-strictly even
-    # when --actor was passed). An explicit --actor is not resolved at all.
-    if not args.actor:
-        from actor_identity import UndeclaredActor, this_actor
-        try:
-            args.actor = this_actor(strict=True)
-        except UndeclaredActor as exc:
-            print(f"REFUSED: {exc}", file=sys.stderr)
-            return 2
+#: `main(transport=...)` default: the hub DATACORE_HUB_URL / DATACORE_HUB_TOKEN_ID name.
+_FROM_ENV = object()
 
-    space = args.space.resolve()
-    events = read_events(space)
-    state = fold(events)
+
+@dataclass
+class Plan:
+    """What one dispatcher may take from one fold, and everything it may not, by reason."""
+    ready: list
+    exhausted: list
+    later: list
+    mirrored: int
+    ambiguous: list
+    addressed: list
+    siblings: list
+    unaddressed: list
+    left_to_runner: list
+    attempts: dict
+    last_error: dict
+    waiting: set
+    mine: str | None
+
+
+def plan(state, events, actor: str, runner: str | None = None) -> Plan:
+    """The dispatch rules, shared by the claim loop and a named runner (phase E).
+
+    Pure: reads the fold and the admitted events, writes nothing. `runner=None`
+    is the claim loop (items that name no runner); a runner name gives that
+    runner's items. Either way the same addressing, mirror, attempt and
+    start-time rules apply.
+    """
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 
     # A genesis-imported GTD task is a MIRROR of an org heading, not a work
@@ -577,9 +673,9 @@ def main() -> int:
     ambiguous = [i for i in pending if dispatch_ambiguity((i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in ambiguous]
     addressed = [i for i in pending
-                 if not dispatchable_by(args.actor, (i.payload or {}).get("assignee"))]
+                 if not dispatchable_by(actor, (i.payload or {}).get("assignee"))]
     pending = [i for i in pending if i not in addressed]
-    mine = principal_of(args.actor)[0]
+    mine = principal_of(actor)[0]
     siblings = [i for i in addressed if mine is not None
                 and principal_of(str((i.payload or {}).get("assignee")))[0] == mine]
     addressed = [i for i in addressed if i not in siblings]
@@ -600,6 +696,14 @@ def main() -> int:
     # change: no space had one.
     unaddressed = [i for i in pending if not (i.payload or {}).get("assignee")]
     pending = [i for i in pending if i not in unaddressed]
+
+    # ONE ROUTE, ONE EXECUTOR PER ITEM (plan 2026-10-31, phase E). An item that
+    # names a `runner` belongs to that runner -- "nightshift" is Miles's hourly
+    # run, which executes a task spec through its own pipeline -- and the claim
+    # loop leaves it alone, counted and named. With `runner` given, the plan is
+    # that runner's: only the items that name it.
+    left_to_runner = [i for i in pending if (i.payload or {}).get("runner") != runner]
+    pending = [i for i in pending if i not in left_to_runner]
 
     # GIVE UP AFTER MAX_ATTEMPTS. `item.release` returns an item to `created`,
     # which is claimable, so a 15-minute timer re-claims it forever: item
@@ -656,7 +760,116 @@ def main() -> int:
             last_turn[iid] = (ev.payload or {}).get("kind") or "release"
     waiting = {iid for iid, kind in last_turn.items() if kind == "waiting_on_owner"}
 
+
     exhausted = [i for i in pending if attempts.get(i.id, 0) >= MAX_ATTEMPTS]
+    pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
+    # NOT BEFORE ITS TIME (2026-10-27, AGT-12): a post approved for 12:49 is
+    # delegated ahead and waits here. An unreadable time is held, never run.
+    later = [i for i in pending if not _start_time_reached((i.payload or {}).get("not_before"))]
+    pending = [i for i in pending if i not in later]
+    pending.sort(key=lambda i: i.id)
+    return Plan(ready=pending, exhausted=exhausted, later=later, mirrored=mirrored,
+                ambiguous=ambiguous, addressed=addressed, siblings=siblings,
+                unaddressed=unaddressed, left_to_runner=left_to_runner, attempts=attempts,
+                last_error=last_error, waiting=waiting, mine=mine)
+
+
+def runner_queue(space: Path, actor: str, runner: str, transport=None):
+    """(ready items, state, read-from) for `runner` writing as `actor` (phase E).
+
+    The same read as the claim loop -- the hub's admitted log first, the git copy
+    when it does not answer -- and the same rules (`plan`). `transport`: a hub
+    transport, None for none, or `_FROM_ENV` for DATACORE_HUB_URL.
+    """
+    from ledger.hub import (authoritative_events, authoritative_state,
+                            task_events_hub_first, transport_from_env)
+    if transport is _FROM_ENV:
+        transport = transport_from_env(space, "ledger-claim")
+    raw, source = task_events_hub_first(space, transport)
+    events, _ = authoritative_events(space, raw)
+    state = authoritative_state(space, events)
+    return plan(state, events, actor, runner=runner).ready, state, ("hub" if source == "hub" else "git")
+
+
+def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
+    """Someone other than the doer checks the owner's requests (Winston path step 5,
+    owner goal 2026-11-05). (verified, recheck failed).
+
+    Each COMPLETED item that a person asked for (`asked_by`) and that someone else
+    completed has its own check re-run here, on this machine, against the
+    committed result (`_isolated_check`, as the doer's run did). A pass records
+    `item.verify` as this actor; the fold already refuses a completer verifying
+    its own work. A failing re-check is printed and left: the delegation watch
+    reports the request as done but not yet checked."""
+    verified = failed = 0
+    for item in state.items.values():
+        p = item.payload or {}
+        if (item.status != "completed" or not p.get("asked_by") or not p.get("check")
+                or item.owner == actor):
+            continue
+        passed, sha = _isolated_check(space, p["check"])
+        if passed:
+            guarded_append(EventLog(space, actor), "item.verify",
+                           {"id": item.id, "check": p["check"], "artifact_commit": sha})
+            print(f"VERIFIED {item.title[:70]} -> {p['check'][:80]} passed @ {sha[:10]}")
+            verified += 1
+        else:
+            print(f"RECHECK FAILED {item.title[:60]} -> {p['check'][:80]} (left completed, not verified)")
+            failed += 1
+    return verified, failed
+
+
+def main(argv=None, *, transport=_FROM_ENV) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--space", required=True, type=Path)
+    ap.add_argument("--actor", default=None,
+                    help="writer name (default: this machine's declared actor, resolved strictly)")
+    ap.add_argument("--limit", type=int, default=3)
+    ap.add_argument("--execute", action="store_true",
+                    help="actually claim and run; without it, plan only and write nothing")
+    ap.add_argument("--hub-url", default=None,
+                    help="the hub to read first (default: $DATACORE_HUB_URL); its git copy when it does not answer")
+    ap.add_argument("--token-id", default=None,
+                    help="broker id of the hub's bearer token (default: $DATACORE_HUB_TOKEN_ID)")
+    ap.add_argument("--verify-others", action="store_true",
+                    help="re-run the check of owner requests others completed; verify on a pass, claim nothing")
+    args = ap.parse_args(argv)
+    # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
+    # here, naming identity.env and the registry, rather than dispatching as a
+    # guessed hostname (the default used to be evaluated non-strictly even
+    # when --actor was passed). An explicit --actor is not resolved at all.
+    if not args.actor:
+        from actor_identity import UndeclaredActor, this_actor
+        try:
+            args.actor = this_actor(strict=True)
+        except UndeclaredActor as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 2
+
+    space = args.space.resolve()
+    from ledger.hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
+    # THE HUB FIRST (plan 2026-10-31, phase D2): its admitted log when it
+    # answers -- a task delegated by day is claimable on the next tick with no
+    # git publish -- and this host's git copy when it does not. What the hub
+    # sends is admitted below by the same rule as the git copy; never trusted more.
+    from ledger.hub import task_events_hub_first, transport_from_env
+    if transport is _FROM_ENV:
+        transport = transport_from_env(space, "ledger-claim", hub_url=args.hub_url, token_id=args.token_id)
+    raw, source = task_events_hub_first(space, transport)  # task fold: no telemetry (phase C)
+    print("read from: " + ("hub (its admitted log)" if source == "hub" else "git copy"))
+    # The dead-letter and waiting scans below read the same admitted events (round 6).
+    events, _ = authoritative_events(space, raw)
+    if args.verify_others:
+        v, f = verify_others(space, args.actor, authoritative_state(space, events))
+        print(f"verified {v}, recheck failed {f}")
+        return 0
+    state = authoritative_state(space, events)
+    from actor_identity import dispatch_ambiguity
+    p = plan(state, events, args.actor)
+    mirrored, ambiguous, addressed, siblings = p.mirrored, p.ambiguous, p.addressed, p.siblings
+    unaddressed, attempts, last_error, waiting, mine = (p.unaddressed, p.attempts, p.last_error,
+                                                        p.waiting, p.mine)
+    exhausted = p.exhausted
     for item in exhausted:
         n = attempts.get(item.id, 0)
         title = (item.payload or {}).get("title", item.id)[:60]
@@ -679,8 +892,10 @@ def main() -> int:
             print(f"DEADLETTER REFUSED  {title}\n         -> {exc}")
             continue
         print(f"DEADLETTER  {title}\n         -> {n} failed attempts; dismissed")
-    pending = [i for i in pending if attempts.get(i.id, 0) < MAX_ATTEMPTS]
-    pending.sort(key=lambda i: i.id)
+        _outcome(item.payload or {}, "gave_up", last_error.get(item.id, ""), args.actor)
+    for i in p.later:
+        print(f"NOT YET  {((i.payload or {}).get('title') or i.id)[:70]} -- starts {(i.payload or {}).get('not_before')}")
+    pending = p.ready
 
     mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
     if addressed:
@@ -699,6 +914,9 @@ def main() -> int:
         mirror_note += (f"; {len(unaddressed)} addressed to NOBODY -- not dispatched, "
                         f"give each an assignee: "
                         + ", ".join((i.payload or {}).get("title", i.id)[:40] for i in unaddressed[:3]))
+    for runner in sorted({str((i.payload or {}).get("runner")) for i in p.left_to_runner}):
+        n = sum(1 for i in p.left_to_runner if str((i.payload or {}).get("runner")) == runner)
+        mirror_note += f"; {n} left to the {runner} runner"
     if not pending:
         print(f"nothing to dispatch: no delegated items awaiting claim{mirror_note}")
         return 0
@@ -730,10 +948,16 @@ def main() -> int:
         # route is honoured only when it names a framing that exists; an
         # unknown one falls back rather than dispatching with no framing at all.
         declared = (item.payload or {}).get("route")
+        check = (item.payload or {}).get("check")
         if declared in ROUTE_FRAMING:
             route, why = declared, "route declared by the item's creator"
         else:
             route, why = classify_route(title)
+            # A task that carries its own check names a result someone can
+            # verify: it is to be carried out. Defaulting it to "research" framed
+            # Data to report on an approved post instead of posting it (AGT-12).
+            if check and why.endswith("default route"):
+                route, why = "do", "a delegated task with a check is carried out (no route declared)"
 
         if effects:
             # Gated at creation against a grant; that is not consent to run it
@@ -748,8 +972,6 @@ def main() -> int:
                 print(f"REFUSED  [{route}] {title[:70]}\n         -> {outside}")
                 refused += 1
                 continue
-
-        check = (item.payload or {}).get("check")
 
         if not args.execute:
             gate = f"check: {check}" if check else "NO CHECK -> cannot auto-complete"
@@ -780,13 +1002,20 @@ def main() -> int:
                       f"\n         -> commit or discard it, then dispatch again")
                 break
 
-        if item.id in waiting and check:
+        # A RETRY CHECKS FIRST. An item released before may have done its work
+        # and failed only its check -- Datafund P7 was posted, the check misread
+        # the live text, and each retry posted again (three posts, 2026-10-29).
+        # Work with an effect outside the repo cannot be undone, so on a retry
+        # the check runs before the agent: passed -> complete on that evidence.
+        is_waiting = item.id in waiting
+        if check and (is_waiting or attempts.get(item.id, 0) > 0):
             # Only the check, never the agent: its part is done. Still waiting
             # -> nothing written; passed -> claim and complete on the check's
             # evidence; anything else (the PR was closed unmerged, the job still
-            # fails after the merge) -> back to the agent as an ordinary attempt.
+            # fails after the merge, a retry's check still fails) -> to the
+            # agent as an ordinary attempt.
             rc, sha = _isolated_check_rc(space, check)
-            if rc == WAITING_ON_OWNER:
+            if is_waiting and rc == WAITING_ON_OWNER:
                 print(f"WAITING  [{route}] {title[:70]}\n         -> still waiting for you "
                       f"(the owner merges); the agent is not re-run")
                 waiting_n += 1
@@ -800,18 +1029,21 @@ def main() -> int:
                 try:
                     guarded_append(EventLog(space, args.actor), "item.claim",
                                    {"id": item.id, "owner": args.actor, "route": route,
-                                    "reason": "the owner acted on a repair that was waiting for them",
+                                    "reason": ("the owner acted on a repair that was waiting for them"
+                                               if is_waiting else
+                                               "retry: the check already passes; the agent is not re-run"),
                                     "payload_hash": approval_payload_hash(item.payload)})
                 except PolicyError as exc:
                     print(f"REFUSED  {title[:70]}: {exc}")
                     refused += 1
                     continue
+                why_done = "the owner acted" if is_waiting else "already done; the agent was not re-run"
                 act(space, item.id, "complete", args.actor, detail={
-                    "owner": args.actor, "route": route, "check": check,
-                    "artifact_commit": sha, "waited_on": "owner"})
-                journal_lines.append(f"DONE `{item.id[:12]}` {title[:70]} — the owner acted; "
+                    "owner": args.actor, "route": route, "check": check, "artifact_commit": sha,
+                    **({"waited_on": "owner"} if is_waiting else {"done_before_retry": True})})
+                journal_lines.append(f"DONE `{item.id[:12]}` {title[:70]} — {why_done}; "
                                      f"check passed @ `{sha[:10]}`")
-                print(f"DONE     [{route}] {title[:70]}\n         -> the owner acted; check passed "
+                print(f"DONE     [{route}] {title[:70]}\n         -> {why_done}; check passed "
                       f"@ {sha[:10]}")
                 dispatched += 1
                 continue
@@ -831,7 +1063,10 @@ def main() -> int:
             print(f"REFUSED  {title[:70]}: {exc}")
             refused += 1
             continue
-        ok, detail, meta = run_task(title, route, space, item.id, actor=args.actor)
+        if args.execute:
+            _publish_claim(space)
+        ok, detail, meta = run_task(_task_text(title, item.payload or {}, last_error.get(item.id, "")),
+                                    route, space, item.id, actor=args.actor)
         if ok:
             claim_backoff.clear(args.actor)
         if ok and check:
@@ -855,6 +1090,7 @@ def main() -> int:
                     f"WAITING `{item.id[:12]}` {title[:60]} — done by {args.actor}; waiting for you")
                 print(f"WAITING  [{route}] {title[:70]}\n         -> waiting for you: the agent's part "
                       f"is done and the owner has the next move; not an attempt")
+                _outcome(item.payload or {}, "waiting", "", args.actor)
                 waiting_n += 1
                 continue
             if passed:
@@ -876,6 +1112,7 @@ def main() -> int:
                       f"@ {sha[:10]} ({meta.get('cost_cents', '?')}c, "
                       f"{meta.get('duration_s', '?')}s)")
                 dispatched += 1
+                _outcome(item.payload or {}, "fixed", "", args.actor)
                 chained, note = chain_follow_up(space, args.actor, item.payload or {})
                 if note:
                     print(f"         -> {note}")
@@ -888,6 +1125,7 @@ def main() -> int:
                     f"FAILED `{item.id[:12]}` {title[:60]} — "
                     + (check_why or f"check did not pass: `{check}`"))
                 print(f"FAILED   [{route}] {title[:70]}\n         -> check failed: {check}")
+                _outcome(item.payload or {}, "failed", check_why or f"check did not pass: {check}", args.actor)
                 failed += 1
             continue
         if ok:
@@ -911,10 +1149,27 @@ def main() -> int:
             # because one machine was sick. An infrastructure release is marked
             # so the counter can skip it; the item stays available for the host
             # when it recovers.
+            # A USAGE LIMIT IS THE BUDGET, NOT THE TASK (W1). Released as its own
+            # kind, never counted towards the dead-letter, and the host pauses:
+            # on 2026-10-21 about 60 repair attempts were spent against "You've
+            # hit your weekly limit", each counted as a failed repair.
+            usage = claim_backoff.is_usage_limit(detail)
             infra = _infrastructure_failure(detail)
+            kind = "usage_limit" if usage else ("infrastructure" if infra else None)
             EventLog(space, args.actor).append(
                 "item.release", {"id": item.id, "owner": args.actor, "error": detail[:300],
-                                 **({"kind": "infrastructure"} if infra else {})})
+                                 **({"kind": kind} if kind else {})})
+            _outcome(item.payload or {}, "paused" if usage else "failed", detail, args.actor)
+            if usage:
+                journal_lines.append(f"PAUSED `{item.id[:12]}` {title[:60]} — the model usage limit "
+                                     f"was reached: {detail[:110]}")
+                print(f"PAUSED   [{route}] {title[:70]}\n         -> usage limit reached: claiming paused "
+                      f"on this host; the item stays queued and is not counted as an attempt")
+                if claim_backoff.record_failure(args.actor, detail):
+                    journal_lines.append(
+                        f"ACTION NEEDED — `{args.actor}` reached the model usage limit; claiming "
+                        f"paused, one retry every {int(claim_backoff.PROBE_AFTER.total_seconds() // 3600)}h.")
+                break
             journal_lines.append(
                 f"FAILED `{item.id[:12]}` {title[:60]} — {detail[:110]}")
             print(f"FAILED   [{route}] {title[:70]}\n         -> {detail[:150]}")

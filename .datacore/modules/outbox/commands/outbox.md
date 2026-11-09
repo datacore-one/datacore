@@ -18,12 +18,12 @@ recall:
 
 **Always reference when:**
 - Moving content to archive
-- Processing `4-outbox/` folders
+- Processing `4-archive/` folders
 - Setting up archive repos on nightshift server
 - Determining routing destinations
 
 **Key decisions this DIP informs:**
-- Content leaving active workspace goes through `4-outbox/`
+- Content leaving active workspace goes through `4-archive/`
 - Archive is permanent storage, no automatic retention cleanup
 - Archive repos live on server (or local for local-only deployment)
 - Preserve semantic path structure when archiving
@@ -32,7 +32,7 @@ recall:
 
 | Question | Answer |
 |----------|--------|
-| What is 4-outbox? | Staging area for content leaving workspace |
+| What is 4-archive? | The space's single exit folder (DIP-0017 as amended 2026-10-18) |
 | Where do archived files go? | Server archive repos: `[space]-archive/` |
 | What about companions? | Always move together with source file |
 | Is archive permanent? | Yes, no automatic cleanup |
@@ -53,7 +53,7 @@ recall:
 
 ---
 
-Process the outbox queue and route content to destinations. The outbox (`4-outbox/`) is the opposite of inbox - content staging for exit from active workspace.
+Process the outbox queue and route content to destinations. Its queue is each space's `4-archive/`, the single exit folder (there is no `4-outbox/`). A non-dry run copies content to the archive repo and deletes the local copy: always dry-run first and get the owner's go.
 
 ## Usage
 
@@ -72,7 +72,7 @@ Process the outbox queue and route content to destinations. The outbox (`4-outbo
    - `outbox.server_host` (server IP)
    - `outbox.archive_repos` (repo paths)
 
-2. **Scan spaces** for `4-outbox/archive/` content:
+2. **Scan spaces** for `4-archive/` content:
    - 0-personal
    - 1-teamspace
    - 2-projectspace
@@ -91,11 +91,11 @@ Process the outbox queue and route content to destinations. The outbox (`4-outbo
 
 ### Phase 2: Processing
 
-For each file in `4-outbox/archive/`:
+For each file in `4-archive/`:
 
 1. **Determine semantic path**:
    ```
-   Source: 0-personal/4-outbox/archive/3-knowledge/literature/Old-Paper.md
+   Source: 0-personal/4-archive/3-knowledge/literature/Old-Paper.md
    Target: 0-personal-archive/3-knowledge/literature/Old-Paper.md
    ```
 
@@ -182,17 +182,17 @@ Dry Run - No files will be moved
 ================================
 
 0-personal: 3 files would be archived
-  - 4-outbox/archive/3-knowledge/literature/Old-Paper.md
+  - 4-archive/3-knowledge/literature/Old-Paper.md
     → 0-personal-archive/3-knowledge/literature/Old-Paper.md
-  - 4-outbox/archive/1-tracks/dev/deprecated-spec.md
+  - 4-archive/1-tracks/dev/deprecated-spec.md
     → 0-personal-archive/1-tracks/dev/deprecated-spec.md
-  - 4-outbox/archive/3-knowledge/reference/old-tool.md
+  - 4-archive/3-knowledge/reference/old-tool.md
     → 0-personal-archive/3-knowledge/reference/old-tool.md
 
 1-teamspace: 2 files would be archived
-  - 4-outbox/archive/1-tracks/legal/expired-nda.pdf (+companion)
+  - 4-archive/1-tracks/legal/expired-nda.pdf (+companion)
     → 1-teamspace-archive/1-tracks/legal/expired-nda.pdf (+companion)
-  - 4-outbox/archive/1-tracks/legal/old-contract.pdf (+companion)
+  - 4-archive/1-tracks/legal/old-contract.pdf (+companion)
     → 1-teamspace-archive/1-tracks/legal/old-contract.pdf (+companion)
 
 Total: 5 files would be processed
@@ -236,7 +236,7 @@ outbox:
 |----------|----------|--------------|
 | Archived files | `[space]-archive/` | All processed files |
 | Archive index | `[archive-repo]/_index.md` | Updated with new entries |
-| Source index | `4-outbox/_index.md` | Entries removed |
+| Source index | `4-archive/_index.md` | Entries removed |
 | Commit | Archive repo | After each space processed |
 
 ## Nightshift Integration

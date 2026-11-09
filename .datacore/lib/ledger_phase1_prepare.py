@@ -43,7 +43,8 @@ def plan(space: Path) -> dict:
     text = watch_file(space / 'org/next_actions.org')['before']
     if text is None:
         raise EditConflict('authored next_actions.org is missing; preserve the ledger')
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     # Protocol 2 (owner follow-up Q3): a changed field is detected type-strictly,
     # so an authored 1 -> True is planned, and the edit carries version 2.
     strict = edit_strict(space)
@@ -92,7 +93,8 @@ def apply(space: Path, actor: str, proposed: dict) -> int:
         log.append(event['type'], event['payload'])
     # A concurrent append can still arrive on another writer's chain. Its
     # preconditions preserve both proposals and make the conflict explicit.
-    if any(item.edit_conflicts for item in fold(read_events(space)).items.values()):
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    if any(item.edit_conflicts for item in authoritative_state(space).items.values()):
         raise EditConflict('concurrent preparation conflict; proposals retained for explicit reconciliation')
     return len(proposed['events'])
 

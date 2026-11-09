@@ -135,9 +135,12 @@ def test_concurrent_creations_share_one_principal_limit(tmp_path, policy):
 def test_arbitration_read_failure_cannot_authorize_override(tmp_path, policy, monkeypatch):
     import importlib
     log_module = importlib.import_module('ledger.log')
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise OSError('unreadable owner log')
     monkeypatch.setattr(log_module, 'read_events', broken)
+    # The live state reads task logs through the shared reader (plan phase C), so
+    # the fault goes there too: every read path fails, not only the named one.
+    monkeypatch.setattr(log_module, '_read_logs', broken)
     assert not claim_gate.check_override('worker', 'one', tmp_path, policy)[0]
 
 

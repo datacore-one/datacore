@@ -234,10 +234,13 @@ def check_events(parsed: list[tuple[int, Event]], registry_path: Path | None = N
 
         if (type(event.seq) is not int or event.seq < 0
                 or not all(isinstance(v, str) for v in (event.hlc, event.actor, event.type, event.prev, event.hash, event.sig))
+                or not isinstance(getattr(event, "hub", ""), str)
+                or not isinstance(getattr(event, "domain", ""), str)
                 or not isinstance(event.payload, dict)):
             bad("invalid event field types")
             continue
-        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev)
+        body = body_dict(event.seq, event.hlc, event.actor, event.type, event.payload, event.prev,
+                         hub=getattr(event, "hub", ""), domain=getattr(event, "domain", ""))
 
         physical = None
         try:
@@ -395,7 +398,7 @@ def verify_log(path: Path, registry_path: Path | None = None, strict: bool = Fal
     # authorised `ledger.void` that cancels an event of this one. Nothing else
     # excuses a failed check: the out-of-band exception list is retired.
     from .voids import for_events_dir
-    voids = for_events_dir(path.parent)
+    voids = for_events_dir(path.parent, registry_path=registry_path)
     context = _context_digest(registry_path, strict, voids) if (incremental or record) else ""
     marker = _read_marker(path, raw, context) if incremental else None
 
@@ -478,7 +481,7 @@ def verify_space(space: Path, registry_path: Path | None = None, strict: bool = 
 
 
 def chain_problems(events: list[Event], registry_path: Path | None = None,
-                   strict: bool = False) -> list[str]:
+                   strict: bool = False, voids=None) -> list[str]:
     """Certain problems in an in-memory event list, chain by chain (seal,
     checkpoint restore, prefix restore). Voids are resolved from the list itself.
 
@@ -488,8 +491,14 @@ def chain_problems(events: list[Event], registry_path: Path | None = None,
     and a wrong clock is verify's to flag (LED-7) -- one wrong clock never
     stops conflict resolution, a prefix restore or a seal of the space.
     """
-    from .voids import from_events
-    voids = from_events(events)
+    if voids is None:
+        # Which voids excuse an event is the one correction rule's answer
+        # (ledger.finality; for a list without hub inputs, the old rule). A hub
+        # space's caller passes its own (round 6, C5): its admitted events are
+        # signed and intact, so nothing is excused there and no registry entry
+        # can turn a recorded reversal into a broken chain.
+        from .finality import resolve
+        voids = resolve(events).voids
     chains: dict = {}
     for event in events:
         chains.setdefault(getattr(event, "log", None) or event.actor, []).append(event)

@@ -121,7 +121,8 @@ def orphans(space: Path) -> dict:
         return {"space": space.name, "skipped": "unreadable org file(s)",
                 "detail": unreadable[:3], "orphans": []}
 
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     live = [i for i, it in state.items.items()
             if it.status in LIVE and not (it.payload or {}).get("section")]
     found = [i for i in live if i not in present]

@@ -1,0 +1,7 @@
+# fixture for mac-sync-traces artifact[0]
+# producer artifact: ~/.datacore/state/sync-traces.last on mac
+# harvested: 2026-09-27 (success line in the producer's own format)
+# regex under test: sync_traces: \d+ transcript
+# represents: SUCCESS
+# ---
+2026-09-27T10:46:48Z sync_traces: 2777 transcript(s) in ~/Data/0-personal/traces/claude-code

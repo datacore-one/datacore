@@ -2,7 +2,8 @@
 """
 Archive Sync Library
 
-Provides utilities for routing content from 4-outbox/archive/ to archive repos.
+Provides utilities for routing content from each space's 4-archive/ to archive repos.
+(4-outbox/archive/ until the owner folded 4-outbox into 4-archive, 2026-10-18.)
 Used by outbox-processor agent.
 
 Per DIP-0017: Outbox & Archive Pattern
@@ -106,6 +107,20 @@ def _is_placeholder(path: Path) -> bool:
     return path.name in _PLACEHOLDERS
 
 
+#: The archive folder's own description files, at its top level only. They
+#: stay in the space; an `_index.md` deeper down travels with its folder.
+_FOLDER_FILES = frozenset({"_index.md", "README.md"})
+
+#: The archive queue inside a space.
+QUEUE = "4-archive"
+
+
+def _is_content(path: Path, queue: Path) -> bool:
+    if not path.is_file() or _is_placeholder(path):
+        return False
+    return not (path.parent == queue and path.name in _FOLDER_FILES)
+
+
 class ArchiveScanner:
     """Scans outbox folders for content to archive."""
 
@@ -113,26 +128,25 @@ class ArchiveScanner:
         self.data_root = data_root
 
     def discover_spaces(self) -> List[str]:
-        """Find all spaces with 4-outbox/archive/ content."""
+        """Find all spaces with content in their 4-archive/."""
         spaces = []
         for item in self.data_root.iterdir():
             if item.is_dir() and not item.name.startswith("."):
-                outbox_archive = item / "4-outbox" / "archive"
-                if outbox_archive.exists() and any(
-                        not _is_placeholder(p) for p in outbox_archive.rglob("*") if p.is_file()):
+                queue = item / QUEUE
+                if queue.exists() and any(_is_content(p, queue) for p in queue.rglob("*")):
                     spaces.append(item.name)
         return sorted(spaces)
 
     def scan_space(self, space: str) -> List[ArchiveItem]:
-        """Scan a space's outbox/archive folder."""
+        """Scan a space's 4-archive/ folder."""
         items = []
-        archive_path = self.data_root / space / "4-outbox" / "archive"
+        archive_path = self.data_root / space / QUEUE
 
         if not archive_path.exists():
             return items
 
         for file_path in archive_path.rglob("*"):
-            if file_path.is_file() and not _is_placeholder(file_path):
+            if _is_content(file_path, archive_path):
                 # Skip companion files - they'll be handled with their source
                 if file_path.name.endswith(".companion.md"):
                     continue
@@ -153,6 +167,10 @@ class ArchiveScanner:
                 ))
 
         return items
+
+
+#: The private context layer (DIP-0002); no repository may track it (SPC-3).
+PRIVATE_IGNORE = "CLAUDE.local.md"
 
 
 class ServerArchiver:
@@ -211,6 +229,10 @@ class ServerArchiver:
             # file loose and unversioned.
             self._ssh_command(f"mkdir -p ~/{shlex.quote(repo_path)} && git -C ~/{shlex.quote(repo_path)} init")
             success, _ = self._ssh_command(f"test -d ~/{shlex.quote(repo_path)}")
+        if success:
+            # SPC-3: an archive is a repository like any other; it never takes a private layer.
+            gi = f"~/{shlex.quote(repo_path)}/.gitignore"
+            self._ssh_command(f"grep -qxF {PRIVATE_IGNORE} {gi} 2>/dev/null || echo {PRIVATE_IGNORE} >> {gi}")
         return success
 
     def list_archived_files(self, space: str) -> set:
@@ -247,7 +269,7 @@ class ServerArchiver:
             full_dir = f"{abs_repo}/{dest_dir}"
             self._ssh_command(f"mkdir -p {shlex.quote(full_dir)}")
 
-        # Copy main file using rsync (handles spaces in paths)
+        # Copy main file; True only when the server's sha256 matches
         full_dest = f"{abs_repo}/{item.archive_dest}"
         success, msg = self._rsync_file(item.source_path, full_dest)
         if not success:
@@ -263,23 +285,40 @@ class ServerArchiver:
         return True, "OK"
 
     def _rsync_file(self, local_path: Path, remote_abs_path: str) -> Tuple[bool, str]:
-        """Copy file to server via rsync.
+        """Copy a file to the server and confirm the server holds the same bytes.
 
-        -s (protect args) keeps the remote side from shell-interpreting the
-        path — spaces survive plain -a, but a NEWLINE in a filename broke the
-        remote command and failed nightshift-outbox nightly (observed
-        2026-07-29: a roam-export page with an embedded newline).
+        The caller deletes the local file when this returns True, so True means
+        the remote sha256 matched, not merely that a copy command exited 0.
+
+        Plain ssh with every path shell-quoted, not rsync: macOS ships openrsync,
+        which rejects `-s`, and the first real run on 2026-10-18 failed on every
+        file. Quoting keeps spaces and newlines in names intact (a roam-export
+        page with an embedded newline broke the remote command on 2026-07-29).
+        The file is written to a temporary name and renamed, so an interrupted
+        copy never sits at the real path. The hash reads stdin: with a filename
+        argument, sha256sum escapes odd names and prefixes the hash with `\\`.
         """
+        q = shlex.quote
+        part = f"{remote_abs_path}.part-archive"
+        cmd = (f"mkdir -p {q(os.path.dirname(remote_abs_path))} && cat > {q(part)} && "
+               f"mv -f {q(part)} {q(remote_abs_path)} && "
+               f"{{ sha256sum < {q(remote_abs_path)} 2>/dev/null || shasum -a 256 < {q(remote_abs_path)}; }}")
         try:
-            result = subprocess.run(
-                ["rsync", "-a", "-s", str(local_path), f"{self.host}:{remote_abs_path}"],
-                capture_output=True, text=True, timeout=120
-            )
-            return result.returncode == 0, result.stdout + result.stderr
+            with open(local_path, "rb") as fh:
+                result = subprocess.run(["ssh", self.host, cmd], stdin=fh,
+                                        capture_output=True, timeout=300)
         except subprocess.TimeoutExpired:
-            return False, "rsync timed out"
+            return False, "copy timed out"
         except Exception as e:
             return False, str(e)
+        out = result.stdout.decode(errors="replace")
+        if result.returncode != 0:
+            return False, (out + result.stderr.decode(errors="replace")).strip()
+        remote_sha = out.split()[0] if out.split() else ""
+        local_sha = hashlib.sha256(local_path.read_bytes()).hexdigest()
+        if remote_sha != local_sha:
+            return False, f"checksum mismatch after copy (local {local_sha[:12]}, server {remote_sha[:12] or 'none'})"
+        return True, "OK"
 
     def commit_changes(self, space: str, items: List[ArchiveItem]) -> Tuple[bool, str]:
         """Commit and push changes to archive repo."""
@@ -325,6 +364,10 @@ class LocalArchiver:
             repo_path.mkdir(parents=True)
             # Initialize git repo
             subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, timeout=30)
+        gi = repo_path / ".gitignore"
+        lines = gi.read_text().splitlines() if gi.exists() else []
+        if PRIVATE_IGNORE not in lines:
+            gi.write_text("\n".join([*lines, PRIVATE_IGNORE]) + "\n")
         return True
 
     def list_archived_files(self, space: str) -> set:

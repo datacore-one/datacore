@@ -36,8 +36,11 @@ phases:
     description: Mark completed tasks as DONE
 
   # Learning is NOT a wrap-up phase any more. The session archive written by
-  # `preflight` is the handoff; `io.datacore.session-learning` (05:20, launchd)
-  # sweeps the whole day at once via session_learning_sweep.py.
+  # `preflight` is the handoff: each session waits there as `pending` until
+  # session_learning_sweep.py sweeps it. The sweep has no schedule: its Mac job
+  # (mac-session-learning) was deleted on 2026-10-05 and the job manifest has
+  # nothing in its place, so pending sessions wait until someone runs
+  # `python3 .datacore/lib/session_learning_sweep.py --backlog`.
   #
   # The two phases that used to live here — session-learning-coordinator and
   # learning-reviewer — cost a median 405k output tokens and ~14 subagent

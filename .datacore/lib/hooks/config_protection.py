@@ -44,6 +44,11 @@ GITHOOK_RE = re.compile(r"/\.datacore/githooks/[\w.-]+$")
 # non-zero exit. Content with none of these cannot block anything.
 PY_BLOCKS = re.compile(r"exit\(\s*2\s*\)|return\s+2\b|[\"']deny[\"']|SystemExit\(\s*2\s*\)")
 SH_BLOCKS = re.compile(r"\bexit\s+[1-9]")
+# Guards run by git (pre-commit, pre-push) refuse with any non-zero exit, as
+# git hooks do; the ownership guard returns 1. Judging them by the Claude-hook
+# exit 2 flagged every edit of log_ownership_guard.py as a stub (2026-11-08).
+GIT_HOOK_GUARDS = {"ledger_write_gate.py", "log_ownership_guard.py"}
+PY_GIT_BLOCKS = re.compile(PY_BLOCKS.pattern + r"|return\s+1\b|exit\(\s*1\s*\)|SystemExit\(\s*1\s*\)")
 BYPASSES = [
     (re.compile(r"\bSKIP_PRE_PUSH="), "SKIP_PRE_PUSH skips the pre-push guard"),
     (re.compile(r"--no-verify\b"), "--no-verify skips the git guards"),
@@ -181,7 +186,8 @@ def switch_off(tool: str, tool_input: dict) -> str | None:
     m = GUARD_FILE_RE.search(file_path)
     if m and m.group(1) in GUARDS:
         after = _after(tool, tool_input, file_path)
-        if after is not None and not PY_BLOCKS.search(after):
+        blocks = PY_GIT_BLOCKS if m.group(1) in GIT_HOOK_GUARDS else PY_BLOCKS
+        if after is not None and not blocks.search(after):
             return f"this leaves {m.group(1)} unable to block anything (a do-nothing stub)"
         return None
     if GITHOOK_RE.search(file_path):

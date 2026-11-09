@@ -5,8 +5,10 @@ frequency: monthly
 duration: 45min
 tools: [Read, Write, Edit, plur_recall_hybrid, datacore.search]
 # DIP-0050: judged by this run's record, written during the run.
+# Under 1-tracks/: the space pre-commit hook refuses a root `reports/` folder
+# (DIP-0015), so a report written there never left the host (2026-10-19..23).
 evidence:
-  path: "reports/hypothesis-review-{date}.md"
+  path: "1-tracks/ops/reports/hypothesis-review-{date}.md"
   require: ["^# Hypothesis Review", "^## "]
   min_bytes: 2000
 ---
@@ -90,4 +92,4 @@ reframe) on every cycle.
 
 ## Run record
 
-Write `reports/hypothesis-review-YYYY-MM-DD.md`, headed `# Hypothesis Review — YYYY-MM-DD`: one `##` section per active hypothesis with its verdict and evidence; the memo captured with `datacore.capture` can link to it. The runner commits it and records the run; do not log the run anywhere else.
+Write `1-tracks/ops/reports/hypothesis-review-YYYY-MM-DD.md`, headed `# Hypothesis Review — YYYY-MM-DD`: one `##` section per active hypothesis with its verdict and evidence; the memo captured with `datacore.capture` can link to it. The runner commits it and records the run; do not log the run anywhere else.

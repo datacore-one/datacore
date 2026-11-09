@@ -79,12 +79,12 @@ def _task(target: str, day: str) -> tuple[str, str, str]:
     and anything not in git is simply not there. That cost a live round to
     learn on 2026-09-18, when the task counted a generated, gitignored file.
 
-    The artifact lives under `4-outbox`, which DIP-0015's structure hook
+    The artifact lives under `4-archive`, which DIP-0015's structure hook
     permits; a top-level directory would be refused at commit time and no
     agent could ever satisfy the check.
     """
-    src = f"4-outbox/{MARK}/input-{day}.txt"
-    out = f"4-outbox/{MARK}/count-{day}.txt"
+    src = f"4-archive/{MARK}/input-{day}.txt"
+    out = f"4-archive/{MARK}/count-{day}.txt"
     title = f"count the lines of {src} and write only that number into {out}"
     check = (f'test -f {out} && test "$(wc -l < {src} | tr -d " ")" '
              f'= "$(tr -d "[:space:]" < {out})"')
@@ -131,7 +131,8 @@ def cmd_run(args) -> int:
     if prev.get("verdict") == "dispatched" and prev.get("item"):
         from ledger.fold import fold
         from ledger.log import read_events
-        item = fold(read_events(space)).items.get(prev["item"])
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space).items.get(prev["item"])
         status = getattr(item, "status", None)
         age_h = (time.time() - float(prev.get("at", 0))) / 3600
         if status in ("completed", "verified"):
@@ -203,7 +204,8 @@ def cmd_check(args) -> int:
         return 0 if last.get("verdict") != "failed" else 1
 
     space = args.space.resolve()
-    item = fold(read_events(space)).items.get(iid)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    item = authoritative_state(space).items.get(iid)
     age_h = (time.time() - float(last.get("at", 0))) / 3600
     status = getattr(item, "status", None)
 

@@ -29,8 +29,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 
-DEFAULT_KEYS_DIR = Path.home() / ".datacore" / "keys"
-DEFAULT_REGISTRY_PATH = DATACORE_ROOT / ".datacore" / "keys" / "registry.yaml"
+# DATACORE_KEYS_DIR lets a test suite give every process it starts a scratch key
+# folder (a module patch reaches only its own process; 2026-10-27).
+DEFAULT_KEYS_DIR = Path(os.environ.get("DATACORE_KEYS_DIR") or Path.home() / ".datacore" / "keys")
+# The scratch folder takes the registry with it: otherwise a test subprocess,
+# signing by default since 2026-10-31, registered its test actors in the real
+# registry of the machine running the suite.
+DEFAULT_REGISTRY_PATH = (Path(os.environ["DATACORE_KEYS_DIR"]) / "registry.yaml" if os.environ.get("DATACORE_KEYS_DIR")
+                         else DATACORE_ROOT / ".datacore" / "keys" / "registry.yaml")
 
 
 def validate_actor_name(actor: str) -> None:
@@ -362,8 +368,17 @@ class RotationRefused(ValueError):
 
 def recorded_rotations(space_dir: Path, actor: str) -> list:
     """The `key.rotate` events for `actor` in a space's ledger, oldest first."""
+    from .hub import authoritative_events
     from .log import read_events
-    return [e for e in read_events(Path(space_dir))
+    # A hub space: only admitted records count (round 6, decision-reader guard).
+    events, kw = authoritative_events(Path(space_dir), read_events(Path(space_dir)))
+    # ... and through the ONE correction rule (Codex final audit, F4): a
+    # rejected or reversed record is no evidence. (A rotation is a control
+    # record and is never reversible, owner round 7; the filter is what keeps
+    # this reader in step with `ledger.finality` whatever that list says.)
+    from .finality import effective_events
+    events = effective_events(events, kw)
+    return [e for e in events
             if e.type == "key.rotate" and isinstance(e.payload, dict) and e.payload.get("actor") == actor]
 
 

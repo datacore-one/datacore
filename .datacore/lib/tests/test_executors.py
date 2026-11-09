@@ -157,7 +157,7 @@ class TestExecutorConformance:
         assert p["cents"] == 42 and p["ref"] == f"executor:{name}"
         assert p["executor"] == name
         assert spend_events[0].actor == "test-actor"
-        assert spend_events[0].sig == ""  # unsigned by default
+        assert spend_events[0].sig  # signed by default (2026-10-31)
 
     def test_error_run_emits_no_spend_event(self, name, hermetic_env, monkeypatch):
         executor = get_executor(name)

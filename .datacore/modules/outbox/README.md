@@ -21,10 +21,9 @@ Content routing out of active workspaces for Datacore.
 ## Folder Structure
 
 ```
-[space]/4-outbox/
-  archive/    -- queue for archive repo
-  _routing.yaml
-  _index.md
+[space]/4-archive/   -- the space's archive and the processor's queue
+  _index.md          -- stays in the space
+  <original path>/   -- archived content, under the path it had when active
 ```
 
 ## Installation

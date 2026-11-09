@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""fleet-hire -- hire or retire an agent, only on the owner's grant.
+
+    fleet-hire propose SPEC.yaml --values VALUES [--out PROPOSAL.json]
+    fleet-hire hire    --proposal PROPOSAL.json --space SPACE --values VALUES [--dry-run]
+    fleet-hire retire  NAME --space SPACE --values VALUES [--out PROPOSAL.json | --proposal PROPOSAL.json]
+
+A hire starts as a proposal: SPEC names the agent, its runtime template, role,
+storage and duties (optionally `identity_dir`, `clones`, `setup`). `propose`
+checks it against the templates in VALUES and the licence cap (`maxAgents`),
+and prints the exact payload plus the command the owner runs to approve it:
+
+    ledger_cli approve --space SPACE --payload "$(cat PROPOSAL.json)"
+
+That grant (`approval.grant` by the policy's approver, bound to the payload's
+hash) is the only thing that lets `hire` proceed. `hire` records the hire as a
+co-signed `item.create` (effect `agent.hire`, `approval_ref` to the grant) --
+the ledger accepts it exactly once and only for unchanged content -- then adds
+the agent to VALUES (running: false), installs it, and runs the playbook:
+a new signing key (generated once, never for an existing agent), identity,
+clones, setup, start marker, start; finally `running: true` in VALUES.
+
+`retire` is the same with effect `agent.retire`: on the grant it stops the agent
+and sets `running: false`; its volume, key Secret and ledger are kept.
+
+The controller is the only part with rights to create agents (an operator
+kubeconfig). An agent may propose; running `fleet-hire hire|retire` or `helm`
+is the cosign effect `agent.hire` for every agent (tool_effects.yaml).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1]))  # .datacore/lib
+
+NAME = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+
+
+class HireRefused(Exception):
+    pass
+
+
+def _yaml():
+    from ruamel.yaml import YAML
+    y = YAML()
+    y.preserve_quotes = True
+    y.indent(mapping=2, sequence=4, offset=2)
+    return y
+
+
+def _load(values: Path) -> dict:
+    import yaml
+    return yaml.safe_load(Path(values).read_text()) or {}
+
+
+def propose(spec: dict, values: Path) -> dict:
+    """The exact payload the owner approves; refuses what cannot be hired."""
+    v = _load(values)
+    name, runtime = spec.get("name", ""), spec.get("runtime", "")
+    if not NAME.match(name):
+        raise HireRefused(f"name {name!r}: lowercase letters, digits and dashes, 2-31 characters")
+    runtimes = v.get("runtimes") or {}
+    if runtime not in runtimes:
+        raise HireRefused(f"unknown runtime {runtime!r} (templates: {', '.join(sorted(runtimes)) or 'none'})")
+    agents = v.get("agents") or {}
+    if name in agents:
+        raise HireRefused(f"{name} is already an agent in {values}")
+    cap = int(v.get("maxAgents") or 0)
+    if cap and len(agents) + 1 > cap:
+        raise HireRefused(f"licence cap: {len(agents)} agent(s) of {cap}; raising maxAgents is the owner's decision")
+    for field in ("role", "storage", "crontab"):
+        if not spec.get(field):
+            raise HireRefused(f"spec needs {field}")
+    hire = {k: spec[k] for k in ("name", "runtime", "role", "storage", "crontab", "charter", "home",
+                                 "clones", "setup", "identity_dir") if spec.get(k)}
+    return {"id": f"hire-{name}", "title": f"Hire {name} ({spec['role']}) on the {runtime} template",
+            "effects": ["agent.hire"], "hire": hire}
+
+
+def retire_proposal(name: str, values: Path) -> dict:
+    if name not in (_load(values).get("agents") or {}):
+        raise HireRefused(f"{name} is not an agent in {values}")
+    return {"id": f"retire-{name}", "title": f"Retire {name}: stop it; keep its volume, key and ledger",
+            "effects": ["agent.retire"], "retire": {"name": name}}
+
+
+def find_grant(space: Path, payload: dict):
+    """The owner's grant for exactly this payload, or None."""
+    from ledger.log import read_events
+    from ledger.policy import approval_payload_hash, load_policy
+    approver = load_policy().approver
+    want = approval_payload_hash(payload)
+    for e in read_events(Path(space)):
+        if (e.type == "approval.grant" and e.actor == approver and e.payload.get("item") == payload["id"]
+                and e.payload.get("payload_hash") == want):
+            return e
+    return None
+
+
+def recorded(space: Path, payload: dict):
+    """The item.create already recording exactly this approved payload, or None."""
+    from ledger.log import read_events
+    from ledger.policy import approval_payload_hash
+    want = approval_payload_hash(payload)
+    for e in read_events(Path(space)):
+        if (e.type == "item.create" and e.payload.get("id") == payload["id"]
+                and approval_payload_hash(e.payload) == want):
+            return e
+    return None
+
+
+def record(space: Path, actor: str, payload: dict):
+    """Record the hire (or retirement) as a co-signed item.create; refuses without the grant."""
+    from ledger.log import EventLog
+    from ledger.policy import guarded_append
+    grant = find_grant(space, payload)
+    if grant is None:
+        raise HireRefused(f"no owner's grant for exactly this proposal ({payload['id']}); approve it with "
+                          f"ledger_cli approve --space {space} --payload '<the proposal JSON>'")
+    return guarded_append(EventLog(Path(space), actor), "item.create", {**payload, "approval_ref": grant.hash})
+
+
+def agent_entry(hire: dict) -> dict:
+    name = hire["name"]
+    entry = {"runtime": hire["runtime"], "running": False, "signingKeySecret": f"{name}-signing-key",
+             "signingKeyName": f"{name}.key", "storage": hire["storage"], "crontab": hire["crontab"]}
+    if hire.get("home"):
+        entry["home"] = hire["home"]
+    return entry
+
+
+def _set_agent(values: Path, name: str, entry: dict | None = None, running: bool | None = None) -> None:
+    y = _yaml()
+    d = y.load(Path(values).read_text())
+    agents = d.setdefault("agents", {})
+    if entry is not None:
+        from ruamel.yaml.scalarstring import LiteralScalarString
+        agents[name] = {**entry, "crontab": LiteralScalarString(entry["crontab"])}
+    if running is not None:
+        agents[name]["running"] = running
+    with Path(values).open("w") as f:
+        y.dump(d, f)
+
+
+def _run(*cmd, env=None) -> None:
+    print("+", " ".join(cmd), file=sys.stderr)
+    subprocess.run(cmd, check=True, env=env)
+
+
+def _helm(values: Path, ns: str) -> None:
+    _run("helm", "upgrade", "fleet", str(HERE.parent / "chart" / "fleet"), "-n", ns, "-f", str(values))
+
+
+def carry_out_hire(payload: dict, values: Path, ns: str, keys_dir: Path) -> None:
+    from ledger.keys import ensure_keypair
+    hire = payload["hire"]
+    name = hire["name"]
+    v = _load(values)
+    image = ((v.get("runtimes") or {}).get(hire["runtime"]) or {}).get("image")
+    if not image:
+        chart_values = _load(HERE.parent / "chart" / "fleet" / "values.yaml")
+        image = chart_values["runtimes"][hire["runtime"]]["image"]
+    home = hire.get("home") or "/var/lib/agent"
+    _set_agent(values, name, agent_entry(hire))
+    _helm(values, ns)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        # A new agent's key, made once here and kept only as its Secret.
+        verify = ensure_keypair(name, keys_dir=keys_dir, registry_path=tmp / "registry.json")
+        print(f"fleet-hire: {name}'s verify key {verify} -- add it to verify_keys in principals.yaml "
+              f"on every machine that verifies {name}'s events", file=sys.stderr)
+        ident = Path(hire.get("identity_dir") or tmp / "identity")
+        if not hire.get("identity_dir"):
+            (ident / ".datacore").mkdir(parents=True)
+            (ident / ".datacore/identity.env").write_text(f"DATACORE_ACTOR={name}\nDATACORE_LEDGER_SIGN=1\n")
+        settings = tmp / "new.env"
+        default_setup = {"openclaw": "openclaw config set gateway.mode local"}.get(hire["runtime"], "")
+        settings.write_text("\n".join([
+            f"AGENT={name}", f"NS={ns}", f"VALUES={values}", f"IMAGE={image}", f"AGENT_HOME={home}",
+            f"IDENTITY_DIR={ident}", f"KEY_FILE={keys_dir / (name + '.key')}",
+            f"IDENTITY='{hire.get('identity', '.datacore/identity.env')}'",
+            "CLONES='" + "\n".join(hire.get("clones") or []) + "'",
+            "SETUP=" + json.dumps(hire.get("setup") or default_setup),
+        ]) + "\n")
+        env = {**os.environ, "NEW_ENV": str(settings)}
+        for step in ("preflight", "key", "identity", "clone", "setup", "mark", "start"):
+            _run(str(HERE / "agent-new"), step, env=env)
+    _set_agent(values, name, running=True)
+    print(f"fleet-hire: {name} hired and running; {values} records running: true", file=sys.stderr)
+
+
+def carry_out_retire(payload: dict, values: Path, ns: str) -> None:
+    name = payload["retire"]["name"]
+    _set_agent(values, name, running=False)
+    _helm(values, ns)
+    print(f"fleet-hire: {name} retired (stopped); volume, key Secret and ledger kept", file=sys.stderr)
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("propose")
+    p.add_argument("spec", type=Path)
+    p.add_argument("--values", type=Path, required=True)
+    p.add_argument("--out", type=Path)
+    h = sub.add_parser("hire")
+    h.add_argument("--proposal", type=Path, required=True)
+    h.add_argument("--space", type=Path, required=True)
+    h.add_argument("--values", type=Path, required=True)
+    h.add_argument("--ns", default="firm")
+    h.add_argument("--actor", default=os.environ.get("DATACORE_ACTOR", ""))
+    h.add_argument("--dry-run", action="store_true", help="check the grant and record nothing")
+    r = sub.add_parser("retire")
+    r.add_argument("name")
+    r.add_argument("--space", type=Path, required=True)
+    r.add_argument("--values", type=Path, required=True)
+    r.add_argument("--ns", default="firm")
+    r.add_argument("--actor", default=os.environ.get("DATACORE_ACTOR", ""))
+    r.add_argument("--out", type=Path)
+    r.add_argument("--proposal", type=Path)
+    a = ap.parse_args(argv)
+    try:
+        if a.cmd == "propose":
+            import yaml
+            payload = propose(yaml.safe_load(a.spec.read_text()), a.values)
+        elif a.cmd == "retire" and not a.proposal:
+            payload = retire_proposal(a.name, a.values)
+        else:
+            payload = json.loads(a.proposal.read_text())
+        if a.cmd == "propose" or (a.cmd == "retire" and not a.proposal):
+            text = json.dumps(payload, indent=2, sort_keys=True)
+            if a.out:
+                a.out.write_text(text + "\n")
+            print(text)
+            print(f"\napprove (owner): ledger_cli approve --space <space> --payload \"$(cat {a.out or 'PROPOSAL.json'})\"",
+                  file=sys.stderr)
+            return 0
+        if not a.actor:
+            raise HireRefused("set --actor (or DATACORE_ACTOR): who records the hire")
+        if a.cmd == "hire" and a.dry_run:
+            grant = find_grant(a.space, payload)
+            print(f"fleet-hire: grant {'found: ' + grant.hash if grant else 'MISSING'}", file=sys.stderr)
+            return 0 if grant else 1
+        event = recorded(a.space, payload)
+        if event is not None:  # recorded before; a later step failed -- carry on
+            print(f"fleet-hire: {payload['id']} already recorded as {event.hash}; resuming", file=sys.stderr)
+        else:
+            event = record(a.space, a.actor, payload)
+            print(f"fleet-hire: recorded {payload['id']} as {event.hash}", file=sys.stderr)
+        if a.cmd == "hire":
+            carry_out_hire(payload, a.values, a.ns, Path(os.environ.get("FLEET_HIRE_KEYS", tempfile.mkdtemp())))
+        else:
+            carry_out_retire(payload, a.values, a.ns)
+        return 0
+    except HireRefused as exc:
+        print(f"fleet-hire: refused: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

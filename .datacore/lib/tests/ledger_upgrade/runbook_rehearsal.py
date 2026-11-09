@@ -4,8 +4,8 @@
 Runs the commands of `.datacore/docs/ledger-team-install.md` as written --
 doctor, init, principals add, append/claim/complete, items, verify, git init,
 first converge into an empty remote, a hand-written line refused by the write
-gate, the daily verify, the ledger/* branch check, and a void by a second person
-from their own login -- in a throwaway HOME and data root (`_install_kit`), with
+gate, the daily verify, the ledger/* branch check, and a second person's void
+refused (voids retired 2026-11-01) from their own login -- in a throwaway HOME and data root (`_install_kit`), with
 a bare git remote in tmp. Nothing outside tmp is touched.
 
 It is the machine half of the I4 drill: it shows the commands still work. It
@@ -56,12 +56,11 @@ echo "## 6 ledger branches"; git -C "$SPACE" fetch -q origin; git -C "$SPACE" br
 BOB = '''
 set -e
 DC={root}; LIB="$DC/.datacore/lib"; SPACE="$DC/team"; export DATACORE_ROOT="$DC"
-echo "## 8.3 bob voids alice's seq 0"
+echo "## 8.3 bob cannot void alice's seq 0 (voids retired 2026-11-01)"
 python3 "$LIB/ledger_cli.py" init --space "$SPACE" --actor bob
-python3 "$LIB/ledger_cli.py" void --space "$SPACE" --log alice.jsonl --seq 0 --reason 'created by mistake (rehearsal)'
+if python3 "$LIB/ledger_cli.py" void --space "$SPACE" --log alice.jsonl --seq 0 --reason 'created by mistake (rehearsal)'; then
+  echo "FAIL: a new void was accepted"; exit 1; fi
 python3 "$LIB/ledger_cli.py" verify --space "$SPACE"
-if python3 "$LIB/ledger_cli.py" void --space "$SPACE" --log bob.jsonl --seq 0 --reason self; then
-  echo "FAIL: a self-void was accepted"; exit 1; fi
 '''
 
 

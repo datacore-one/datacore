@@ -25,7 +25,8 @@ function findOutboxDirs(basePath) {
   try {
     for (const entry of fs.readdirSync(basePath)) {
       if (/^\d+-/.test(entry)) {
-        const outboxPath = path.join(basePath, entry, '4-outbox')
+        // The archive queue is 4-archive/ (4-outbox was folded into it, 2026-10-18).
+        const outboxPath = path.join(basePath, entry, '4-archive')
         if (fs.existsSync(outboxPath)) {
           dirs.push({ space: entry, path: outboxPath })
         }
@@ -35,17 +36,15 @@ function findOutboxDirs(basePath) {
   return dirs
 }
 
+// The folder's own description files stay in the space (archive_sync.py).
+const FOLDER_FILES = new Set(['_index.md', 'README.md'])
+
 function scanOutboxItems(outboxPath) {
   const items = []
   try {
-    for (const sub of fs.readdirSync(outboxPath)) {
-      const subPath = path.join(outboxPath, sub)
-      if (fs.statSync(subPath).isDirectory()) {
-        const files = fs.readdirSync(subPath).filter(f => !f.startsWith('.'))
-        for (const f of files) {
-          items.push({ destination: sub, file: f })
-        }
-      }
+    for (const f of fs.readdirSync(outboxPath)) {
+      if (f.startsWith('.') || FOLDER_FILES.has(f)) continue
+      items.push({ destination: 'archive', file: f })
     }
   } catch { /* ignore */ }
   return items

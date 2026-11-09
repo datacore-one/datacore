@@ -1,0 +1,12 @@
+#!/bin/sh
+# Recording systemctl: logs every call; units disabled with --now count as
+# stopped, enabled ones as running again.
+echo "$(id -un) $*" >> /var/log/fake-systemctl.log
+state=/tmp/fake-units-disabled.$(id -u)
+touch "$state" 2>/dev/null || true
+case " $* " in
+  *" is-active "*) exit 3 ;;
+  *" disable "*) for u in "$@"; do case "$u" in *.service|*.timer) echo "$u" >> "$state";; esac; done ;;
+  *" enable "*) for u in "$@"; do case "$u" in *.service|*.timer) grep -vx "$u" "$state" > "$state.n"; mv "$state.n" "$state";; esac; done ;;
+esac
+exit 0

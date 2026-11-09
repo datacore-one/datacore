@@ -55,13 +55,13 @@ def test_a_run_commits_its_input_so_the_check_can_read_it(tmp_path):
 
     tracked = subprocess.run(["git", "-C", str(space), "ls-files"],
                              capture_output=True, text=True).stdout
-    assert f"4-outbox/{canary.MARK}/input-" in tracked, tracked
+    assert f"4-archive/{canary.MARK}/input-" in tracked, tracked
 
 
 def test_the_artifact_lives_where_the_structure_hook_allows(tmp_path):
     title, check, src = canary._task("miles", "2026-09-19T0000")
-    assert src.startswith("4-outbox/"), src
-    assert "4-outbox/" in check
+    assert src.startswith("4-archive/"), src
+    assert "4-archive/" in check
 
 
 def test_an_unfinished_canary_inside_its_budget_does_not_page(tmp_path):

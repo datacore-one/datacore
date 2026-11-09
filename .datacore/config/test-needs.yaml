@@ -35,6 +35,11 @@ tests:
   - test: .datacore/lib/tests/test_promise_AGT10_only_own_log.py
     needs: [file:.datacore/registry/principals.yaml, file:.datacore/config/approvals_policy.local.yaml]
     why: which writer owns which log is the install's principal registry
+  - test: .datacore/lib/tests/test_request_pickup_fast_and_briefed.py
+    only:
+      - test_the_claim_is_published_before_the_agent_starts
+    needs: [file:.datacore/registry/principals.yaml]
+    why: the drill files and claims as the install's declared agents
   - test: .datacore/lib/tests/test_promise_MSG8_morning_repair_before_i_wake.py
     needs: [file:.datacore/registry/principals.yaml]
     why: the repair goes to whoever holds the chief-of-operations role in the registry
@@ -336,10 +341,18 @@ tests:
     only: [test_agent_does_not_reach_and_writes_it_up]
     needs: [agent]
     why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT12_delegated_task_is_done.py
+    only: [test_what_the_chief_of_staff_delegated_this_week_was_done_by_the_agent]
+    needs: [file:.datacore/registry/principals.yaml, file:install.yaml]
+    why: who the chief of staff is comes from the install's registry, the firm and system spaces from its space roster
   - test: .datacore/lib/tests/test_promise_AGT11_every_unattended_run_guarded.py
     only: [test_a_real_unattended_run_is_stopped_from_discarding_work]
     needs: [agent]
     why: a real unattended claude -p run (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/lib/tests/test_promise_AGT13_round_robin_handoff.py
+    only: [test_every_pair_of_agents_allowed_to_hand_work_over_has_a_fresh_completed_round]
+    needs: [file:.datacore/registry/principals.yaml, file:.datacore/config/approvals_policy.local.yaml]
+    why: which agents may hand work to which is the install's own registry and policy; reads its live ledgers
   - test: .datacore/lib/tests/test_promise_MEM_02_irreversible_needs_trial_run.py
     only: [test_agent_shows_a_one_item_trial_before_mass_cancel]
     needs: [agent]
@@ -499,5 +512,109 @@ tests:
     why: reads other machines over ssh
   - test: .datacore/lib/tests/ledger_upgrade/test_p0v_void_is_the_only_cancel.py
     only: [test_the_formerly_excepted_events_are_voided_in_ledger]
-    needs: [file:6-meridian/.datacore/events, file:5-plur/.datacore/events]
+    # The trading space is the first `held` space in install.yaml, the PLUR space
+    # the `product` one: needs name roles, never a space of ours (INS-3).
+    needs: [role:held/.datacore/events, role:product/.datacore/events]
     why: reads the live voids in the two spaces whose events the retired exceptions file named
+
+  # ---- promise evals: one machine, or where a person works (owner, 2026-10-30) ----
+  # "We should be running only relevant promises on each machine." Each of these was
+  # read before it was declared: it checks the Mac itself, or the owner's interactive
+  # session set-up, so on the overnight host (Miles's account) it reads could-not-run.
+  - test: .datacore/lib/tests/test_promise_OPS1_jobs_declared_and_checked.py
+    only: [test_every_mac_datacore_job_is_declared_and_verified_daily]
+    needs: [machine:mac]
+    why: reads the Mac's launchd jobs; the eval itself fails elsewhere with "not the mac"
+  - test: .datacore/lib/tests/test_promise_MEM_67_transcripts_copied_nightly.py
+    only: [test_the_mac_mirror_holds_every_transcript_older_than_a_night]
+    needs: [machine:mac]
+    why: reads the Mac's ~/.claude/projects and its mirror in 0-personal/traces
+  - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
+    only: [test_loaded_memory_holds_no_forbidden_detail]
+    needs: [machine:mac]
+    why: reads the auto-memory index of the Mac's project folder (-Users-gregor-Data)
+  - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
+    only: [test_writing_a_forbidden_index_line_is_not_silently_allowed]
+    needs: [workstation]
+    why: probes the write hooks of the owner's interactive sessions
+  - test: .datacore/lib/tests/test_promise_MEM_14_demo_redacts_before_showing.py
+    only: [test_the_guard_is_wired_for_every_prompt]
+    needs: [workstation]
+    why: demos and screen shares happen in the owner's own sessions, not an agent's
+  - test: .datacore/lib/tests/test_promise_MEM_30_evals_first_builder_cannot_edit.py
+    only: [test_interactive_edit_of_an_eval_is_not_silently_allowed]
+    needs: [workstation]
+    why: an interactive edit is a person's session; agents are covered by the in-flight policy test beside it
+  # From the 2026-10-30 rerun on the overnight host, each failure read before declaring:
+  - test: .datacore/lib/tests/test_promise_OPS6_creds_from_broker_same_everywhere.py
+    needs: [file:.datacore/secrets/scripts/distribute.sh, file:.datacore/specs/credential-index.yaml]
+    why: drives the credential store's distribute script and index, which live only where the broker's store is
+  - test: .datacore/lib/tests/test_promise_OPS7_retired_credential_gone_everywhere.py
+    needs: [file:.datacore/secrets/scripts/distribute.sh, file:.datacore/specs/credential-index.yaml]
+    why: drives the credential store's distribute script and index, which live only where the broker's store is
+  - test: .datacore/lib/tests/test_promise_MEM_68_install_reports_module_failure.py
+    needs: [cli:node, file:3-fds/2-projects/datacore-cli/dist/index.js]
+    why: runs the built datacore-cli installer; its build lives in another space's checkout
+  - test: .datacore/modules/chief-of-staff/tests/test_promise_DAY7_evening_review_with_buttons.py
+    only: [test_winston_ran_delivered_and_asked_last_evening]
+    needs: [fleet]
+    why: reads Winston's pod over ssh; only the console reaches him
+  - test: .datacore/modules/chief-of-staff/tests/test_promise_INB_1_every_space_every_morning.py
+    only: [test_winston_runs_the_current_inbox_job_every_morning]
+    needs: [fleet]
+    why: reads Winston's pod over ssh; only the console reaches him
+  - test: .datacore/modules/ventures/tests/test_promise_AGT4_login_limit_says_so_and_waits.py
+    only: [test_agent_says_the_login_expired_and_does_not_pay]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/modules/ventures/tests/test_promise_CAD5_never_another_agents_duty.py
+    only: [test_miles_reports_tris_overdue_duty_instead_of_doing_it]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/modules/mail/tests/test_promise_MEM_34_mail_judged_one_by_one.py
+    only: [test_agent_does_not_bulk_archive_github_mail]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  - test: .datacore/modules/nightshift/tests/test_promise_MEM_40_reminder_open_until_confirmed.py
+    only: [test_agent_that_only_checked_does_not_close_the_reminder]
+    needs: [agent]
+    why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+
+  # ---- promise evals: what an agent pod's checkout does not build or carry (2026-11-05) ----
+  # Read off Winston's pod board against Miles's on dayshift: these were red only on
+  # the pod, each for a piece the pod's checkout lacks. They stay judged wherever it exists.
+  - test: .datacore/lib/tests/test_promise_KNW1_capture_right_space_folder.py
+    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    why: every test starts the built MCP server (a separate repository's build output)
+  - test: .datacore/lib/tests/test_promise_MOD1_module_exact_surface.py
+    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    why: every test starts the built MCP server (a separate repository's build output)
+  - test: .datacore/lib/tests/test_promise_MOD2_broken_module_reported_isolated.py
+    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    why: every test starts the built MCP server (a separate repository's build output)
+  - test: .datacore/lib/tests/test_promise_AGT5_no_agent_merges.py
+    only: [test_the_shepherd_never_merges_even_a_perfect_low_risk_pr]
+    needs: [module:nightshift]
+    why: loads the nightshift module's merge_shepherd
+  - test: .datacore/lib/tests/test_promise_OPS10_jobs_never_set_aside_others_work.py
+    only: [test_the_overnight_rescue_loses_nothing_and_records_and_names_what_it_set_aside, test_a_rescue_that_cannot_be_pushed_keeps_the_branch_and_says_so, test_the_rescue_code_never_stashes_resets_the_tree_or_cleans]
+    needs: [module:nightshift]
+    why: loads the nightshift module's run.py and run_rescue.py
+  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_DAY_3_briefing_open_only.py
+    needs: [python:fastapi]
+    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_DAY4_numbers_trace_to_data.py
+    needs: [python:fastapi]
+    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_DAY5_what_needs_you_complete.py
+    needs: [python:fastapi]
+    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_MOD8_daemon_serves_and_recovers.py
+    needs: [python:fastapi]
+    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_MSG9_never_calls_failing_healthy.py
+    needs: [python:fastapi]
+    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_TSK_9_decision_age_limit.py
+    needs: [python:fastapi]
+    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it

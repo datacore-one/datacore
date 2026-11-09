@@ -444,7 +444,7 @@ Flag items for archive review when:
 
 | Space | Archive Location | Structure |
 |-------|------------------|-----------|
-| Personal | `4-outbox/archive/[topic]/` | Mirror active structure |
+| Personal | `4-archive/[topic]/` | Mirror active structure |
 | Org | `4-archive/[category]/` | By document type |
 
 #### Archive Index Format

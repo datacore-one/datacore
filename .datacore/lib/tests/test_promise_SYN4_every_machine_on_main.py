@@ -31,6 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -53,11 +55,14 @@ def _probe(name: str, cfg: dict) -> tuple[str, str]:
     access = cfg.get("access") or {}
     dirs = [access.get("data_root") or "~/Data", access.get("runner") or "~/.datacore/v2-runner"]
     script = PROBE.replace("__DIRS__", " ".join(f"'{d}'" for d in dict.fromkeys(dirs)))
-    alias = cfg.get("ssh_alias") or name
-    cmd = (["bash", "-c", script] if alias == "-" or name == "mac" else
-           ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, script])
+    # Where the machine's code runs comes from the roster (fleet_reach): this
+    # machine locally, a host over ssh, an agent in its k3s pod. (An entry with
+    # no ssh alias used to be probed LOCALLY, reporting this machine's checkout
+    # as the agent's.)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        r = fleet_reach.run(name, script, timeout=45)
+    except fleet_reach.Unreachable as e:
+        return name, f"UNREACHABLE {e}"
     except subprocess.TimeoutExpired:
         return name, "UNREACHABLE timeout"
     return name, r.stdout if r.returncode == 0 else f"UNREACHABLE rc={r.returncode}"
@@ -84,12 +89,14 @@ def _origin_commits(mirror: Path) -> set[str]:
 
 def _stale_since(mirror: Path, head: str, tip: str) -> float | None:
     """Commit time of the oldest origin/main commit this checkout lacks; None if none."""
-    r = subprocess.run(["git", "-C", str(mirror), "log", "--format=%ct", f"{head}..{tip}"],
+    # rev-list walks commits only; `git log` on this tree-less clone asks for a
+    # tree (git 2.43) and failed on every checkout, current ones too.
+    r = subprocess.run(["git", "-C", str(mirror), "rev-list", "--timestamp", f"{head}..{tip}"],
                        capture_output=True, text=True, timeout=45,
                        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"})
     if r.returncode != 0:
         return -1.0   # objects unknown here: cannot prove it is current
-    times = [int(t) for t in r.stdout.split()]
+    times = [int(line.split()[0]) for line in r.stdout.splitlines() if line.strip()]
     return min(times) if times else None
 
 
@@ -97,7 +104,10 @@ def _stale_since(mirror: Path, head: str, tip: str) -> float | None:
 def test_every_machine_runs_current_main(tmp_path):
     mirror, tip = _mirror(tmp_path)
     known = _origin_commits(mirror)
-    servers = _servers()
+    here = fleet_reach.this_machine()
+    # A retired machine runs nothing; another workstation checks itself on its own run.
+    servers = {k: v for k, v in _servers().items()
+               if not v.get("retired") and (v.get("kind") != "workstation" or k == here)}
     with ThreadPoolExecutor(len(servers)) as pool:
         outs = dict(pool.map(lambda kv: _probe(*kv), servers.items()))
     problems, seen = [], 0

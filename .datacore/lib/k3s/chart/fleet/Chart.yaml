@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fleet
+description: Datacore agents on k3s -- one Deployment per agent, all egress through one allow-list proxy.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

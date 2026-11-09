@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+import fleet_reach
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _audit_contract import AGENTS, audit_module, finding, findings_file, head_sha  # noqa: E402
 
@@ -68,8 +70,8 @@ def test_a_clean_night_says_nothing(tmp_path):
 
 @pytest.mark.production
 def test_the_missed_night_check_is_scheduled_on_the_box():
-    r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "winston",
-                        "crontab -l"], capture_output=True, text=True, timeout=45)
+    # Winston's duties run in his k3s pod on the box (roster); its schedule is the supercronic file.
+    r = fleet_reach.run("box", fleet_reach.schedule_listing(fleet_reach.place("box")), timeout=45)
     assert r.returncode == 0, r.stderr[-300:]
     lines = [ln for ln in r.stdout.splitlines() if "cross_model_audit" in ln and not ln.startswith("#")]
     assert lines, "no cross_model_audit entry in the box crontab: a missed night would be silent"

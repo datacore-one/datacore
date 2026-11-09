@@ -1,0 +1,137 @@
+#!/bin/sh
+# node-setup -- prepare one machine as the single k3s node for Datacore agents.
+# Run as root on the node. Steps are separate; each reports what it changed.
+#
+#   node-setup inspect                 memory, disk, listening ports, local model, firewall
+#   node-setup k3s TAILNET_IP          install pinned k3s (no ingress, no load balancer)
+#   node-setup lockdown                API and kubelet reachable only from loopback, tailnet, pods
+#   node-setup namespaces              team and shared namespaces
+#   node-setup images BUNDLE.tar.gz    import the agent and proxy images
+#   node-setup tools DIR               install fleetctl, fleet-backup and agent-state from DIR/bin
+#   node-setup backup-timer            nightly fleet-backup at 01:00 UTC (before any agent's morning work)
+#   node-setup killswitch USER         read-and-scale-only kubeconfig for USER (chat kill switch)
+set -eu
+K3S_VERSION=${K3S_VERSION:-v1.31.4+k3s1}
+NS=${NS:-firm}
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+log() { echo "node-setup: $*"; }
+
+inspect() {
+    free -h | sed -n 1,2p; df -h / | tail -1; nproc
+    echo "--- listening"; ss -tlnpH | awk '{print $4, $6}' | sort -u
+    echo "--- local model"; systemctl is-active ollama 2>/dev/null || true
+    pgrep -fa 'ollama|llama-server' | cut -c1-120 || true
+    echo "--- firewall"; (ufw status 2>/dev/null || true) | head -5
+    systemctl is-active fail2ban tailscaled 2>/dev/null || true
+}
+
+k3s_install() {
+    tip=$1
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - \
+        --disable traefik --disable servicelb \
+        --cluster-cidr 10.42.0.0/16 --service-cidr 10.43.0.0/16 \
+        --tls-san "$tip" --write-kubeconfig-mode 600 \
+        --secrets-encryption
+    # The node registers a few seconds after the service starts; `wait --all`
+    # on no nodes fails at once (seen on the second machine, 2026-10-26).
+    i=0; until kubectl get nodes -o name 2>/dev/null | grep -q .; do
+        i=$((i + 1)); [ "$i" -le 90 ] || { log "no node registered after 3 minutes"; exit 1; }; sleep 2
+    done
+    kubectl wait --for=condition=Ready node --all --timeout=180s
+    log "k3s $K3S_VERSION running"
+}
+
+lockdown() {
+    # Only loopback, the tailnet and the pod network may reach the API (6443)
+    # and the kubelet (10250); everything else is dropped. Idempotent.
+    for port in 6443 10250; do
+        iptables -C INPUT -p tcp --dport "$port" -j DATACORE-K3S 2>/dev/null && continue
+        iptables -N DATACORE-K3S 2>/dev/null || true
+        iptables -I INPUT -p tcp --dport "$port" -j DATACORE-K3S
+    done
+    iptables -F DATACORE-K3S
+    iptables -A DATACORE-K3S -i lo -j RETURN
+    iptables -A DATACORE-K3S -i tailscale0 -j RETURN
+    iptables -A DATACORE-K3S -s 10.42.0.0/16 -j RETURN
+    iptables -A DATACORE-K3S -j DROP
+    mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4.datacore-k3s
+    log "6443 and 10250 limited to loopback, tailscale0 and 10.42.0.0/16 (saved to /etc/iptables/rules.v4.datacore-k3s)"
+}
+
+namespaces() {
+    kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS"
+    kubectl get ns shared >/dev/null 2>&1 || kubectl create ns shared
+}
+
+images() {
+    # Pinned: there is no registry to pull from, and above 85% disk the kubelet
+    # deletes unused images -- an agent scaled to 0 (kill switch, backup) then
+    # cannot start again (seen on the first node, 2026-10-25).
+    gunzip -c "$1" | k3s ctr images import -
+    for i in $(k3s ctr images ls -q | grep -E 'agent-(hermes|openclaw|egress)'); do
+        k3s ctr images label "$i" io.cri-containerd.pinned=pinned >/dev/null
+        echo "$i pinned"
+    done
+}
+
+tools() {
+    install -m 755 "$1/bin/fleetctl" /usr/local/bin/fleetctl
+    install -m 750 "$1/bin/fleet-backup" /usr/local/sbin/fleet-backup
+    install -m 750 "$1/bin/agent-state" /usr/local/sbin/agent-state
+    log "fleetctl, fleet-backup and agent-state installed"
+}
+
+backup_timer() {
+    cat > /etc/systemd/system/fleet-backup.service <<EOF
+[Unit]
+Description=Nightly copy of every agent volume (Datacore k3s)
+[Service]
+Type=oneshot
+Environment=NS=$NS
+ExecStart=/usr/local/sbin/fleet-backup
+EOF
+    cat > /etc/systemd/system/fleet-backup.timer <<'EOF'
+[Unit]
+Description=Nightly agent volume backup
+[Timer]
+OnCalendar=*-*-* 01:00:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload && systemctl enable --now fleet-backup.timer
+    systemctl list-timers fleet-backup.timer --no-pager | head -2
+}
+
+killswitch() {
+    user=$1; home=$(awk -F: -v u="$user" '$1==u{print $6}' /etc/passwd)
+    [ -n "$home" ] || { log "no such user: $user"; exit 1; }
+    for i in $(seq 1 30); do
+        token=$(kubectl -n "$NS" get secret fleet-killswitch-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)
+        [ -n "$token" ] && break; sleep 2
+    done
+    [ -n "$token" ] || { log "no kill-switch token (is the chart installed?)"; exit 1; }
+    out="$home/.kube/fleet-killswitch.yaml"
+    mkdir -p "$home/.kube"
+    kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "$home/.kube/fleet-ca.crt"
+    KUBECONFIG="$out" kubectl config set-cluster fleet --server=https://127.0.0.1:6443 \
+        --certificate-authority="$home/.kube/fleet-ca.crt" --embed-certs >/dev/null
+    KUBECONFIG="$out" kubectl config set-credentials fleet-killswitch --token="$token" >/dev/null
+    KUBECONFIG="$out" kubectl config set-context fleet --cluster=fleet --user=fleet-killswitch --namespace="$NS" >/dev/null
+    KUBECONFIG="$out" kubectl config use-context fleet >/dev/null
+    rm -f "$home/.kube/fleet-ca.crt"
+    chown -R "$user:" "$home/.kube"; chmod 700 "$home/.kube"; chmod 600 "$out"
+    log "kill-switch kubeconfig for $user at $out (scale agents in $NS only)"
+}
+
+case "${1:-}" in
+    inspect) inspect ;;
+    k3s) k3s_install "$2" ;;
+    lockdown) lockdown ;;
+    namespaces) namespaces ;;
+    images) images "$2" ;;
+    tools) tools "$2" ;;
+    backup-timer) backup_timer ;;
+    killswitch) killswitch "$2" ;;
+    *) sed -n '2,13p' "$0"; exit 2 ;;
+esac

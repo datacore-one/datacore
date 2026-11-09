@@ -104,7 +104,7 @@ DRIVES = {"status", "self-protection", "affiliation", "disease-avoidance", "kin-
 # Only these node kinds are expected to carry roadmap items. A constraint is an
 # anti-goal, a vision is not schedulable, and operations are recurring activity —
 # reporting them as uncovered would bury the ones that matter.
-ITEM_BEARING = {"goal", "intent", "initiative"}
+ITEM_BEARING = {"goal", "intent", "initiative", "project"}
 
 
 def load_intents(path: Path) -> dict:
@@ -120,6 +120,20 @@ def load_intents(path: Path) -> dict:
         if m:
             intents[m.group(1)] = kind
     return intents
+
+
+def item_bearing(path: Path) -> set:
+    """Nodes expected to carry roadmap items. A node with :ROADMAP: IS an item."""
+    intents, roadmapped, current = load_intents(path), set(), None
+    for line in path.read_text().splitlines():
+        m = re.match(r"^\s*:INTENT_ID:\s*(\S+)\s*$", line)
+        if m:
+            current = m.group(1)
+        if current and re.match(r"^\s*:ROADMAP:\s*\S", line):
+            roadmapped.add(current)
+        if line.startswith("*"):
+            current = None
+    return {k for k, v in intents.items() if v in ITEM_BEARING} - roadmapped
 
 
 def load_intent_ids(path: Path) -> set:
@@ -319,7 +333,7 @@ def main():
     if args.coverage:
         intents = load_intents(INTENTS_ORG)
         served = {s for i in items for s in (i.get("serves") or [])}
-        bearing = {k for k, v in intents.items() if v in ITEM_BEARING}
+        bearing = item_bearing(INTENTS_ORG)
         covered = served & bearing
         print(f"item-bearing intents: {len(bearing)}   covered: {len(covered)}   "
               f"({100 * len(covered) // max(len(bearing), 1)}%)\n")

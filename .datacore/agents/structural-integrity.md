@@ -213,7 +213,7 @@ Personal space (0-personal/):
 ```python
 ALLOWED_DIRS = {
   'org', 'journal', 'notes', 'content',
-  '0-inbox', '1-active', '2-code', '3-knowledge', '4-outbox', '4-archive',
+  '0-inbox', '1-active', '2-code', '3-knowledge', '4-archive',
   '.obsidian', '.datacore', '.claude', '.git', '.lfs-cache',
 }
 ALLOWED_FILES = {
@@ -233,7 +233,7 @@ Team spaces ([N]-[name]/):
 ```python
 ALLOWED_DIRS = {
   'org', 'journal', 'today', 'docs', 'contacts',
-  '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-outbox', '4-archive',
+  '0-inbox', '1-tracks', '2-projects', '3-knowledge', '4-archive',
   '.datacore', '.claude', '.git',
 }
 ALLOWED_FILES = {

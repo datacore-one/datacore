@@ -32,6 +32,7 @@ Artifact:
 from __future__ import annotations
 
 import argparse
+import re
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -129,7 +130,8 @@ def _sig_ok(e) -> bool:
     from ledger.events import body_dict, canonical_bytes
     from ledger.keys import verify as verify_sig
     try:
-        body = body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)
+        body = body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev, hub=getattr(e, "hub", "") or "",
+                         domain=getattr(e, "domain", "") or "")
         return bool(e.sig) and verify_sig(e.actor, canonical_bytes(body), e.sig)
     except Exception:  # noqa: BLE001 -- an unverifiable record is not a signed one
         return False
@@ -180,6 +182,28 @@ def _artifact_in_git(space: Path, rel: str, sha: str) -> bool:
         if hashlib.sha256(blob).hexdigest() == sha:
             return True
     return False
+
+
+_RESET = re.compile(r"resets\s+(?:([A-Z][a-z]{2})\s+(\d{1,2}),?\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(UTC\)", re.I)
+
+
+def _quota_reset(payload: dict, at: datetime) -> datetime | None:
+    """When a recorded usage limit resets, from its own words ("resets Oct 28, 2pm (UTC)"
+    or "resets 2pm (UTC)"), in UTC; None when the record does not say."""
+    m = _RESET.search(str(payload.get("reason") or ""))
+    if not m:
+        return None
+    mon, day, hh, mm, ap = m.groups()
+    hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
+    if mon:
+        try:
+            d = datetime.strptime(f"{mon} {int(day)} {at.year}", "%b %d %Y").replace(
+                hour=hour, minute=int(mm or 0), tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return d.replace(year=at.year + 1) if d < at - timedelta(days=180) else d
+    d = at.replace(hour=hour, minute=int(mm or 0), second=0, microsecond=0)
+    return d if d > at else d + timedelta(days=1)
 
 
 def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str, name: str,
@@ -235,9 +259,26 @@ def scheduled_state(space: Path, venture: str, owner: str, role: str, freq: str,
         if p.get("result") not in ("blocked", "quota"):
             break
         streak = t
+    # A usage limit that names its reset (owner, 2026-10-28: a usage limit is
+    # "waiting on quota", not a failure). Before the reset it waits; after it, the
+    # duty has one window to really run -- only then is it red, and it says the
+    # limit reset rather than "nothing runs until it resets" (2026-10-29 briefing).
+    reset = _quota_reset(last, ends[-1][0]) if last.get("result") == "quota" and ends else None
+    if reset is not None:
+        if now < reset:
+            return ("amber", 0, f"waiting on quota until {reset:%Y-%m-%d %H:%MZ} (usage limit, not a failure)")
+        if now - reset <= limit:
+            return ("amber", 0, f"usage limit reset at {reset:%Y-%m-%d %H:%MZ}; waiting for its next run")
+        return ("red", days, f"late: no real run since the usage limit reset at {reset:%Y-%m-%d %H:%MZ}: {owner}")
     if (last.get("result") in ("blocked", "quota") and ends and (now - ends[-1][0]) <= limit
             and streak is not None and (now - streak) <= limit + window):
         return ("amber", 0, f"{last['result']}: {last.get('reason', '')[:80]}")
+    if last.get("result") in ("blocked", "quota") and streak is not None and (now - ends[-1][0]) > limit:
+        # The last stop is old and nothing was recorded since: the runs since failed
+        # before any record (a ledger refusal stops them at the first write), so
+        # "waiting on quota" would claim a usage limit nobody saw (W2, 2026-10-23).
+        return ("red", days, f"late: no run recorded since {ends[-1][0].date().isoformat()} "
+                             f"(the last recorded run: {last['result']}): {owner}")
     if last.get("result") in ("blocked", "quota") and streak is not None:
         return ("red", days, f"late: waiting on {last['result']} for {(now - streak).days} day(s), "
                              f"no real run: {owner}")

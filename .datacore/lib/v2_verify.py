@@ -339,12 +339,17 @@ def check_identity(rep: Report) -> None:
     except (UnicodeError, ValueError, yaml.YAMLError):
         rep.add("0044", "actor registry", False, "invalid or ambiguous identity configuration")
         return
-    missing = [n for n, c in servers.items()
+    active = {n: c for n, c in servers.items() if not c.get('retired')}
+    missing = [n for n, c in active.items()
                if not isinstance(c['access'].get('actor'), str)
                or not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', c['access']['actor'])]
-    rep.add("0044", "every machine has an actor", not missing,
-            f"{len(servers) - len(missing)}/{len(servers)}" +
-            (f"; missing: {', '.join(missing)}" if missing else ""))
+    retired = len(servers) - len(active)
+    detail = f"{len(active) - len(missing)}/{len(active)}"
+    if retired:
+        detail += f" (+ {retired} retired)"
+    if missing:
+        detail += f"; missing: {', '.join(missing)}"
+    rep.add("0044", "every machine has an actor", not missing, detail)
     invalid = []
     for name, config in servers.items():
         access = config['access']
@@ -1024,6 +1029,24 @@ def check_transport(rep: Report) -> None:
 
 
 # ── The APPLICATION layer: the part that was never watched ─────────────────
+def hostname_fallback(actor: str, host: str) -> bool:
+    """Is `actor` the hostname standing in for an identity nobody declared?
+
+    The DIP-0044 trap is a FALLBACK: the registry lookup failed and the
+    hostname became the actor. Equal names alone are not it -- in the pods the
+    hostname IS the agent's name (Winston's pod is `winston`, the writer his
+    principal declares), and both identity checks failed on that correct
+    identity on 2026-10-30. A name a principal declares is not a fallback.
+    """
+    if actor != host or actor in ("mac",):
+        return False
+    try:
+        from actor_identity import principal_of
+        return principal_of(actor)[0] is None
+    except Exception:  # noqa: BLE001 -- no registry: cannot clear it, keep the old answer
+        return True
+
+
 def check_declared_identity(rep: Report) -> None:
     """Is this machine's ledger identity DECLARED, or still being guessed?
 
@@ -1050,7 +1073,7 @@ def check_declared_identity(rep: Report) -> None:
     actor = _actor()
     host = socket.gethostname().split(".")[0].lower()
     declared = bool(_identity().get("DATACORE_ACTOR"))
-    if actor == host and actor not in ("mac",):
+    if hostname_fallback(actor, host):
         rep.add("0044", "identity declared", False,
                 f"actor={actor} equals hostname — events filed under the wrong writer")
     elif declared:
@@ -1178,7 +1201,7 @@ def check_app(rep: Report) -> None:
         # An actor equal to the hostname is the DIP-0044 trap: it means the
         # registry lookup failed and events would be filed under the wrong
         # writer. Two of five machines were doing exactly that until caught.
-        ok = actor != host or actor in ("mac",)
+        ok = not hostname_fallback(actor, host)
         rep.add("app", "agents can attest actions", ok,
                 f"actor={actor}" + ("" if ok else f" — equals hostname; registry lookup failed"))
     except Exception as exc:  # noqa: BLE001
@@ -1342,15 +1365,14 @@ def check_finality(rep: Report) -> None:
     # sequencer's claim disagrees with the events on this machine.
     sys.path.insert(0, str(LIB))
     try:
-        from ledger.log import read_events
-        from ledger.seal import verify_seal
+        from ledger.hub import seal_status
     except Exception as exc:  # noqa: BLE001
         rep.add("0042", "seals verify", None, f"import failed: {exc}")
         return
     bad, sealed, unsealed = [], 0, 0
     for s_ in spaces():
         try:
-            ok, _d = verify_seal(read_events(s_))
+            ok, _d = seal_status(s_)          # through admission (round 5, amendment 5)
         except Exception:  # noqa: BLE001
             continue
         if ok is True:

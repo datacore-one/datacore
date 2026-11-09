@@ -99,15 +99,77 @@ def test_add_into_generated_file_leaves_exactly_the_projection(tmp_path):
     assert tid in fold(read_events(space)).items
 
 
-def test_move_into_generated_file_is_refused(tmp_path):
+# -- moving a clarified capture INTO the generated file admits it (owner, fleet
+# console 2026-10-30, "build-admission"). The refusal left every single next
+# action in the inbox night after night: the nightly inbox run had no way to file it.
+
+def _projects_clean(tmp_path, space):
+    generated = space / "org" / "next_actions.org"
+    before = generated.read_text()
+    r = _project(tmp_path, space)
+    assert r.returncode == 0 and "REFUSED" not in r.stdout, r.stdout + r.stderr
+    assert generated.read_text() == before
+
+
+def test_a_captured_task_moved_into_the_generated_file_leaves_the_inbox(tmp_path):
     space = _phase1_space(tmp_path)
     generated = space / "org" / "next_actions.org"
     inbox = space / "org" / "inbox.org"
-    r = _run(ADAPTER, "add", "--file", inbox, "--heading", "Captured, not yet clarified")
-    tid = json.loads(r.stdout)["id"]
-    before = generated.read_text()
+    tid = json.loads(_run(ADAPTER, "add", "--file", inbox, "--heading", "Captured, now clarified").stdout)["id"]
 
     r = _run(ADAPTER, "move", "--from", inbox, "--to", generated, "--id", tid)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout)["moved"] is True
+    assert tid not in inbox.read_text()
+    assert generated.read_text().count(tid) == 1
+    _projects_clean(tmp_path, space)
+
+
+def test_a_hand_written_capture_is_created_in_the_ledger_when_moved(tmp_path):
+    space = _phase1_space(tmp_path)
+    generated = space / "org" / "next_actions.org"
+    inbox = space / "org" / "inbox.org"
+    # Written by hand (or by a mail writer), so the ledger never heard of it, and
+    # nested under the inbox's own section heading.
+    inbox.write_text(inbox.read_text() + "* Inbox\n:PROPERTIES:\n:ID: inbox-section\n:END:\n"
+                     "** TODO Email the auditor\n:PROPERTIES:\n:ID: hand-1\n:CREATED: [2026-10-29 Thu 09:00]\n:END:\n")
+
+    r = _run(ADAPTER, "move", "--from", inbox, "--to", generated, "--id", "hand-1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    from ledger.fold import fold
+    from ledger.log import read_events
+    item = fold(read_events(space)).items["hand-1"]
+    assert item.status == "created"
+    assert item.payload.get("parent") is None  # not nested under the inbox section
+    assert "hand-1" not in inbox.read_text() and "Inbox" in inbox.read_text()
+    assert "\n* TODO Email the auditor" in generated.read_text()
+    _projects_clean(tmp_path, space)
+
+
+def test_a_capture_already_closed_in_the_ledger_stays_in_the_inbox(tmp_path):
+    space = _phase1_space(tmp_path)
+    generated = space / "org" / "next_actions.org"
+    inbox = space / "org" / "inbox.org"
+    tid = json.loads(_run(ADAPTER, "add", "--file", inbox, "--heading", "Already handled").stdout)["id"]
+    from ledger.log import EventLog
+    EventLog(space, "otherhost").append("item.dismiss", {"id": tid, "kind": "done", "reason": "test"})
+    before = (inbox.read_text(), generated.read_text())
+
+    r = _run(ADAPTER, "move", "--from", inbox, "--to", generated, "--id", tid)
+    assert r.returncode != 0
+    assert "closed" in json.loads(r.stdout)["error"]
+    assert (inbox.read_text(), generated.read_text()) == before
+
+
+def test_a_move_out_of_the_generated_file_is_still_refused(tmp_path):
+    space = _phase1_space(tmp_path)
+    generated = space / "org" / "next_actions.org"
+    from ledger.fold import fold
+    from ledger.log import read_events
+    tid = next(iter(fold(read_events(space)).items))
+    before = generated.read_text()
+
+    r = _run(ADAPTER, "move", "--from", generated, "--to", space / "org" / "someday.org", "--id", tid)
     assert r.returncode != 0
     assert "generated" in json.loads(r.stdout)["error"]
     assert generated.read_text() == before

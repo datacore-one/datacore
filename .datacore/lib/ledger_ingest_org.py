@@ -118,9 +118,15 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     if not org_file.exists():
         return {"dismissed": 0, "updated": 0}
     from ledger_project_org import phase
+    import org_readonly
+    if org_readonly.enabled(space):
+        # Phase F: the list is a read-only view. A hand edit reaches the ledger
+        # only through the editor hook (`org_readonly.py hook`), never here.
+        return {"dismissed": 0, "updated": 0, "readonly": True}
     if phase(space) == 1:
         from ledger.projection_state import sync_generated
-        return sync_generated(space, fold(read_events(space)), actor or _this_actor(), dry_run)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        return sync_generated(space, authoritative_state(space), actor or _this_actor(), dry_run)
     # File-level tags, parsed the way genesis does. Items created through the
     # adapter/ingest never recorded `filetags`, while genesis-imported ones
     # do — checkpoint-verify then compares unlike data and reports the same
@@ -136,7 +142,8 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
     except OSError:
         pass
     ws = SafeOrgWorkspace(); ws.load(str(org_file))
-    state = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    state = authoritative_state(space)
     log = None
     dismissed = updated = 0
     for node in ws.all_nodes():
@@ -423,7 +430,9 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
     if (adapter is not None and Path(adapter).resolve() != installed
             or Path(org_workspace_adapter.__file__).resolve() != installed):
         raise ValueError('ID preparation requires the matching installed core adapter')
-    files = [space / 'org' / name for name in ORG_FILES
+    import org_readonly
+    names = ('inbox.org',) if org_readonly.enabled(space) else ORG_FILES  # phase F: the list is read-only
+    files = [space / 'org' / name for name in names
              if (space / 'org' / name).exists()]
     # Validate the complete identity namespace before changing any file. A
     # workspace per file hides collisions and lets ingestion conflate tasks.
@@ -494,7 +503,8 @@ def _projected_duplicates(space: Path, files: list[Path]) -> set[str]:
         return set()
     from ledger.fold import fold
     from ledger.log import read_events
-    known = set(fold(read_events(space)).items)
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    known = set(authoritative_state(space).items)
     return {i for i in shared if i in known}
 
 
@@ -593,6 +603,17 @@ def main() -> int:
     failures = 0
     for space in spaces:
         try:
+            import org_readonly
+            if org_readonly.enabled(space):
+                # Phase F: hand edits to the read-only list are not imported
+                # hourly; the editor hook turns them into adapter commands.
+                if not args.dry_run:
+                    ensure_ids(space)
+                pending = org_readonly.hook(space, quiet=True, out=lambda _line: None)
+                print(f"{space.name:14} read-only lists (phase F): "
+                      + ("no hand edit" if pending == 0 else
+                         f"hand edit waiting for `org_readonly.py hook --space {space} --apply`"))
+                continue
             if not args.dry_run:
                 ensure_ids(space)
             before = scan(space)

@@ -98,12 +98,21 @@ def _first_line(el) -> str:
     return el.tag
 
 
+#: The identity every eval runs under unless it sets its own (owner, 2026-11-05).
+#: On an agent's host the evals inherited that agent (miles, winston), and the
+#: ledger's writer guard refused the fixtures' events in their temporary spaces:
+#: AGT-10, CAD-4 and LED-3/4/5 were red on every agent's board for that alone.
+#: It names no principal, so the guard leaves it to the commit and push gates.
+EVAL_ACTOR = "promise-eval"
+
+
 def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
     """{file name: all tests in it passed}"""
     import os
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as fh:
         xml = fh.name
-    env = {**os.environ, **env_extra, "PROMISE_EVALS_ALL": "1"}   # the scoreboard collects every eval
+    env = {**os.environ, "DATACORE_ACTOR": EVAL_ACTOR, **env_extra,
+           "PROMISE_EVALS_ALL": "1"}   # the scoreboard collects every eval
     if AGENTS:
         env["DATACORE_AGENT_EVALS"] = "1"   # without it an agent eval fails by design (n-a is never a pass)
     result: dict[str, bool] = {f.name: False for f in files}   # a file pytest never reported is not a pass

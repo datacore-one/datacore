@@ -1,5 +1,7 @@
-"""LED-4 (retirement): A bad record is cancelled only by a new, authorised
-cancelling record inside the history, never by a side list of excuses.
+"""LED-4 (retirement of the side list): A bad record is never excused by a side
+list. Since 2026-11-01 no new cancelling record (`ledger.void`) is written; the
+voids already in the history keep their effect (DIP-0034 amendment of
+2026-10-31, items 2 and 3; owner approval of this rewrite 2026-11-01).
 
 Seeded failure: `registry/ledger-exceptions.yaml` is still consulted. An entry
 there (`invalid_signature` or `malformed_hash`) makes `ledger_cli.py verify`
@@ -7,8 +9,13 @@ pass a forged event that no void cancels, the CLI advertises "reviewed
 exception(s)", and key collection (`ledger_keys_collect.signatures`) skips
 events by consulting the side list instead of the ledger's own voids.
 
+Second seeded failure (2026-11-01): `ledger_cli.py void` still wrote a new void.
+
 Promise, as evals: with a side-list entry naming the forged event and no void,
-verify FAILS; with an authorised void, verify passes and reports "1 voided
+verify FAILS; `ledger_cli.py void` is refused, names the forward correction
+(`ledger.compensate`) and writes nothing, so verify still fails; with an
+authorised void in the HISTORY (written before the retirement, by the legacy
+fixture helper `tests/_legacy_void.py`), verify passes and reports "1 voided
 record(s)"; key evidence skips an event only when an in-ledger void cancels it.
 """
 from __future__ import annotations
@@ -23,6 +30,7 @@ from pathlib import Path
 import actor_identity
 from ledger.events import body_dict, compute_hash
 from ledger.log import EventLog
+from tests._legacy_void import append_legacy_void
 
 LIB = Path(__file__).resolve().parents[1]
 PRINCIPALS = """\
@@ -95,12 +103,24 @@ def test_a_side_list_entry_does_not_excuse_a_hash_mismatch(tmp_path):
     assert r.returncode == 1, r.stdout + r.stderr
 
 
-def test_verify_names_the_voided_records(tmp_path):
+def test_cli_void_is_refused_and_names_the_forward_correction(tmp_path):
     root = _root(tmp_path)
     space, seq, _, _ = _forged(root)
     v = _cli(root, "void", "--space", str(space), "--log", "miles.jsonl", "--seq", str(seq),
              "--reason", "hand-written")
-    assert v.returncode == 0, v.stdout + v.stderr
+    assert v.returncode != 0, "ledger_cli void wrote a new void: " + v.stdout + v.stderr
+    assert "ledger.compensate" in v.stderr, v.stderr
+    assert not (space / ".datacore" / "events" / "gregor.jsonl").exists(), "a refused void wrote a log"
+    r = _cli(root, "verify", "--space", str(space))
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_verify_names_the_historically_voided_records(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    space, seq, _, _ = _forged(root)
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", root / ".datacore" / "registry" / "principals.yaml")
+    append_legacy_void(EventLog(space, "gregor"), {
+        "log": "miles.jsonl", "seq": seq, "hash": _forged_hash(space, seq), "reason": "hand-written"})
     r = _cli(root, "verify", "--space", str(space))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "1 voided record(s)" in r.stdout
@@ -112,10 +132,10 @@ def _signatures(root: Path, monkeypatch):
     return ledger_keys_collect.signatures(root)
 
 
-def test_key_evidence_skips_an_event_voided_in_the_ledger(tmp_path, monkeypatch):
+def test_key_evidence_skips_an_event_voided_in_the_ledger_history(tmp_path, monkeypatch):
     root = _root(tmp_path)
     space, seq, _, _ = _forged(root)
-    EventLog(space, "gregor").append("ledger.void", {
+    append_legacy_void(EventLog(space, "gregor"), {
         "log": "miles.jsonl", "seq": seq, "hash": _forged_hash(space, seq), "reason": "hand-written"})
     sigs = _signatures(root, monkeypatch)
     assert all(body["seq"] != seq for body, _ in sigs.get("miles", []))

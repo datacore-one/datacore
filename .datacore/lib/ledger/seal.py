@@ -44,10 +44,12 @@ by sealing. (Lean: DatacoreSpec/LedgerSeal.lean, `latest_is_sequencer`,
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
-from .events import Event, body_dict, canonical_bytes, compute_hash
+from .events import Event, body_dict, canonical_bytes, compute_hash, event_body
 from .fold import fold
 
 
@@ -61,6 +63,9 @@ class Seal:
     sequencer: str
     version: int = 1
     event_set_hash: str = ""
+    #: The root rule (round 6, H3): True -- `pool_work` is hashed whenever set.
+    #: A seal that names none was made before pools, with the older rule.
+    pool_root: bool = False
 
     def includes(self, event: Event) -> bool:
         key = (getattr(event, "log", None) or event.actor) if self.version == 2 else event.actor
@@ -86,14 +91,32 @@ def _roster_sequencer() -> str:
     return role("sequencer") or ""
 
 
+#: A reader checking a HUB space's seals names that hub's grantor explicitly
+#: (ledger.hub: the hub seals its space). Scoped to one `with` block, so it
+#: never changes whose seals the rest of the process believes.
+_SCOPED_SEQUENCER: ContextVar[str] = ContextVar("ledger_scoped_sequencer", default="")
+
+
+@contextmanager
+def as_sequencer(name: str):
+    """Within this block, `sequencer()` is `name` (a hub's grantor)."""
+    token = _SCOPED_SEQUENCER.set(name)
+    try:
+        yield
+    finally:
+        _SCOPED_SEQUENCER.reset(token)
+
+
 def sequencer() -> str:
-    """The designated sequencer, read at call time: `$DATACORE_SEQUENCER`, else
-    the roster's `roles.sequencer`, else none ("" -- no seal is believed).
+    """The designated sequencer, read at call time: an `as_sequencer` scope,
+    else `$DATACORE_SEQUENCER`, else the roster's `roles.sequencer`, else none
+    ("" -- no seal is believed).
 
     One definition for the writer (`ledger_seal.py emit`) and every reader, so
     the role that may seal and the role whose seals are believed cannot drift.
     """
-    return os.environ.get("DATACORE_SEQUENCER") or _roster_sequencer() or DEFAULT_SEQUENCER
+    return (_SCOPED_SEQUENCER.get() or os.environ.get("DATACORE_SEQUENCER") or _roster_sequencer()
+            or DEFAULT_SEQUENCER)
 
 
 def _seal_events(events: list[Event]) -> list[Event]:
@@ -158,6 +181,7 @@ def latest_seal(events: list[Event]) -> Seal | None:
         sequencer=newest.actor,
         version=p.get("version", 1),
         event_set_hash=p.get("event_set_hash", ""),
+        pool_root=p.get("pool_root") is True,
     )
 
 
@@ -222,8 +246,12 @@ def _self_consistent(events: list[Event]) -> list[tuple[str, int]]:
     return sorted(set(bad))
 
 
-def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
+def verify_seal(events: list[Event], fold_kwargs: dict | None = None) -> tuple[bool | None, str]:
     """Recompute the sealed state and compare to the sequencer's claim.
+
+    `fold_kwargs`: the explicit authority a hub space folds with
+    (`lease_grantors`, `policy`; ledger.hub). A hub seals its AUTHORITATIVE
+    state, so a verifier recomputes it with the same inputs.
 
     Returns (None, reason) when there is nothing to check — an unsealed ledger
     is not a failing one. This is the check that makes a designated sequencer
@@ -269,7 +297,7 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     if behind:
         return None, f"behind the seal for: {', '.join(sorted(behind))}"
 
-    if _chain_issue([event for event in events if seal.includes(event)]):
+    if _chain_issue([event for event in events if seal.includes(event)], fold_kwargs):
         return False, "SEAL MISMATCH: incomplete or invalid covered log chain"
     covered = _covered_events(events, seal)
     if _event_set_hash(covered) != seal.event_set_hash:
@@ -277,7 +305,20 @@ def verify_seal(events: list[Event]) -> tuple[bool | None, str]:
     # Every covered event's hash was judged by _chain_issue above, through the
     # one verifier: a second hash loop here refused seals covering an event an
     # in-ledger void had cancelled (Phase 2 V2).
-    recomputed = fold(covered).state_root()
+    # THE ROOT RULE IS THE SEAL'S OWN (round 6, H3), and it only moves forward:
+    # once a seal hashed pool state, a later one that does not is refused.
+    # Every earlier seal by one of the space's SEALERS counts here (Codex round
+    # 6, N3: a promoted grantor may not drop back either) -- in a hub space
+    # each grantor's seals in its own log, else the sequencer's. A seal-shaped
+    # event by anyone else (a writer's rejected proposal) never counts (re-check).
+    grantors = {a for g in ((fold_kwargs or {}).get("lease_grantors") or {}).values() for a in g}
+    sealers = [e for e in events if e.type == "ledger.seal" and (getattr(e, "log", None) or e.actor) == e.actor
+               and e.actor in grantors] if grantors else _seal_events(events)
+    if not seal.pool_root and any(e.hlc < seal.hlc and isinstance(e.payload, dict)
+                                  and e.payload.get("pool_root") is True for e in sealers):
+        return False, ("SEAL DOWNGRADE: an earlier seal used the pool root rule (pool_root); this one "
+                       "does not -- a root rule only moves forward")
+    recomputed = fold(covered, **(fold_kwargs or {})).state_root(pool_root=seal.pool_root)
     if recomputed == seal.state_root:
         n = sum(seal.watermarks.values()) + len(seal.watermarks)
         # COVERAGE IS NOT CORRECTNESS. A seal is internally consistent as long
@@ -338,19 +379,21 @@ def seal_regressions(events: list[Event], seal: Seal) -> list[str]:
     return out
 
 
-def build_seal_payload(events: list[Event]) -> dict:
+def build_seal_payload(events: list[Event], fold_kwargs: dict | None = None) -> dict:
     """What the sequencer appends. Excludes seals themselves, so a seal never
     seals a seal — that would make the root depend on sealing history rather
     than on the work, and two sequencer runs over identical work would differ.
     """
-    if _self_consistent(events) or _chain_issue(events):
+    if _self_consistent(events) or _chain_issue(events, fold_kwargs):
         raise ValueError("cannot seal an incomplete or invalid log chain")
     work = [e for e in events if e.type != "ledger.seal"]
     return {
         "version": 2,
         "event_set_hash": _event_set_hash(work),
         "watermarks": watermarks(work),
-        "state_root": fold(work).state_root(),
+        "state_root": fold(work, **(fold_kwargs or {})).state_root(),
+        # The root rule this seal was made with (round 6, H3).
+        "pool_root": True,
     }
 
 
@@ -361,12 +404,12 @@ def _covered_events(events, seal):
 def _event_set_hash(events):
     import hashlib
     rows = [{"log": getattr(e, "log", None) or e.actor, "seq": e.seq, "hash": e.hash,
-             "body": body_dict(e.seq, e.hlc, e.actor, e.type, e.payload, e.prev)} for e in events]
+             "body": event_body(e)} for e in events]
     rows.sort(key=lambda row: (row["log"], row["seq"], row["hash"]))
     return hashlib.sha256(canonical_bytes({"version": 2, "events": rows})).hexdigest()
 
 
-def _chain_issue(events):
+def _chain_issue(events, fold_kwargs=None):
     """Validate complete chain prefixes, including earlier seal events.
 
     Asks the one verifier (ledger.verify.chain_problems, Phase 2 V2; audit A#7):
@@ -376,4 +419,14 @@ def _chain_issue(events):
     refused a space whose bad event had been voided.
     """
     from .verify import chain_problems
+    if (fold_kwargs or {}).get("lease_grantors") is not None:
+        # A HUB space (round 6, C5): the caller folds admitted events --
+        # signed, domain-bound, chained -- so no void excuses anything, and
+        # the local principal registry can never make a recorded reversal
+        # read as a broken chain (and a confirmed seal as a mismatch).
+        from .finality import resolve
+        from .voids import Voids
+        fin = resolve(events, lease_grantors=fold_kwargs.get("lease_grantors"),
+                      reversers=fold_kwargs.get("reversers"), legacy_reversals=fold_kwargs.get("legacy_reversals"))
+        return bool(chain_problems(events, voids=Voids(effective=dict(fin.voids.effective))))
     return bool(chain_problems(events))

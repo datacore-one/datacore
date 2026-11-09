@@ -399,8 +399,10 @@ def _guarded_append_locked(
     previously_approved = False
     if type in {"item.claim", "item.update"}:
         from .fold import fold
-        events = read_events(space_dir)
-        item = fold(events).items.get(payload.get("id"))
+        from .hub import authoritative_events, authoritative_state  # hub spaces: admission + policy
+        # The approval scan below reads the same admitted events (round 6).
+        events, _ = authoritative_events(space_dir, read_events(space_dir))
+        item = authoritative_state(space_dir, events).items.get(payload.get("id"))
         if item is None:
             raise PolicyError("item does not exist")
         if item.edit_conflicts:
@@ -439,7 +441,8 @@ def _guarded_append_locked(
     if type == "item.claim":
         from .fold import fold
         from claim_gate import check_claim
-        item = fold(read_events(space_dir)).items.get(payload.get("id"))
+        from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        item = authoritative_state(space_dir).items.get(payload.get("id"))
         if item is None or item.status != "created":
             raise PolicyError("item is missing or no longer available to claim")
         current_hash = approval_payload_hash(item.payload)
@@ -473,7 +476,8 @@ def _guarded_append_locked(
         sd = space_dir or getattr(log, "space_dir", None)
         if sd is not None:
             from .fold import fold
-            held = fold(read_events(Path(sd))).items.get(payload.get("id"))
+            from .hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            held = authoritative_state(Path(sd)).items.get(payload.get("id"))
             who = getattr(log, "actor", None) or ""
             if held is not None and held.status == "claimed" and held.owner and held.owner != who:
                 raise PolicyError(f"item.release refused for {who!r}: the claim is {held.owner!r}'s, "
@@ -564,7 +568,15 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
             "cosign but payload is missing 'approval_ref'"
         )
 
-    events = read_events(space_dir)
+    from .hub import authoritative_events
+    # A hub space: a grant counts only as admission lets it in (round 6).
+    events, kw = authoritative_events(space_dir, read_events(space_dir))
+    # ... and through the ONE correction rule (Codex final audit, F5): a
+    # rejected or reversed grant authorises nothing. (An approval is a control
+    # record and is never reversible, owner round 7; the filter keeps this
+    # reader in step with `ledger.finality` whatever its allow-list says.)
+    from .finality import effective_events
+    events = effective_events(events, kw)
 
     grant = next((e for e in events if e.hash == approval_ref), None)
     if grant is None:
@@ -582,9 +594,9 @@ def validate_approval(log: EventLog, payload: dict, policy: Policy, *, creating=
         )
 
     if getattr(log, "sign", False):
-        from .events import body_dict, canonical_bytes, compute_hash
+        from .events import canonical_bytes, compute_hash, event_body
         from .keys import verify
-        body = body_dict(grant.seq, grant.hlc, grant.actor, grant.type, grant.payload, grant.prev)
+        body = event_body(grant)
         if grant.hash != compute_hash(body) or not grant.sig or not verify(
                 grant.actor, canonical_bytes(body), grant.sig, registry_path=log.registry_path):
             raise PolicyError("approval grant signature could not be verified")

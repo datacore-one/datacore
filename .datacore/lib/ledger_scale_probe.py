@@ -109,7 +109,8 @@ def measure(root: Path, events: int) -> dict:
         _synthesize(space, "scale", events - have)
 
     t = time.monotonic()
-    folded = fold(read_events(space))
+    from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+    folded = authoritative_state(space)
     fold_s = time.monotonic() - t
 
     t = time.monotonic()

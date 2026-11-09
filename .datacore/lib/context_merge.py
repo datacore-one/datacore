@@ -718,6 +718,21 @@ def expected_context(component_path: Path, name: str = "CLAUDE") -> str:
     return merged
 
 
+def _registry_inputs(component_path: Path, name: str = "CLAUDE") -> list[Path]:
+    """Files `inject_registries` reads for this component, when its layers use markers."""
+    datacore_dir = Path(component_path) / ".datacore"
+    if not datacore_dir.is_dir():
+        return []
+    merged, _ = merge_context(component_path, name, include_markers=False, validate=False)
+    if not REGISTRY_MARKER.search(merged):
+        return []
+    reg = datacore_dir / "registry"
+    files = [reg / f for f in ("agents.yaml", "agents.local.yaml", "commands.yaml",
+                               "commands.local.yaml", "sources.yaml", "infrastructure.yaml")]
+    files += list((datacore_dir / "modules").glob("*/module.yaml"))
+    return [p for p in files if p.exists()]
+
+
 def composed_drift(component_path: Path, name: str = "CLAUDE") -> Optional[str]:
     """Why the composed file differs from its layers, or None when it matches (SPC-4).
 
@@ -733,9 +748,14 @@ def composed_drift(component_path: Path, name: str = "CLAUDE") -> Optional[str]:
     out = component_path / f"{name}.md"
     if not out.exists():
         return f"{out} is missing: run `context_merge.py rebuild --path {component_path}`"
-    if out.read_text() == expected_context(component_path, name):
+    expected = expected_context(component_path, name)
+    if out.read_text() == expected:
         return None
-    newest = max(p.stat().st_mtime for p in layers)
+    # The registry tables injected into the root file are inputs too: a server
+    # added to infrastructure.yaml after the last rebuild makes the file stale,
+    # not hand-edited (2026-10-25: misread as hand-edited, so `check --fix` left it).
+    inputs = layers + _registry_inputs(component_path, name)
+    newest = max(p.stat().st_mtime for p in inputs)
     if newest > out.stat().st_mtime or GENERATED_HEADER not in out.read_text()[:200]:
         return (f"{out} is stale: its layers changed since the last rebuild "
                 f"(run `context_merge.py rebuild --path {component_path}`)")

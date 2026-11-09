@@ -25,7 +25,8 @@ def _exe(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _run(tmp_path: Path, remote_spaces: str, rsync_rc: int = 0, ssh_rc: int = 0):
+def _run(tmp_path: Path, remote_spaces: str, rsync_rc: int = 0, ssh_rc: int = 0, remote: str | None = "nightshift",
+         remote_user: str | None = None):
     home = tmp_path / "home"
     data = home / "Data"
     for s in ("1-alpha", "2-beta", "9-local-only"):
@@ -37,6 +38,10 @@ def _run(tmp_path: Path, remote_spaces: str, rsync_rc: int = 0, ssh_rc: int = 0)
     _exe(bin_dir / "rsync", f'echo "rsync $*" >> "{calls}"\nexit {rsync_rc}\n')
     env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin", "DATA_DIR": str(data),
            "LOG_FILE": str(tmp_path / "sync.log")}
+    if remote is not None:
+        env["REMOTE"] = remote
+    if remote_user is not None:
+        env["REMOTE_USER"] = remote_user
     subprocess.run(["/bin/bash", str(SCRIPT)], env=env, check=False, timeout=60)
     return (tmp_path / "sync.log").read_text(), calls.read_text() if calls.exists() else ""
 
@@ -81,4 +86,28 @@ def test_a_space_numbered_differently_on_the_remote_is_matched_by_name(tmp_path)
     assert beta, f"the beta space was not mirrored: {log}"
     assert "nightshift:Data/4-beta/.datacore/state/" in beta[0], beta[0]
     assert "/Data/2-beta/.datacore/state/" in beta[0], beta[0]
+    assert "venture state: 2 ok, 0 failed" in log, log
+
+
+def test_with_no_remote_configured_nothing_is_pulled(tmp_path):
+    """2026-10-29: the nightshift host was retired, but the job kept pulling from it
+    every 5 minutes (two ssh timeouts per run). The remote is now opt-in: with no
+    REMOTE set the mirror is skipped -- one log line, no ssh, no rsync -- and the
+    rest of the job (the v2-runner refresh) still runs."""
+    log, calls = _run(tmp_path, "1-alpha\\n", remote=None)
+    assert calls == "", f"pulled from a remote nobody configured: {calls}"
+    assert "FAILED" not in log, log
+    assert "no remote configured" in log, log
+
+
+def test_state_kept_by_another_user_on_the_remote_is_read_as_that_user(tmp_path):
+    """2026-10-29: Miles writes this state on dayshift as the Unix user miles, whose
+    home the ssh login (gregor) cannot read. With REMOTE_USER set, every listing and
+    every rsync runs as that user there (sudo -n -u), from that user's Data folder."""
+    log, calls = _run(tmp_path, "1-alpha\\n2-beta\\n", remote="dayshift", remote_user="miles")
+    rsyncs = [c for c in calls.splitlines() if c.startswith("rsync ")]
+    assert rsyncs and all("--rsync-path=sudo -n -u miles rsync" in c for c in rsyncs), rsyncs
+    assert all("dayshift:~miles/Data/" in c for c in rsyncs), rsyncs
+    lists = [c for c in calls.splitlines() if c.startswith("ssh ")]
+    assert lists and all("sudo -n -u miles" in c and "~miles/Data" in c for c in lists), lists
     assert "venture state: 2 ok, 0 failed" in log, log

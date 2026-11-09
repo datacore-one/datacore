@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 import job_verify
@@ -120,13 +122,17 @@ def _cron_jobs(text: str) -> list[str]:
 
 @pytest.mark.production
 def test_every_box_cron_job_is_declared_and_verified_daily():
-    try:
-        out = subprocess.run(SSH + ["winston", "crontab -l"], capture_output=True,
-                             text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        pytest.fail("could not read the box crontab (timeout) -- could not tell is not a pass")
-    assert out.returncode == 0, f"could not read the box crontab: {out.stderr[-200:]}"
-    lines = _cron_jobs(out.stdout)
+    # The box schedules jobs in two places (roster, fleet_reach): Winston's k3s pod
+    # (its supercronic file) and the node's own crontab (backups, the fleet probe).
+    lines = []
+    for pl in fleet_reach.places("box"):
+        cmd = fleet_reach.schedule_listing(pl) if pl.kind == "pod" else "crontab -l"
+        try:
+            out = fleet_reach.run_at(pl, cmd, timeout=30)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"could not read the box schedule ({pl.kind}, timeout) -- could not tell is not a pass")
+        assert out.returncode == 0, f"could not read the box schedule ({pl.kind}): {out.stderr[-200:]}"
+        lines += _cron_jobs(out.stdout)
     assert any("job_verify" in l for l in lines), "the verifier is not scheduled on the box"
     missing = _undeclared(lines, "box")
     assert missing == [], "box jobs scheduled but not in the manifest:\n" + "\n".join(missing)
@@ -151,6 +157,18 @@ def test_every_mac_datacore_job_is_declared_and_verified_daily():
             continue  # a daemon, not a scheduled job
         args = " ".join(d.get("ProgramArguments") or [d.get("Program", "")])
         lines.append(f"launchd {label}: {args}")
-    assert any("job_verify" in l for l in lines), "the verifier is not scheduled on the mac"
+    # Owner decision 2026-10-07: the mac runs no clock jobs; its verifier is a
+    # join duty (trigger join|wake|arrival in the manifest), run by the
+    # io.datacore.join launchd tick. That counts as scheduled -- but only while
+    # the tick that runs it is itself scheduled. (Eval amended 2026-10-29 with
+    # the owner's approval; it predated the decision.)
+    from jobs.manifest import effective_doc
+    verifier_duty = any(
+        j.get("machine") == "mac" and j.get("trigger") in ("join", "wake", "arrival")
+        and "job_verify" in " ".join(str(j.get(k, "")) for k in ("cmd", "command", "name")).replace("-", "_")
+        for j in (effective_doc(MANIFEST) or {}).get("jobs") or [])
+    join_tick = any(l.startswith("launchd io.datacore.join:") and "visitor_join" in l for l in lines)
+    assert any("job_verify" in l for l in lines) or (verifier_duty and join_tick), \
+        "the verifier is not scheduled on the mac (no clock job, and no join duty run by a scheduled join tick)"
     missing = _undeclared(lines, "mac")
     assert missing == [], "mac jobs scheduled but not in the manifest:\n" + "\n".join(missing)

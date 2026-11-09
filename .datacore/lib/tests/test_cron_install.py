@@ -268,3 +268,15 @@ def test_the_weekly_agent_board_does_not_replace_the_nightly_scoreboard():
     weekly = '20 13 * * 0 python3 /h/Data/.datacore/lib/promise_nightly.py --agents >> /s/agent-evals.log 2>&1'
     out = C.reconcile(nightly, {'nightshift-agent-evals': weekly})
     assert out.startswith(nightly) and out.count('promise_nightly.py') == 2
+
+
+def test_jimo_instance_jobs_are_told_apart_by_instance_and_job():
+    """Every Jimo loop/ctrl job runs loop/run-instance.sh; the instance and job
+    arguments are the job. By the executable alone, eleven jobs were one
+    ambiguous invocation and the installer refused all of them."""
+    w = '/bin/bash /h/jimo-loop/loop/run-instance.sh'
+    tick = f'*/5 * * * * {w} loop tick >> /s/jimo-loop/tick.log 2>&1 # datacore-job:jimo-loop-tick\n'
+    entries = {'jimo-ctrl-tick': f'*/5 * * * * {w} ctrl tick >> /s/jimo-ctrl/tick.log 2>&1',
+               'jimo-loop-dream': f'30 2 * * * {w} loop dream >> /s/jimo-loop/dream.log 2>&1'}
+    out = C.reconcile(tick, entries)
+    assert out.startswith(tick) and out.count('run-instance.sh') == 3

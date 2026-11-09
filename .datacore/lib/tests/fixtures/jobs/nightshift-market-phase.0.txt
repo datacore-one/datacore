@@ -1,5 +1,5 @@
 # fixture for nightshift-market-phase artifact[0]
-# producer artifact: ~/Data/6-meridian/reports/market-phase/market-phase-*.md on nightshift
+# producer artifact: ~/Data/.datacore/state/trading/market-phase-*.md on nightshift
 # harvested: 2026-09-19
 # regex under test: <!-- market-phase: complete -->
 # represents: SUCCESS

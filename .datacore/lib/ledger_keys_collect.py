@@ -67,10 +67,10 @@ def candidates(hosts: list[str]) -> dict[str, dict[str, str]]:
     found: dict[str, dict[str, str]] = collections.defaultdict(dict)
     for host in hosts:
         try:
-            out = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, _DERIVE],
-                capture_output=True, text=True, timeout=60,
-            )
+            # `local`: this machine (the owner's runs no ssh server), same derivation.
+            cmd = (["sh", "-c", _DERIVE] if host == "local"
+                   else ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, _DERIVE])
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except (subprocess.SubprocessError, OSError) as exc:
             print(f"  {host}: unreachable ({type(exc).__name__})", file=sys.stderr)
             continue
@@ -87,7 +87,7 @@ def candidates(hosts: list[str]) -> dict[str, dict[str, str]]:
 def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
     """{actor: [(body, sig_hex)]} for every signed event in every space."""
     sigs: dict[str, list[tuple[dict, str]]] = collections.defaultdict(list)
-    for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")):
+    for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")) + sorted(root.glob("[0-9]-*/.datacore/telemetry/*.jsonl")):
         voids = for_events_dir(path.parent)
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line.strip():
@@ -99,7 +99,8 @@ def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
             if not event.get("sig"):
                 continue
             body = body_dict(event["seq"], event["hlc"], event["actor"],
-                             event["type"], event["payload"], event["prev"])
+                             event["type"], event["payload"], event["prev"],
+                             hub=event.get("hub") or "", domain=event.get("domain") or "")
             # An event cancelled by an authorised in-ledger void (ledger.voids)
             # is not evidence about any key: counting a voided forgery made
             # every candidate key for its actor fail, forever.
@@ -207,7 +208,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--hosts", default=None,
-                    help="comma-separated ssh targets to collect from "
+                    help="comma-separated ssh targets to collect from, `local` for this machine "
                          "(default: every machine the roster reaches over ssh)")
     ap.add_argument("--root", type=Path, default=ROOT)
     ap.add_argument("--apply", action="store_true",

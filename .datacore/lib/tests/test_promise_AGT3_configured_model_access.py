@@ -29,6 +29,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+import fleet_reach
 import yaml
 
 LIB = Path(__file__).resolve().parents[1]
@@ -87,11 +89,18 @@ def test_no_agent_host_runs_anything_with_the_retired_key():
     probe = ('for d in /proc/[0-9]*; do [ -O "$d" ] || continue; '
              'tr "\\0" "\\n" < "$d/environ" 2>/dev/null | grep -q "^ANTHROPIC_API_KEY=" && '
              'echo "$(cat $d/comm 2>/dev/null)"; done 2>/dev/null | sort | uniq -c; true')
-    found = []
-    for host in ("nightshift", "winston", "hermes", "plur-claw"):
-        r = subprocess.run([*SSH, host, probe], capture_output=True, text=True, timeout=45)
-        assert r.returncode == 0, f"{host}: could not read ({r.stderr.strip()[-160:]})"
-        found += [f"{host}: {l.strip()}" for l in r.stdout.splitlines() if l.strip()]
+    found, unread = [], []
+    # Every place an agent machine works (roster: host or k3s pod), and in a pod
+    # every container -- a scan in one container cannot see its siblings.
+    for machine in ("nightshift", "box", "hermes", "plur-claw"):
+        for pl in fleet_reach.places(machine):
+            for at in fleet_reach.containers(pl):
+                where = f"{machine} ({at.kind}{' ' + at.k8s['container'] if at.kind == 'pod' else ''})"
+                r = fleet_reach.run_at(at, probe, timeout=45)
+                if r.returncode != 0:   # could not tell is never a pass; the others are still read
+                    unread.append(f"{where}: could not read ({r.stderr.strip()[-160:]})")
+                found += [f"{where}: {l.strip()}" for l in r.stdout.splitlines() if l.strip()]
+    assert not unread, "; ".join(unread)
     assert not found, "processes running with the retired ANTHROPIC_API_KEY in their env: " + "; ".join(found)
 
 
@@ -103,8 +112,8 @@ def test_each_agent_runtime_names_a_configured_model():
     claw = ('python3 -c "import json,os;d=json.load(open(os.path.expanduser(\'~/.openclaw/openclaw.json\')));'
             'print(json.dumps({\'model\':((d.get(\'agents\') or {}).get(\'defaults\') or {}).get(\'model\')}))"')
     bad = []
-    for host, cmd, key in (("hermes", hermes, "default"), ("winston", hermes, "default"), ("plur-claw", claw, "model")):
-        r = subprocess.run([*SSH, host, cmd], capture_output=True, text=True, timeout=45)
+    for host, cmd, key in (("hermes", hermes, "default"), ("box", hermes, "default"), ("plur-claw", claw, "model")):
+        r = fleet_reach.run(host, cmd, timeout=45)   # the agent's pod (roster), its home volume
         try:
             doc = json.loads(r.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError):

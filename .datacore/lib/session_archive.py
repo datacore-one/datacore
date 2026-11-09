@@ -121,6 +121,14 @@ def _text(msg) -> str:
     return ""
 
 
+def _local_day(ts: str) -> str:
+    """The local calendar day of a transcript timestamp, as journals are dated."""
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().date().isoformat()
+    except ValueError:
+        return ts[:10]
+
+
 def _iter_records(path: Path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
@@ -150,6 +158,8 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
     first_prompt = ""
     wrapped = False
     stamps: list[str] = []
+    owner_days: set[str] = set()
+    compactions = 0
 
     for rec in _iter_records(transcript):
         ts = rec.get("timestamp")
@@ -159,10 +169,18 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
 
         if rtype == "user":
             body = _text(rec.get("message", {}))
+            # A compaction summary arrives as a user record too. /wrap-up must
+            # account for every compacted stretch (2026-11-01: a nine-day
+            # session was wrapped up from the last summary alone).
+            if rec.get("isCompactSummary"):
+                compactions += 1
+                continue
             # Hook output and tool results also arrive as user records; only
             # count something that looks like a person typing.
             if body and not body.startswith("<"):
                 user_turns += 1
+                if ts:
+                    owner_days.add(_local_day(ts))
                 if not first_prompt:
                     first_prompt = body[:500]
             if any(m in body for m in WRAPUP_MARKERS):
@@ -252,6 +270,8 @@ def summarize(transcript: Path, subagents: list[Path]) -> dict:
         "ended_at": max(stamps) if stamps else None,
         "turns": turns,
         "user_turns": user_turns,
+        "owner_days": sorted(owner_days),
+        "compactions": compactions,
         "tokens": dict(tokens),
         "output_tokens": tokens["output_tokens"],
         "subagent_transcripts": len(subagents),

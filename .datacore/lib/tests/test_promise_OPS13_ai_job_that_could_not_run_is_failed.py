@@ -1,5 +1,12 @@
 """OPS-13: A scheduled AI job that could not run -- a usage limit or an expired login --
-says so and is marked failed. It never ends as if it had worked.
+says so and never ends as if it had worked.
+
+Owner decision 2026-10-28 (promise reworded): a usage limit is "waiting on quota" while
+the run waits for the reset (CAD-7, graded in the ventures AGT-4 eval); a run that is
+restarted as a new one instead ends "failed because the usage limit was hit". The
+cron-shaped jobs here never wait -- their next firing IS the new run -- so for them a
+usage limit is graded exactly as before: marked failed, and the log names the limit.
+(Docstring and TRIAGE_OWNER fixture amended 2026-10-29 with the owner's approval.)
 
 Kind: deterministic. The REAL job scripts run against a throwaway install, with the
 model runtimes (`claude`, `hermes`, `codex`, `openclaw`) replaced by the fleet week
@@ -315,6 +322,9 @@ def test_the_github_triage_report_fails_when_the_model_cannot_run(tmp_path, mode
     env = {"HOME": str(home), "PATH": f"{home / 'bin'}:/usr/bin:/bin", "LANG": "C.UTF-8",
            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
            "DATA_DIR": str(data), "TRIAGE_NO_PUSH": "1", "TRIAGE_TIMEOUT": "60",
+           # required since 89378037 (owner decision: the triage owner is configured,
+           # never guessed); a fixture value, nothing reaches GitHub
+           "TRIAGE_OWNER": "fixture-owner",
            "CLAUDE_BIN": str(home / "bin" / "claude"),
            "SIM_STATE": str(tmp_path), "SIM_MACHINE": "nightshift", "SIM_JOB": "triage"}
     _link_stand_ins(home / "bin")

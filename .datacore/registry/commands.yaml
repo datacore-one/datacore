@@ -60,6 +60,17 @@ commands:
     - wrap-up
     - today
     - tomorrow
+  handover:
+    name: Handover
+    description: Move a running session to dayshift — commit, push, checkpoint; the owner runs one command and the conversation continues there
+    version: 1.0.0
+    status: active
+    source: .datacore/commands/handover.md
+    writes:
+    - ~/.datacore/state/handover/{session-id}.json
+    related:
+    - continue
+    - wrap-up
   tomorrow:
     name: Evening Wrap-Up
     description: End-of-day command that syncs repos, queues AI tasks, and prepares for tomorrow
@@ -968,10 +979,10 @@ module_commands:
       - .datacore/settings.yaml
       - .datacore/dips/DIP-0017-outbox-archive-pattern.md
       contextual:
-      - '*/4-outbox/archive/**'
+      - '*/4-archive/**'
     writes:
     - '[space]-archive/**'
-    - '*/4-outbox/_index.md'
+    - '*/4-archive/_index.md'
     references:
       dips:
       - DIP-0017
@@ -1961,3 +1972,10 @@ module_commands:
     source: .datacore/modules/trading/skills/prediction-tracker/SKILL.md
     module: trading
     type: skill
+  provenance:
+    name: provenance
+    description: Verify an agent receipt, or check the receipt queue
+    version: 0.1.0
+    status: active
+    source: .datacore/modules/provenance/commands/provenance.md
+    module: provenance

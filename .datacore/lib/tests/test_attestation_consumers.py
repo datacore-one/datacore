@@ -95,7 +95,10 @@ def test_corrupt_or_malformed_attestation_is_explicitly_unverifiable(fleet, fiel
     assert row['ok'] is None and 'invalid' in row['note']
 
 
-def test_hlc_counter_and_tied_failure_are_not_lost(fleet):
+def test_hlc_counter_and_tied_failure_are_not_lost(fleet, monkeypatch):
+    # This test re-hashes a hand-edited line to tie two HLCs; it checks ordering,
+    # not signatures, so it writes unsigned (signing is on by default since 2026-10-31).
+    monkeypatch.setenv("DATACORE_LEDGER_SIGN", "0")
     root, space = fleet
     _append(space)
     first = space / '.datacore/telemetry/runner.jsonl'

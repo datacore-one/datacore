@@ -283,6 +283,50 @@ def _generated_target(file_path) -> bool:
     return phase(space) == 1 and Path(file_path).resolve() == (space / ORG).resolve()
 
 
+def _readonly_space(args):
+    """The space whose read-only list `args.file` is (phase F), else None.
+
+    In such a space the adapter never writes the list: it applies the change to
+    a scratch copy of the ledger's own rendering, records the difference as
+    events (`org_readonly.commit_text`) and regenerates the list.
+    """
+    if getattr(args, "_generated_scratch", False) or not getattr(args, "file", None):
+        return None
+    if not _generated_target(args.file):
+        return None
+    from org_space import ledger_space_for_file
+    import org_readonly
+    space = ledger_space_for_file(args.file)
+    return space if space is not None and org_readonly.enabled(space) else None
+
+
+def _via_ledger(command, args, space, observe=()):
+    import copy
+    import tempfile
+    import org_readonly
+    real = Path(args.file).resolve()
+    with tempfile.TemporaryDirectory(prefix="org-readonly-") as d:
+        scratch = Path(d) / space.name / "org" / real.name
+        scratch.parent.mkdir(parents=True)
+        scratch.write_text(org_readonly.ledger_text(space), encoding="utf-8")
+        scratch_args = copy.copy(args)
+        scratch_args.file = str(scratch)
+        scratch_args._generated_scratch = True
+        out = command(scratch_args)
+        if not isinstance(out, dict) or out.get("error"):
+            return out
+        creates = {}
+        if out.get("_create_payload"):
+            creates[out["id"]] = out.pop("_create_payload")
+        ledger = org_readonly.commit_text(space, scratch.read_text(encoding="utf-8"), creates=creates)
+    out.pop("observed", None)
+    out["ledger"] = ledger
+    out["file"] = str(real)
+    if observe and out.get("id"):
+        out["observed"] = _observed(real, out["id"], set(observe))
+    return out
+
+
 def _ledger_emit_close(file_path, node, reason):
     """Dismiss the ledger item iff the org task ACTUALLY closed.
 
@@ -308,15 +352,25 @@ def _actor_is_agent(requested_by=None):
     review, and a fresh install without a registry has no agents."""
     try:
         _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import actor_identity
         from actor_identity import principal_of, resolve
         actor, _source = resolve()
         if not actor:
             return False
-        _name, entry = principal_of(actor)
+        # An explicit DATACORE_ROOT with no registry of its own yet (actor_identity
+        # never borrows one for it since 2026-10-08) would make every agent look
+        # unknown, and its :AI: tasks run unreviewed (MEM-57). For this read-only
+        # check, and only then, the registry beside this code answers: the stamp
+        # only ever ADDS a review.
+        path = None
+        if not Path(actor_identity.PRINCIPALS).exists():
+            beside = Path(__file__).resolve().parents[1] / "registry" / "principals.yaml"
+            path = beside if beside.exists() else None
+        _name, entry = principal_of(actor, path)
         if (entry or {}).get("kind") != "agent":
             return False
         if requested_by:
-            _who, requester = principal_of(str(requested_by))
+            _who, requester = principal_of(str(requested_by), path)
             if (requester or {}).get("kind") == "human":
                 return False
         return True
@@ -346,7 +400,8 @@ def _ledger_emit(file_path, event_type, payload):
             from ledger.fold import fold
             from ledger.log import read_events
             from ledger.projection_state import sync_generated
-            sync_generated(space, fold(read_events(space)), actor)
+            from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+            sync_generated(space, authoritative_state(space), actor)
         else:
             EventLog(space, actor).append(event_type, payload)
         return actor
@@ -388,6 +443,9 @@ def _observed(file_path, task_id, keys):
 
 def cmd_add(args):
     """Add a new task to an org file."""
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_add, args, space)
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -450,7 +508,7 @@ def cmd_add(args):
                 break
         if parent_node is None:
             return {"error": f"Parent heading not found: {args.parent}"}
-    elif not generated:
+    elif not generated and not getattr(args, "_generated_scratch", False):
         # Default: first level-1 heading. Not in a generated file: it has no
         # sections, and its first heading is just some task.
         for n in ws.all_nodes():
@@ -531,6 +589,10 @@ def cmd_add(args):
         _create_payload["assignee"] = _assignee
     if generated:
         return _add_to_generated(file_path, generated_before, _create_payload, node_id, args.heading)
+    if getattr(args, "_generated_scratch", False):
+        # A read-only list (phase F): the caller records this payload.
+        return {"added": True, "id": node_id, "heading": args.heading,
+                "_create_payload": _create_payload}
     emitted = _ledger_emit(file_path, "item.create", _create_payload)
     return {"added": True, "id": node_id, "heading": args.heading,
             "ledger_actor": emitted}
@@ -567,6 +629,9 @@ def _add_to_generated(file_path, before, payload, node_id, heading):
 
 def cmd_complete(args):
     """Mark a task DONE, matched by title substring or ID."""
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_complete, args, space, observe=("STATE",))
     ws = _load_ws(args.file)
 
     if not getattr(args, 'id', None) and not getattr(args, 'title', None):
@@ -1046,6 +1111,9 @@ def cmd_ensure_ids(args):
 def cmd_write_clock(args):
     """Write a CLOCK entry to a task's LOGBOOK, matched by title or ID."""
     from org_workspace.log import add_clock_entry
+    space = _readonly_space(args)
+    if space is not None:
+        return _via_ledger(cmd_write_clock, args, space)
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -1104,9 +1172,13 @@ def cmd_move(args):
     from_path = Path(args.source).resolve()
     to_path = Path(args.target).resolve()
 
-    # A move is not a ledger event. Into a Phase 1 space's generated file it is
-    # a heading the ledger has never seen (the projection refuses the space);
-    # out of one it is a removal the projection puts back (a duplicate).
+    # Out of a Phase 1 space's generated file a move is a removal the projection
+    # puts back (a duplicate), so it stays refused. INTO one it is admission:
+    # the task is created in the ledger and the file re-rendered from it (owner,
+    # fleet console 2026-10-30) -- refused, the nightly inbox run could never
+    # file a single next action and left it in the inbox every night.
+    if _generated_target(to_path) and not _generated_target(from_path):
+        return _admit_to_generated(args, from_path, to_path)
     for end in (from_path, to_path):
         if _generated_target(end):
             return {"error": f"{end} is generated from the ledger (Phase 1, DIP-0046); a move "
@@ -1172,6 +1244,54 @@ def cmd_move(args):
     }
 
 
+def _admit_to_generated(args, from_path, to_path):
+    """Move a capture into a generated next_actions.org through the ledger.
+
+    Created in the ledger when it is not there yet (a hand- or mail-written
+    capture), kept as it is when it is live (captured through `add`), refused
+    when the ledger already closed it. Only after the ledger holds it live does
+    it leave the source file, and the projection is re-rendered from the ledger,
+    as `_add_to_generated` does for a new task.
+    """
+    from org_space import ledger_space_for_file
+    from ledger_project_org import project_space
+    from ledger.hub import authoritative_state
+    ws = _load_ws(args.source)
+    node = ws.find_by_id(args.id) if getattr(args, "id", None) else None
+    if node is None and getattr(args, "title", None):
+        search = args.title.lower()
+        node = next((n for n in ws.all_nodes()
+                     if n.path == from_path and n.todo and search in n.heading.lower()), None)
+    if node is None or node.path != from_path:
+        return {"error": f"Task not found in {args.source}: '{args.id or args.title}'"}
+    tid = node.id()
+    if not tid:
+        return {"error": "the task has no :ID:; run ensure-ids on the source first"}
+    space = ledger_space_for_file(to_path)
+    item = authoritative_state(space).items.get(tid)
+    if item is not None and item.status in ("dismissed", "archived", "verified"):
+        return {"error": f"{tid} is already closed in the ledger ({item.status}); left in {from_path.name}"}
+    if item is None:
+        from ledger.genesis import task_payload, valid_time
+        created_date, rung = valid_time(node)
+        payload = task_payload(node, from_path.parent.parent.name, created_date, rung)
+        # Its place in the inbox is not its place in the projection: a generated
+        # file has no sections, so the task is top level unless a parent is named.
+        payload.update(parent=getattr(args, "parent_id", None), level=None, outline=[])
+        _ledger_emit(to_path, "item.create", payload)
+        item = authoritative_state(space).items.get(tid)
+        if item is None:
+            return {"error": f"the ledger did not admit {tid}; left in {from_path.name}"}
+    ws.remove_node(node)
+    ws.save(from_path)
+    line = project_space(space)
+    out = {"moved": True, "admitted": True, "id": tid, "heading": node.heading,
+           "from": str(from_path), "to": str(to_path)}
+    if line.startswith("REFUSED"):
+        out["projection"] = "deferred: " + line
+    return out
+
+
 # ---------------------------------------------------------------------------
 # show
 # ---------------------------------------------------------------------------
@@ -1208,6 +1328,10 @@ def cmd_show(args):
 
 def cmd_update(args):
     """Update fields on an existing task."""
+    space = _readonly_space(args)
+    if space is not None:
+        keys = {"STATE", "SCHEDULED", "DEADLINE"} | {p.split("=", 1)[0] for p in (getattr(args, "property", None) or []) if "=" in p}
+        return _via_ledger(cmd_update, args, space, observe=tuple(keys))
     ws = _load_ws(args.file)
     file_path = Path(args.file).resolve()
 
@@ -1266,6 +1390,19 @@ def cmd_update(args):
             ws.set_scheduled(node, sched_dt)
             changes.append(f"scheduled→{args.scheduled}")
 
+    # Deadline, same rules as scheduled ("none" clears it).
+    if getattr(args, 'deadline', None):
+        if args.deadline.strip().lower() == "none":
+            ws.set_deadline(node, None)
+            changes.append("deadline→(cleared)")
+        else:
+            try:
+                deadline_dt = datetime.strptime(args.deadline, "%Y-%m-%d").date()
+            except ValueError:
+                return {"error": f"Invalid date: '{args.deadline}'. Use YYYY-MM-DD or 'none'."}
+            ws.set_deadline(node, deadline_dt)
+            changes.append(f"deadline→{args.deadline}")
+
     # Heading
     if getattr(args, 'new_heading', None):
         ws.set_heading(node, args.new_heading)
@@ -1292,6 +1429,8 @@ def cmd_update(args):
         _payload['effective_tags'] = current['effective_tags']
     if args.scheduled:
         _payload['scheduled'] = current['scheduled']
+    if getattr(args, 'deadline', None):
+        _payload['deadline'] = current['deadline']
     if getattr(args, 'property', None):
         _payload['org'] = {'properties': _props}
     emitted = _ledger_emit(file_path, "item.update", _payload)
@@ -1431,6 +1570,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "REVIEW | DONE, DEFERRED, CANCELLED)")
     p.add_argument("--tags", help="Replace tags (:tag1:tag2: format)")
     p.add_argument("--scheduled", help="YYYY-MM-DD")
+    p.add_argument("--deadline", help="YYYY-MM-DD, or 'none' to clear it")
     p.add_argument("--heading", dest="new_heading", help="New heading text")
     p.add_argument("--property", action="append", metavar="KEY=VALUE",
                    help="Set property (repeatable)")

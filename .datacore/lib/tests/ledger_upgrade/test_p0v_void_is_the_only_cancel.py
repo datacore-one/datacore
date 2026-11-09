@@ -110,17 +110,27 @@ def test_checkpoint_restore_excuses_a_mismatch_only_through_a_void(tmp_path, mon
         C._restore(document(), space.name)
 
     gregor = EventLog(space, "gregor")
-    gregor.append("ledger.void", {"log": "miles.jsonl", "seq": body["seq"], "hash": bad,
-                                  "body_sha256": compute_hash(body), "reason": "test"})
+    from tests._legacy_void import append_legacy_void       # history: before voids were retired
+    append_legacy_void(gregor, {"log": "miles.jsonl", "seq": body["seq"], "hash": bad,
+                                "body_sha256": compute_hash(body), "reason": "test"})
     with pytest.raises(C.StateRootMismatch):
         # Past the integrity check: the void cancels exactly that mismatch.
         C._restore(document(), space.name)
 
 
-def test_the_formerly_excepted_events_are_voided_in_ledger():
+def test_the_formerly_excepted_events_are_voided_in_ledger(monkeypatch):
     """Production, read-only: each event the retired file named is cancelled
     by an authorised void in its own space's ledger. Could not tell is red."""
+    from ledger import keys
     from ledger.voids import for_events_dir
+
+    # Read as the install's own reader does. Both spaces moved to the hub on
+    # 2026-10-24, so their voids are judged from the owner's signed records; the
+    # suite points the key module at an empty root, against which those records
+    # look forged and nothing is excused. Nothing below appends or signs.
+    monkeypatch.setattr(keys, "DATACORE_ROOT", ROOT)
+    monkeypatch.setattr(keys, "DEFAULT_KEYS_DIR", ROOT / ".datacore" / "keys")
+    monkeypatch.setattr(keys, "DEFAULT_REGISTRY_PATH", ROOT / ".datacore" / "keys" / "registry.yaml")
     missing = []
     for space, log, seq, stored in FORMERLY_EXCEPTED:
         events = ROOT / space / ".datacore" / "events"

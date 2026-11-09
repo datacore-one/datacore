@@ -45,6 +45,11 @@ from ledger.events import body_dict, canonical_bytes, compute_hash  # noqa: E402
 FUTURE_TOLERANCE_MS = 10 * 60 * 1000
 PATHSPEC = ".datacore/events/*.jsonl"
 FIELDS = {"seq", "hlc", "actor", "type", "payload", "prev", "hash", "sig"}
+#: Optional envelope fields of a hub space (DIP-0034 October amendment C, I):
+#: present only when set, inside the hashed and signed body. A line with them
+#: was refused as "not an event envelope", so no writer in a hub space could
+#: publish its own log through git (audit 2026-10-18, finding 15).
+OPTIONAL_FIELDS = {"hub", "domain"}
 ZERO = "0" * 40
 _RUN_SUFFIX = re.compile(r"-run-\d{4}-\d{2}-\d{2}$")
 
@@ -111,7 +116,8 @@ def check_change(path: str, old: bytes, new: bytes | None, now_ms: int | None = 
         except ValueError as exc:
             errors.append(f"{path} line {n}: not JSON ({exc})")
             continue
-        if not isinstance(d, dict) or set(d) != FIELDS:
+        if not isinstance(d, dict) or not (FIELDS <= set(d) <= FIELDS | OPTIONAL_FIELDS) or any(
+                not (isinstance(d[k], str) and d[k]) for k in OPTIONAL_FIELDS & set(d)):
             errors.append(f"{path} line {n}: not an event envelope (fields {sorted(d) if isinstance(d, dict) else type(d).__name__})")
             continue
         if raw != canonical_bytes(d):
@@ -124,7 +130,8 @@ def check_change(path: str, old: bytes, new: bytes | None, now_ms: int | None = 
         if d["prev"] != prev_hash:
             errors.append(f"{path} line {n}: prev does not link to the previous event's hash")
         try:
-            body = body_dict(d["seq"], d["hlc"], d["actor"], d["type"], d["payload"], d["prev"])
+            body = body_dict(d["seq"], d["hlc"], d["actor"], d["type"], d["payload"], d["prev"],
+                             hub=d.get("hub") or "", domain=d.get("domain") or "")
             if compute_hash(body) != d["hash"]:
                 errors.append(f"{path} line {n}: hash does not match the event body")
         except (TypeError, ValueError) as exc:
@@ -156,12 +163,31 @@ def _changed(repo: Path, *diff_args: str) -> list[str]:
     return [p for p in r.stdout.decode().split("\0") if p.endswith(".jsonl") and "/.datacore/events/" in f"/{p}"]
 
 
+def never_published(repo: Path, path: str) -> bool:
+    """True only when remote-tracking refs exist and none has ever held `path`.
+
+    A log no remote ever had is not shared history, so removing it rewrites
+    nothing another machine has seen. On 2026-11-07 a test fixture's log leaked
+    into a real space locally; the relay refused every push until it went, and
+    this gate refused removing it, deadlocking 115 commits. No remote refs at
+    all means it cannot be told, so it counts as published.
+    """
+    if not _git(repo, "for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes").stdout.strip():
+        return False
+    r = _git(repo, "log", "--remotes", "-1", "--format=%H", "--", path)
+    return r.returncode == 0 and not r.stdout.strip()
+
+
 def staged(repo: Path) -> list[str]:
     has_head = _git(repo, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
     errors = []
     for p in _changed(repo, "--cached"):
         old = (_blob(repo, f"HEAD:{p}") or b"") if has_head else b""
-        errors += check_change(p, old, _blob(repo, f":{p}"))
+        new = _blob(repo, f":{p}")
+        if new is None and old and never_published(repo, p):
+            print(f"ledger-write-gate: {p} removed; no remote has ever held it", file=sys.stderr)
+            continue
+        errors += check_change(p, old, new)
     return errors
 
 

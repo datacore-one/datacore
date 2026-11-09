@@ -1094,12 +1094,68 @@ class CredentialManager:
             return 1
 
         import subprocess
+        # Commit before sync.sh pulls, push after: an edit made in a store file
+        # used to be assembled here and reach no other host, and `creds add`
+        # committed without pushing (the Mac was 12 commits ahead, 2026-10-22).
+        committed = self._commit_store_edits(secrets_dir)
         cmd = [str(sync_script)]
         if instance:
             cmd.append(instance)
 
         result = subprocess.run(cmd, cwd=str(secrets_dir))
-        return result.returncode
+        if result.returncode != 0:
+            return result.returncode
+        return self._push_store(secrets_dir, committed)
+
+    STORE_PATTERNS = ("global.env", "credential-index.yaml", "spaces/*.env",
+                      "projects/*.env", "projects/*/*.env", "instances/*.yaml")
+
+    def _git_secrets(self, secrets_dir: Path, *args, timeout: int = 30):
+        import subprocess
+        return subprocess.run(["git", "-C", str(secrets_dir), *args], capture_output=True,
+                              text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+
+    def _commit_store_edits(self, secrets_dir: Path) -> list[str]:
+        """Commit changed store files by explicit path. Names only, never values."""
+        from fnmatch import fnmatch
+        st = self._git_secrets(secrets_dir, "status", "--porcelain", "--untracked-files=all")
+        if st.returncode != 0:
+            return []
+        paths = sorted({line[3:].split(" -> ")[-1].strip('"') for line in st.stdout.splitlines()})
+        paths = [p for p in paths
+                 if any(fnmatch(p, pat) and p.count("/") == pat.count("/") for pat in self.STORE_PATTERNS)]
+        if not paths:
+            return []
+        msg = (f"sync: store edits from {self._instance_label(secrets_dir)}\n\n"
+               + "\n".join(f"- {p}" for p in paths))
+        add = self._git_secrets(secrets_dir, "add", "--", *paths)
+        commit = self._git_secrets(secrets_dir, "commit", "--only", "-m", msg, "--", *paths)
+        if add.returncode or commit.returncode:
+            print("WARNING: could not commit store edits; they stay local and reach no "
+                  "other host: " + ", ".join(paths), file=sys.stderr)
+            return []
+        print(f"Committed store edits: {', '.join(paths)}")
+        return paths
+
+    def _instance_label(self, secrets_dir: Path) -> str:
+        f = secrets_dir / ".instance"
+        return f.read_text().strip() if f.exists() else "this host"
+
+    def _push_store(self, secrets_dir: Path, committed: list[str]) -> int:
+        """Push when this host is ahead of central. A failure is loud and non-zero."""
+        ahead = self._git_secrets(secrets_dir, "rev-list", "--count", "origin/main..HEAD")
+        if ahead.returncode != 0 or ahead.stdout.strip() in ("", "0"):
+            return 0
+        push = self._git_secrets(secrets_dir, "push", "--quiet", "origin", "HEAD:main")
+        if push.returncode != 0:
+            print(f"ERROR: secrets push FAILED — {ahead.stdout.strip()} commit(s) stay on this host "
+                  "and other hosts keep the old values. Resolve and rerun 'creds sync'.",
+                  file=sys.stderr)
+            for line in push.stderr.splitlines()[-3:]:
+                print(f"  git: {line}", file=sys.stderr)
+            return 1
+        print(f"Pushed {ahead.stdout.strip()} commit(s) to the secrets central repo")
+        return 0
 
     def _bootstrap_rotation(self, rotation: RotationIndex, env_path: Path) -> int:
         """Parse .env and create rotation entries from known patterns."""
@@ -1182,12 +1238,24 @@ class CredentialManager:
     def cmd_add(self, cred_id: str, var_name: str = None, value: str = None,
                 scope: str = None, space: str = None, project: str = None,
                 tier: str = None, category: str = None, provider: str = None,
-                description: str = None) -> int:
-        """Add a credential to the secrets repo and index."""
+                description: str = None, existing: bool = False,
+                overwrite: bool = False) -> int:
+        """Add a credential to the secrets repo and index.
+
+        existing=True indexes a variable already in the target store: no value
+        is asked for or written, and the value is never read or printed.
+        overwrite=True replaces the value of a credential already indexed, in
+        the store its index row names; the index is not changed.
+        """
         secrets_dir = self.data_dir / ".datacore" / "secrets"
         if not secrets_dir.exists():
             print("Secrets repo not found at .datacore/secrets/")
             return 1
+        if overwrite:
+            if existing:
+                print("Refusing: --overwrite writes a new value; --existing writes none.")
+                return 1
+            return self._overwrite(secrets_dir, cred_id, value)
 
         # Interactive prompts for missing fields
         if not var_name:
@@ -1212,7 +1280,11 @@ class CredentialManager:
             print("Did you pass the secret to --var instead of --value?")
             return 1
 
-        if not value:
+        if existing:
+            if value:
+                print("Refusing: --existing indexes a value already in the store; do not pass --value.")
+                return 1
+        elif not value:
             import getpass
             value = getpass.getpass(f"Value for {var_name}: ")
             if not value:
@@ -1283,11 +1355,14 @@ class CredentialManager:
             entry["project"] = project
         from credential_store import add_credential
         try:
-            env_file, index_file = add_credential(secrets_dir, env_file, entry, value)
+            env_file, index_file = add_credential(secrets_dir, env_file, entry, None if existing else value)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             print(f"Credential addition refused ({type(exc).__name__}); existing data preserved.", file=sys.stderr)
             return 1
-        print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
+        if existing:
+            print(f"Indexed {var_name} from {env_file.relative_to(secrets_dir)}; the store is unchanged")
+        else:
+            print(f"Added {var_name} to {env_file.relative_to(secrets_dir)} and the canonical index")
 
         import subprocess
         files = [str(path.relative_to(secrets_dir.resolve())) for path in (env_file, index_file)]
@@ -1299,6 +1374,45 @@ class CredentialManager:
             print("Credential stored durably, but Git commit failed; review the retained changes before retrying.", file=sys.stderr)
             return 1
         print("Committed the credential store and index to the secrets repo")
+        return self._sync_after_write()
+
+    def _overwrite(self, secrets_dir, cred_id: str, value: str = None) -> int:
+        """Replace an indexed credential's value in its declared store and commit it."""
+        from credential_store import overwrite_credential
+        index = yaml.safe_load((secrets_dir / "credential-index.yaml").read_text()) or {}
+        row = next((r for r in index.get("credentials") or [] if isinstance(r, dict) and r.get("id") == cred_id), None)
+        if not row:
+            print(f"Refusing: {cred_id} is not indexed; add it without --overwrite.", file=sys.stderr)
+            return 1
+        scope = row.get("scope")
+        env_file = {"global": secrets_dir / "global.env",
+                    "space": secrets_dir / "spaces" / f"{row.get('space')}.env",
+                    "project": secrets_dir / "projects" / f"{row.get('project')}.env"}.get(scope)
+        if env_file is None or not env_file.exists():
+            print(f"Refusing: {cred_id} has no store file for scope {scope!r}.", file=sys.stderr)
+            return 1
+        if not value:
+            import getpass
+            value = getpass.getpass(f"New value for {row.get('var_name')}: ")
+        try:
+            overwrite_credential(secrets_dir, env_file, row.get("var_name"), value)
+        except (OSError, ValueError) as exc:
+            print(f"Overwrite refused ({exc}); existing data preserved.", file=sys.stderr)
+            return 1
+        rel = str(env_file.resolve().relative_to(secrets_dir.resolve()))
+        print(f"Replaced {row.get('var_name')} in {rel}")
+        import subprocess
+        try:
+            subprocess.run(["git", "commit", "--only", "-m", f"chore: overwrite credential {cred_id}", "--", rel],
+                           cwd=str(secrets_dir), capture_output=True, check=True)
+        except (OSError, subprocess.CalledProcessError):
+            print("Value stored, but Git commit failed; review the retained change before retrying.", file=sys.stderr)
+            return 1
+        print("Committed the credential store to the secrets repo")
+        return self._sync_after_write()
+
+    def _sync_after_write(self) -> int:
+        secrets_dir = self.data_dir / ".datacore" / "secrets"
         # Assemble the env here: a value is not served by `get` until sync runs,
         # and a printed "Next: run creds sync" was skipped often enough that the
         # owner's first `get` failed on a credential just added (2026-10-14).
@@ -1400,6 +1514,10 @@ def main():
     add_p.add_argument("--category", help="Category")
     add_p.add_argument("--provider", help="Provider name")
     add_p.add_argument("--description", help="Description")
+    add_p.add_argument("--existing", action="store_true",
+                       help="Index a variable already in the target store; no value is asked for or written")
+    add_p.add_argument("--overwrite", action="store_true",
+                       help="Replace the value of a credential already indexed; asks for it at a hidden prompt")
 
     # sync
     get_p = subparsers.add_parser(
@@ -1452,7 +1570,8 @@ def main():
             cred_id=args.id, var_name=args.var_name, value=args.value,
             scope=args.scope, space=args.space, project=args.project,
             tier=args.tier, category=args.category, provider=args.provider,
-            description=args.description)
+            description=args.description, existing=args.existing,
+            overwrite=args.overwrite)
     elif args.command == "get":
         return mgr.cmd_get(args.credential, consumer=args.consumer,
                            no_verify=args.no_verify, strict=args.strict)
