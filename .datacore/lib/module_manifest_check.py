@@ -34,6 +34,16 @@ def _names(entries) -> list[str]:
     return [n for n in out if n]
 
 
+def _module_hook_kinds(core: Path) -> set[str] | None:
+    """Kinds listed in registry/hooks.yaml, or None where there is no registry to ask."""
+    reg = core / "registry" / "hooks.yaml"
+    try:
+        data = yaml.safe_load(reg.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    return set(data.get("module_hook_kinds") or {})
+
+
 def check(mod: Path) -> list[str]:
     """Return one finding per broken promise. Empty means the manifest is honest."""
     manifest = mod / "module.yaml"
@@ -71,6 +81,14 @@ def check(mod: Path) -> list[str]:
             if (core / subdir / f"{name}.md").exists():
                 continue                       # implemented at core level
             findings.append(f"{mod.name}: declares {kind[:-1]} '{name}' but {subdir}/{name}.md is missing")
+
+    # A hook kind must be one the registry lists with what runs it (DIP-0024
+    # amendment 2026-11-09): a declared kind nothing runs reads like a promise.
+    kinds = _module_hook_kinds(core)
+    for hook in (d.get("hooks") or {}):
+        if kinds is not None and hook not in kinds:
+            findings.append(f"{mod.name}: hook kind '{hook}' is not in registry/hooks.yaml "
+                            f"module_hook_kinds, so nothing runs it")
 
     # A hooks: entry points at a file by path; a dangling one silently drops the
     # module's section from /today.
