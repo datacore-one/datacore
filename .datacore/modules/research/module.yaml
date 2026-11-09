@@ -89,7 +89,6 @@ settings:
 
 hooks:
   today: "commands/today-hook.md"
-  nightshift_queue: "commands/nightshift-hook.md"
 
 # DIP-0022 context
 context:

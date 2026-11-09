@@ -587,7 +587,9 @@ def _stages_due(it, now_ms: int, pauses: dict | None = None) -> list[tuple[str, 
         # Issue #296: filed for an agent that cannot start -- said once, at once.
         out.append(("paused", f"⏸ Filed for {_person(who)}, who cannot take it yet. "
                               + pause_text(who, pauses[who])))
-    elif created is not None and now_ms - created > WHO_HAS_IT_MS:
+    elif created is not None and now_ms - created > WHO_HAS_IT_MS and _event_ms(it, "item.claim") is None:
+        # A request back at `created` after a claim was RELEASED, not missed:
+        # the request-releases subscriber tells that, with the doer's reason.
         out.append(("late_pickup", f"⏳ Not picked up {_hours(now_ms - created)} after you asked "
                                    f"(waiting for {who})"))
     if it.status not in ("verified", "dismissed"):
@@ -631,6 +633,44 @@ def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAU
         seen.setdefault(k, []).append(stage)
     _save(state_path, {"told": seen})
     return {"reported": keys, "unsent": []}
+
+
+def _state_for(space: str, root: Path | None = None):
+    from ledger.hub import authoritative_state
+    return authoritative_state(Path(root or Path.home() / "Data") / space)
+
+
+def on_release(event: dict, *, state_for: Callable | None = None, send: Callable[[str], bool] | None = None,
+               state_path=DEFAULT_REQUESTS_STATE) -> None:
+    """The request-releases subscriber (registry/hooks.yaml ledger_events).
+
+    A doer released one of the owner's requests without finishing it: tell the
+    owner once per request, with the doer's own words where the claim run
+    recorded them (`doer_said`), else the check's error. Raises when the
+    message was not delivered, so the subscriber runner retries it."""
+    p = event.get("payload") or {}
+    iid, space = p.get("id"), event.get("space")
+    if not iid or not space:
+        return
+    if state_for is None:
+        space_dir = event.get("space_dir")
+        state_for = (lambda s: _state_for(Path(space_dir).name, Path(space_dir).parent)) if space_dir else _state_for
+    it = state_for(space).items.get(iid)
+    if it is None or not (it.payload or {}).get("asked_by"):
+        return
+    st = _load(state_path)
+    seen = st.get("told") or {}
+    k = f"{space}/{iid}"
+    if "released" in (seen.get(k) or []):
+        return
+    why = str(p.get("doer_said") or p.get("error") or p.get("reason") or "no reason recorded")[:400]
+    text = (f"Your requests to Winston:\n↩️ {_person(event.get('actor'))} released it without finishing: "
+            f"{it.title[:100]} [{space} {iid}]. Reason: {why}")
+    if not (send or _send_owner)(text):
+        raise RuntimeError("the release message was not delivered")
+    seen.setdefault(k, []).append("released")
+    st["told"] = seen
+    _save(state_path, st)
 
 
 def requests_line(folded: dict) -> str:
@@ -716,6 +756,14 @@ def main(argv=None) -> int:
                            "line": briefing_line(found, errors) + " " + requests_line(folded)})
         result = alert(found, state_path=a.state)
         result.update({f"requests_{k}": v for k, v in report_requests(folded, pauses=pauses(a.root)).items()})
+        # The ledger-event subscribers (registry/hooks.yaml ledger_events) run on
+        # this same 15-minute cycle; a failed delivery is kept and retried there.
+        try:
+            import ledger_subscribers
+            subs = ledger_subscribers.run(root=a.root)
+            result["subscriber_failures"] = [n for n, r in subs.items() if r["failed"]]
+        except Exception as exc:  # noqa: BLE001 -- reported, never stops the gap check
+            result["subscriber_failures"] = [f"runner: {exc}"[:200]]
     summary = {"gaps": len(found), "errors": errors, **{k: len(v) for k, v in result.items()}}
     print(json.dumps({**summary, **result, "list": found} if a.json else summary, sort_keys=True))
     return 1 if errors else 0

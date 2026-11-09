@@ -1,6 +1,7 @@
 manifest_version: 2
 name: whatsapp
 version: 0.1.0
+author: datacore-one
 description: |
   WhatsApp integration for Datacore.
   Import contacts and track interactions via CRM adapter.
@@ -82,11 +83,6 @@ hooks:
     description: "Optional morning briefing push"
     enabled_setting: morning_briefing
     slot: post
-
-  nightshift_complete:
-    agent: whatsapp-notifications
-    description: "Notify when nightshift tasks complete"
-    enabled_setting: nightshift_alerts
 
 state:
   directory: .datacore/state/whatsapp

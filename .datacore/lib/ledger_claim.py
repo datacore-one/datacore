@@ -214,6 +214,27 @@ def _code_outside_space(payload: dict, space: Path) -> str:
         return f"code lives at {code_root!r}, outside this checkout ({space})"
 
 
+def _declared_mode(actor: str) -> str | None:
+    """The principal's `permission_mode` in principals.yaml, or None."""
+    try:
+        from actor_identity import principal_of
+        return (principal_of(str(actor))[1] or {}).get("permission_mode")
+    except Exception:  # noqa: BLE001 -- an unknown actor gets the safe default
+        return None
+
+
+def _check_failed_release(item_id: str, actor: str, sha: str, check_why: str, check: str, detail: str) -> dict:
+    """The release written when a check fails. `doer_said` keeps the end of the
+    doer's own answer: the reason the owner needs ("no record of the outage, so
+    writing it would mean inventing it") is not in the check's error."""
+    p = {"id": item_id, "owner": actor, "artifact_commit": sha,
+         "error": f"check failed: {check_why or check}"[:1000]}
+    words = (detail or "").strip()
+    if words:
+        p["doer_said"] = words[-500:]
+    return p
+
+
 def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0, actor: str = "") -> tuple[bool, str, dict]:
     """Execute one item. Returns (ok, detail).
 
@@ -241,6 +262,16 @@ def run_task(title: str, route: str, cwd: Path, item_id: str = "", hops: int = 0
     # missing cwd turns every write into a denied out-of-scope write. The
     # guard-bypass env is set by the adapter that spawns the process, rather
     # than by mutating this process's os.environ and hoping it is inherited.
+    # The principal's own limits, as cadence_run sets them: the policy guard
+    # judges tool calls for THIS principal, and a principal declared `bypass`
+    # (Miles) runs claude with bypassPermissions -- acceptEdits refuses every
+    # Bash step that needs approval, so a claimed item that runs a script
+    # could never pass (2026-11-09 claim-pass findings, item 1). The guard
+    # hook still refuses the principal's never-effects.
+    if actor:
+        os.environ["DATACORE_POLICY_PRINCIPAL"] = actor
+        os.environ["DATACORE_CLAUDE_PERMISSION_MODE"] = (
+            "bypassPermissions" if _declared_mode(actor) == "bypass" else "acceptEdits")
     started = _time.monotonic()
     # space and item travel with the call so the spend event lands in a log
     # that gets folded, under the declared actor, linked to what incurred it.
@@ -1118,9 +1149,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
                     print(f"         -> {note}")
             else:
                 EventLog(space, args.actor).append(
-                    "item.release", {"id": item.id, "owner": args.actor,
-                                     "artifact_commit": sha,
-                                     "error": f"check failed: {check_why or check}"[:1000]})
+                    "item.release", _check_failed_release(item.id, args.actor, sha, check_why, check, detail))
                 journal_lines.append(
                     f"FAILED `{item.id[:12]}` {title[:60]} — "
                     + (check_why or f"check did not pass: `{check}`"))

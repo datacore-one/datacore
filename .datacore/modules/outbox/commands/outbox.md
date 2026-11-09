@@ -220,6 +220,12 @@ outbox:
     2-projectspace: "Data/2-projectspace-archive.git"
 ```
 
+## Your Boundaries
+
+- **Can:** move finished content from a space's `4-archive/` to its archive repository, with companions, and update both indexes.
+- **Cannot:** delete content that has not reached the archive repository, force-push, or rewrite history.
+- **Must:** run a dry run first when asked, leave a failed push staged and report it, and never touch files outside `4-archive/`.
+
 ## Error Handling
 
 | Error | Recovery |
