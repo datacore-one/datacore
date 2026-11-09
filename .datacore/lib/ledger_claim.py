@@ -85,9 +85,38 @@ def _task_text(title: str, payload: dict, last_error: str = "") -> str:
     check's one-line verdict (W1, 2026-10-23)."""
     body = str((payload or {}).get("body") or "").strip()
     parts = [title] + ([body] if body else [])
+    # 2026-11-08: Winston's filings carry done_when and check, not a body, and
+    # the doer never saw them: it learned the check only from a failed attempt.
+    done_when = str((payload or {}).get("done_when") or "").strip()
+    check = str((payload or {}).get("check") or "").strip()
+    if done_when:
+        parts.append(f"Done when: {done_when}")
+    if check:
+        parts.append("The result is accepted only if this check passes, run from the root of "
+                     "this space on your committed work (paths in it are relative to that root; "
+                     f"commit the result):\n{check}")
     if last_error:
         parts.append(f"The previous attempt failed: {last_error[:600]}")
     return "\n\n".join(parts)
+
+
+def _publish_claim(space: Path) -> str:
+    """Publish the claim before the work starts. "published", "skipped" or "failed"; never raises.
+
+    The claim used to leave this machine only with the converge after the work,
+    so for the whole run the owner's watcher saw no claim and the 15-minute
+    "not picked up" (AGT-14) fired on requests being worked (2026-11-08)."""
+    try:
+        r = subprocess.run(["git", "-C", str(space), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return "skipped"
+        transport = Path(__file__).resolve().parent / "ledger_transport.py"
+        r = subprocess.run([sys.executable, str(transport), "converge", "--space", str(space)],
+                           capture_output=True, text=True, timeout=180)
+        return "published" if r.returncode == 0 else "failed"
+    except Exception:  # noqa: BLE001 -- publishing early is a courtesy; the run converges at the end
+        return "failed"
 
 
 def _outcome(payload: dict, outcome: str, detail: str = "", actor: str = "") -> None:
@@ -264,13 +293,16 @@ def _journal(space: Path, actor: str, lines: list[str]) -> None:
         # itself left there. Until an hourly converge autosaved it, a space
         # could not complete a delegated item twice in a row.
         #
-        # Only this file is staged. `git add -A` here would sweep up whatever
-        # the agent left behind and commit it as though it had been verified,
-        # which is the opposite of what the check exists for.
-        subprocess.run(["git", "-C", str(space), "add", "--", str(path)],
+        # The actor's events file (claim + release written this run) is included
+        # in the SAME commit. Without this the run leaves two records: the
+        # journal commit and a later autosave commit for the uncommitted events.
+        # Only the events file for this actor is staged -- never `git add -A`,
+        # which would sweep up unverified agent artifacts.
+        events_path = space / ".datacore" / "events" / f"{actor}.jsonl"
+        subprocess.run(["git", "-C", str(space), "add", "--", str(path), str(events_path)],
                        capture_output=True, timeout=60)
         subprocess.run(["git", "-C", str(space), "commit", "-q", "-m",
-                        f"journal: {actor} ledger claim run", "--", str(path)],
+                        f"journal: {actor} ledger claim run"],
                        capture_output=True, timeout=60)
     except Exception:  # noqa: BLE001 -- a journal failure must not fail the work
         pass
@@ -372,9 +404,14 @@ def _artifact_tree_clean(space, offenders: list | None = None):
         return False
     root_path = Path(root.stdout.strip()).resolve()
     try:
-        event_prefix = (Path(space).resolve().relative_to(root_path) / ".datacore/events").as_posix() + "/"
+        rel = Path(space).resolve().relative_to(root_path)
     except ValueError:
         return False
+    # The event logs and the telemetry logs (plan phase C) are both append-only
+    # ledger records, written by the writers themselves -- the verifier's own
+    # writer appends telemetry continuously, so refusing it meant no check ever
+    # ran in that copy (2026-11-06). Neither is the agent's artifact.
+    prefixes = tuple((rel / ".datacore" / d).as_posix() + "/" for d in ("events", "telemetry"))
     paths = []
     for command in (["git", "diff", "--name-only", "-z", "HEAD"],
                     ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
@@ -383,8 +420,8 @@ def _artifact_tree_clean(space, offenders: list | None = None):
             return False
         paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
     def permitted(name: str) -> bool:
-        return (name.startswith(event_prefix) and "/" not in name[len(event_prefix):]
-                and (name.endswith(".jsonl") or name.endswith(".lock")))
+        return any(name.startswith(pre) and "/" not in name[len(pre):]
+                   and (name.endswith(".jsonl") or name.endswith(".lock")) for pre in prefixes)
     bad = [name for name in paths if not permitted(name)]
     if offenders is not None:
         offenders.extend(bad)
@@ -735,6 +772,34 @@ def runner_queue(space: Path, actor: str, runner: str, transport=None):
     return plan(state, events, actor, runner=runner).ready, state, ("hub" if source == "hub" else "git")
 
 
+def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
+    """Someone other than the doer checks the owner's requests (Winston path step 5,
+    owner goal 2026-11-05). (verified, recheck failed).
+
+    Each COMPLETED item that a person asked for (`asked_by`) and that someone else
+    completed has its own check re-run here, on this machine, against the
+    committed result (`_isolated_check`, as the doer's run did). A pass records
+    `item.verify` as this actor; the fold already refuses a completer verifying
+    its own work. A failing re-check is printed and left: the delegation watch
+    reports the request as done but not yet checked."""
+    verified = failed = 0
+    for item in state.items.values():
+        p = item.payload or {}
+        if (item.status != "completed" or not p.get("asked_by") or not p.get("check")
+                or item.owner == actor):
+            continue
+        passed, sha = _isolated_check(space, p["check"])
+        if passed:
+            guarded_append(EventLog(space, actor), "item.verify",
+                           {"id": item.id, "check": p["check"], "artifact_commit": sha})
+            print(f"VERIFIED {item.title[:70]} -> {p['check'][:80]} passed @ {sha[:10]}")
+            verified += 1
+        else:
+            print(f"RECHECK FAILED {item.title[:60]} -> {p['check'][:80]} (left completed, not verified)")
+            failed += 1
+    return verified, failed
+
+
 def main(argv=None, *, transport=_FROM_ENV) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
@@ -747,6 +812,8 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
                     help="the hub to read first (default: $DATACORE_HUB_URL); its git copy when it does not answer")
     ap.add_argument("--token-id", default=None,
                     help="broker id of the hub's bearer token (default: $DATACORE_HUB_TOKEN_ID)")
+    ap.add_argument("--verify-others", action="store_true",
+                    help="re-run the check of owner requests others completed; verify on a pass, claim nothing")
     args = ap.parse_args(argv)
     # IDENTITY AT STARTUP (owner follow-up Q2): an undeclared host is refused
     # here, naming identity.env and the registry, rather than dispatching as a
@@ -773,6 +840,10 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
     print("read from: " + ("hub (its admitted log)" if source == "hub" else "git copy"))
     # The dead-letter and waiting scans below read the same admitted events (round 6).
     events, _ = authoritative_events(space, raw)
+    if args.verify_others:
+        v, f = verify_others(space, args.actor, authoritative_state(space, events))
+        print(f"verified {v}, recheck failed {f}")
+        return 0
     state = authoritative_state(space, events)
     from actor_identity import dispatch_ambiguity
     p = plan(state, events, args.actor)
@@ -966,6 +1037,8 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             print(f"REFUSED  {title[:70]}: {exc}")
             refused += 1
             continue
+        if args.execute:
+            _publish_claim(space)
         ok, detail, meta = run_task(_task_text(title, item.payload or {}, last_error.get(item.id, "")),
                                     route, space, item.id, actor=args.actor)
         if ok:

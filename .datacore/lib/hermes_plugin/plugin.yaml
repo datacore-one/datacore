@@ -13,9 +13,16 @@ author: Datacore
 kind: standalone
 hooks:
   - pre_tool_call
+  - pre_llm_call
   - on_session_start
 provides_tools:
   - datacore_whoami
+  - datacore_approvals_pending
+  - datacore_approval_decide
+  - datacore_ledger_append
+  - datacore_delegate
+  - datacore_who_has_what
 provides_hooks:
   - pre_tool_call
+  - pre_llm_call
   - on_session_start

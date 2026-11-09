@@ -78,3 +78,51 @@ def test_the_local_machine_and_plain_hosts_keep_their_route(monkeypatch, tmp_pat
     assert seen[-1][:2] == ["bash", "-lc"]
     fs.probe("box", s["box"])
     assert seen[-1][0] == "ssh" and "winston" in seen[-1]
+
+
+# --- SYN-4 stale-main detection (issue #221) ---
+
+def test_off_main_flags_runner_on_non_main_branch():
+    row = {"runner_branch": "fix/something", "runner_behind": "0"}
+    findings = fs.off_main(row)
+    assert any("fix/something" in f for f in findings)
+
+
+def test_off_main_silent_when_runner_on_main_and_current():
+    row = {"runner_branch": "main", "runner_behind": "0"}
+    assert fs.off_main(row) == []
+
+
+def test_off_main_flags_runner_on_main_but_behind_origin():
+    # Seeded failure from issue #221: runner on main, 29 commits behind origin/main.
+    row = {"runner_branch": "main", "runner_behind": "29"}
+    findings = fs.off_main(row)
+    assert findings, "runner on main but 29 commits behind must be flagged"
+    assert any("29" in f for f in findings)
+
+
+def test_off_main_flags_data_root_on_main_but_behind_origin():
+    row = {"data_branch": "main", "data_core": "1", "data_behind": "5"}
+    findings = fs.off_main(row)
+    assert findings, "data root on main but 5 commits behind must be flagged"
+    assert any("5" in f for f in findings)
+
+
+def test_off_main_silent_when_data_root_on_main_and_current():
+    row = {"data_branch": "main", "data_core": "1", "data_behind": "0"}
+    assert fs.off_main(row) == []
+
+
+def test_off_main_silent_for_non_core_data_root_behind():
+    # A space repo (not datacore core) on main behind origin is not flagged.
+    row = {"data_branch": "main", "data_behind": "10"}
+    # data_core absent → not a core checkout → no warning
+    assert fs.off_main(row) == []
+
+
+def test_probe_script_collects_behind_counts():
+    # The PROBE shell script must ask for behind counts — verify the variables
+    # are present so a future edit cannot silently drop them.
+    assert "data_behind" in fs.PROBE
+    assert "runner_behind" in fs.PROBE
+    assert "rev-list --count HEAD..origin/main" in fs.PROBE

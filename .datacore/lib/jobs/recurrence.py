@@ -197,6 +197,10 @@ def _record_unlocked(job_name: str, failed: bool, today: str,
             rec["same_artifact"] = False
             if artifact_sig:
                 rec["artifact_sig"] = artifact_sig
+            # Preserve the wall-clock time the CURRENT streak started; MSG-13
+            # uses this to escalate a withheld failure past a 24-hour window.
+            if "first_failed_time" not in rec:
+                rec["first_failed_time"] = time.time()
     else:
         before = int(rec.get("consecutive") or 0)
         rec = {"consecutive": 0, "first_failed": None, "last_passed": today,

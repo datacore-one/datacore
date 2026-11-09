@@ -784,8 +784,11 @@ def _authoritative(space_dir, events, *, registry_path, policy, now_ms):
     # when the owner's record carries one, so a broken file blocks nothing.
     inputs = None if auth.policy is not None else (
         policy if isinstance(policy, PolicyInputs) else PolicyInputs.load(policy))
-    admitted = admit(list(events), auth, now_ms=_wall_ms() if now_ms is None else now_ms).events
-    return admitted, auth.fold_inputs(inputs), auth.active.grantor
+    res = admit(list(events), auth, now_ms=_wall_ms() if now_ms is None else now_ms)
+    kw = auth.fold_inputs(inputs)
+    if res.held_hashes:
+        kw["held"] = res.held_hashes     # in the chain, no effect (owner decision 2026-11-06)
+    return res.events, kw, auth.active.grantor
 
 
 def effective_authoritative_events(space_dir, events=None, *, registry_path=None, policy=None,
@@ -1483,7 +1486,15 @@ class Hub:
         return events, fold(live_events(events, _grantors_of(kw)), **kw)
 
     def _fold_kwargs(self, cfg: HubConfig) -> dict:
-        return self._authority(cfg).fold_inputs(self.policy)
+        kw = self._authority(cfg).fold_inputs(self.policy)
+        # Held events (owner decision 2026-11-06) come from admission, so a seal
+        # this hub builds folds exactly what every reader folds.
+        from .log import read_events
+        events = read_events(Path(self.space_dir))
+        held = admit(events, self._authority(cfg), now_ms=self.clock()).held_hashes
+        if held:
+            kw["held"] = held
+        return kw
 
     def refusals(self) -> dict:
         """{log: where and why it stops being admitted} -- for status and verify."""
@@ -3762,7 +3773,10 @@ class HubWriter:
         # The hub seals its AUTHORITATIVE state; recompute it with the same
         # explicit inputs, over what admission lets in (findings 11, 12).
         fold_kwargs = sauth.fold_inputs(self.policy)
-        admitted = admit(events, sauth, now_ms=self.clock()).events
+        res = admit(events, sauth, now_ms=self.clock())
+        admitted = res.events
+        if res.held_hashes:
+            fold_kwargs["held"] = res.held_hashes
         with as_sequencer(hub_actor):
             try:
                 seal = latest_seal(admitted)
@@ -3928,8 +3942,9 @@ def strict_problems(space_dir, *, registry_path=None, now_ms: int | None = None)
     if cfg is None:
         return []
     auth = authority(space_dir, cfg, registry_path)
-    refused = admit(events, auth, now_ms=_wall_ms() if now_ms is None else now_ms).refused
-    return [f"{chain} {why}" for chain, why in sorted(refused.items())]
+    res = admit(events, auth, now_ms=_wall_ms() if now_ms is None else now_ms)
+    return ([f"{chain} {why}" for chain, why in sorted(res.refused.items())]
+            + [f"{chain} held, no effect: {why}" for chain, whys in sorted(res.held.items()) for why in whys])
 
 
 # ── the owner's commands ────────────────────────────────────────────────────

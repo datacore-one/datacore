@@ -875,6 +875,47 @@ def test_converge_does_not_publish_deletion_of_tracked_file(repo_pair: Path):
     )
 
 
+def test_foreign_writer_log_is_held_back_while_space_converges(repo_pair: Path, tmp_path: Path, monkeypatch):
+    """SYN-8 / audit #220: a foreign-principal writer log must not stall the
+    whole space.  Converge should unstage the log, hold it back, merge origin's
+    new commit, and push the good local edit — all in one pass."""
+    import ledger_transport as lt
+
+    # Plant an unpulled commit on origin via a second clone.
+    other = _second_clone(repo_pair, tmp_path)
+    (other / "origin_note.md").write_text("from origin\n")
+    git(other, "add", "-A"); git(other, "commit", "-qm", "origin commit")
+    git(other, "push", "-q", "origin", "main")
+
+    # A good local edit and a foreign writer log both dirty the working tree.
+    log_path = ".datacore/events/winston.jsonl"
+    (repo_pair / log_path).parent.mkdir(parents=True, exist_ok=True)
+    (repo_pair / log_path).write_text('{"event":"foreign"}\n')
+    (repo_pair / "good_note.md").write_text("good local work\n")
+
+    # Simulate: foreign_writer_logs says the log belongs to a different principal.
+    monkeypatch.setattr(lt, "foreign_writer_logs",
+                        lambda space: [(log_path, "winston", "winston-principal")])
+
+    res = lt.converge(repo_pair)
+
+    # The foreign log is held back, so res.ok is False — but the space went through.
+    assert res.context.get("went_through"), res
+    assert log_path in res.context.get("held_back", []), res
+    assert "foreign writer log" in res.reason
+
+    # The good local edit reached origin.
+    git(repo_pair, "fetch", "-q", "origin")
+    assert git(repo_pair, "cat-file", "-e", "origin/main:good_note.md").returncode == 0
+
+    # Origin's new commit reached this machine.
+    assert (repo_pair / "origin_note.md").exists()
+
+    # The foreign log is still in the working tree (not committed, not deleted).
+    assert (repo_pair / log_path).exists()
+    assert git(repo_pair, "ls-files", "--", log_path).stdout.strip() == ""
+
+
 def test_a_generated_file_origin_untracked_is_untracked_here_too(repo_pair: Path, tmp_path: Path):
     """Origin stopped tracking a generated file; this host still tracks it and
     has regenerated it. Git refused the merge forever ("your local changes would
@@ -904,3 +945,38 @@ def test_a_generated_file_origin_untracked_is_untracked_here_too(repo_pair: Path
     assert (repo_pair / "next_actions.org").read_text() == "regenerated projection, much longer\n"
     assert git(repo_pair, "ls-files", "next_actions.org").stdout.strip() == ""
     assert git(repo_pair, "status", "--porcelain").stdout.strip() == ""
+
+
+def test_converge_refuses_mass_deletion_from_origin(repo_pair: Path, tmp_path: Path):
+    """A mass deletion arriving from origin must be refused, not silently applied.
+
+    Without an incoming-loss check, another machine's deletion of 25 tracked
+    files arrives as a clean merge and removes them locally without any
+    warning (MEM-61).
+    """
+    # Seed repo_pair with 25 tracked files and push to origin.
+    for i in range(25):
+        (repo_pair / f"file{i:02d}.txt").write_text(f"content {i}\n")
+    git(repo_pair, "add", "-A")
+    git(repo_pair, "commit", "-qm", "seed 25 files")
+    git(repo_pair, "push", "-q", "origin", "main")
+
+    # Second clone: delete all 25 and push to origin.
+    origin = tmp_path / "origin.git"
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    git(other, "config", "user.email", "t@t")
+    git(other, "config", "user.name", "t")
+    for i in range(25):
+        (other / f"file{i:02d}.txt").unlink()
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "delete 25 files")
+    git(other, "push", "-q", "origin", "main")
+
+    # converge on repo_pair must refuse and preserve every file.
+    res = converge(repo_pair)
+
+    assert not res.ok, f"converge should refuse mass deletion but returned ok: {res.reason}"
+    for i in range(25):
+        assert (repo_pair / f"file{i:02d}.txt").exists(), \
+            f"file{i:02d}.txt was deleted by converge"

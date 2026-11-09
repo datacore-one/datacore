@@ -219,7 +219,8 @@ def effective_events(events: list[Event], fold_inputs: dict) -> list[Event]:
     fin = resolve(events, lease_grantors=(fold_inputs or {}).get("lease_grantors"),
                   reversers=(fold_inputs or {}).get("reversers"),
                   legacy_reversals=(fold_inputs or {}).get("legacy_reversals"))
-    return [e for e in events if e.hash not in fin.rejected
+    held = (fold_inputs or {}).get("held") or frozenset()
+    return [e for e in events if e.hash not in fin.rejected and e.hash not in held
             and not fin.voids.applies(getattr(e, "log", None) or e.actor, e)]
 
 

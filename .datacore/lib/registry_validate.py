@@ -114,8 +114,7 @@ def prune(registry_path: Path, section: str) -> list:
                 if not _source_exists(entries[name] or {})]
     if not to_prune:
         return []
-    backup = registry_path.with_suffix(
-        f'.yaml.bak-{date.today().isoformat()}')
+    backup = registry_path.with_suffix('.yaml.bak')
     shutil.copy2(registry_path, backup)
     for name in to_prune:
         del entries[name]

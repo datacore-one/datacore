@@ -31,13 +31,14 @@ if str(LIB) not in sys.path:
 def fleet(monkeypatch):
     import actor_identity
     import ledger.policy
-    from delegation_drill import DelegationDrill
+    from delegation_drill import DelegationDrill, _install_local_executor
     from ledger_chaos_drill import scratch_fleet
     monkeypatch.setattr(ledger.policy, "DEFAULT_POLICY_PATH", ledger.policy.DEFAULT_POLICY_PATH)
     monkeypatch.setattr(actor_identity, "PRINCIPALS", actor_identity.PRINCIPALS)
     saved = dict(os.environ)
     try:
         with scratch_fleet(prefix="retry-") as root:
+            _install_local_executor()
             drill = DelegationDrill(root)
             yield drill.delegation_space("2-datacore"), drill
     finally:

@@ -245,16 +245,17 @@ def test_hook_turns_recognisable_edits_into_adapter_commands(tmp_path):
     before = _event_count(space)
 
     dry = _run(READONLY, "hook", "--space", space)
-    assert dry.returncode == 1, dry.stdout + dry.stderr   # pending, not applied
+    assert dry.returncode == 2, dry.stdout + dry.stderr   # refusal for new task
     assert _event_count(space) == before
     for needle in (f"update --file {generated} --id {first} --state DONE",
                    f"--id {second} --state NEXT",
                    "--scheduled 2026-11-10", "--deadline 2026-11-12",
                    "add --file", "A new hand-typed task"):
         assert needle in dry.stdout, (needle, dry.stdout)
+    assert "inbox.org" in dry.stdout, "refusal must suggest adding to the inbox"
 
     done = _run(READONLY, "hook", "--space", space, "--apply")
-    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.returncode == 2, done.stdout + done.stderr  # refusal; state changes still applied
     assert _ledger_item(space, first).status == "dismissed"
     item = _ledger_item(space, second)
     assert item.payload["state"] == "NEXT"
@@ -262,7 +263,8 @@ def test_hook_turns_recognisable_edits_into_adapter_commands(tmp_path):
     assert item.payload["deadline"]
     from ledger.hub import authoritative_state
     titles = [i.payload.get("title") for i in authoritative_state(space).items.values()]
-    assert titles.count("A new hand-typed task") == 1
+    assert titles.count("A new hand-typed task") == 0, \
+        "new tasks must not be auto-added to the ledger; they go via the inbox"
     assert not _writable(generated)
     clean = _run(READONLY, "hook", "--space", space)
     assert clean.returncode == 0, clean.stdout + clean.stderr

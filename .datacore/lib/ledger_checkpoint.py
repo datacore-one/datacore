@@ -50,6 +50,7 @@ from pathlib import Path
 LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 
+import ledger_transport as transport  # noqa: E402
 from ledger.fold import fold  # noqa: E402
 from ledger.genesis import import_space  # noqa: E402
 from ledger.log import TELEMETRY_SUFFIX, read_events  # noqa: E402
@@ -240,7 +241,7 @@ def write(space: Path) -> Path:
     if saved is not None:
         previous = json.loads(saved)
         try:
-            _restore(previous, space.name)
+            _restore(previous, space.name, source_space=space)
         except StateRootMismatch:
             # Its chains verified; only the root it recorded is stale -- the fold
             # rules changed since (the 2026-09-23 formal-verification fixes made
@@ -276,15 +277,23 @@ def write(space: Path) -> Path:
         raise ValueError(f'live ledger fails verification ({", ".join(named)}); '
                          'previous checkpoint kept -- see: ledger_cli.py verify --space')
     # Test the saved representation before replacing the previous checkpoint.
-    _restore(document, space.name)
+    _restore(document, space.name, source_space=space)
     if superseded is not None:
         old_root = json.loads(superseded)['state_root']
         archive = snapshot_path.with_name(f'superseded-{old_root[:16]}.json')
         if watch_file(archive)['before'] not in (None, superseded):
             raise ValueError('superseded checkpoint archive conflicts')
         write_org_text(archive, superseded)
+    snapshot_text = json.dumps(document, sort_keys=True) + '\n'
+    cap = transport.MAX_SHARED_BYTES
+    for label, content in (("org checkpoint", text), ("ledger snapshot", snapshot_text)):
+        size = len(content.encode('utf-8'))
+        if size >= cap:
+            raise ValueError(
+                f"{label} is too large to share: {size:,} bytes >= {cap:,} bytes share cap "
+                f"({size / 1048576:.1f} MB); the sync would hold it back")
     write_org_text(dest, text)
-    write_org_text(snapshot_path, json.dumps(document, sort_keys=True) + '\n')
+    write_org_text(snapshot_path, snapshot_text)
     return dest
 
 
@@ -292,11 +301,14 @@ class StateRootMismatch(ValueError):
     """The saved chains verify, but fold to a different root than was recorded."""
 
 
-def _restore(document, name):
+def _restore(document, name, source_space: Path | None = None):
     """Actually restore a saved snapshot in disposable storage and verify it.
 
     These are integrity checks, not independent signer authentication. The
     checkpoint must be obtained from the deployment's trusted backup source.
+    If source_space is provided, its hub config is copied to support hub-enabled
+    restoration with the same admission and policy logic used to compute the
+    original state root.
     """
     from ledger.verify import chain_problems
     if (not isinstance(document, dict) or document.get('version') != 1
@@ -308,6 +320,13 @@ def _restore(document, name):
         scratch = Path(temporary) / name
         folder = scratch / '.datacore/events'
         folder.mkdir(parents=True)
+        # Copy hub config if available, to restore with the same admission logic
+        if source_space is not None:
+            hub_config = source_space / '.datacore' / 'ledger-hub.json'
+            if hub_config.is_file():
+                hub_dest = scratch / '.datacore' / 'ledger-hub.json'
+                hub_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(hub_config, hub_dest)
         for filename, text in document['chains'].items():
             if (not isinstance(filename, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*\.jsonl', filename)
                     or not isinstance(text, str) or not text.endswith('\n')):
@@ -326,7 +345,8 @@ def _restore(document, name):
         saved = sum(len(text.splitlines()) for text in document['chains'].values())
         if len(events) != saved or chain_problems(events):
             raise ValueError('saved event chain fails integrity verification')
-        restored = fold(events)
+        from ledger.hub import authoritative_state  # hub spaces: admission + policy (Codex re-audit, finding 2)
+        restored = authoritative_state(scratch, events)
         if restored.state_root() != document['state_root']:
             raise StateRootMismatch('restored state differs from saved state root')
         return restored
@@ -396,7 +416,7 @@ def verify(space: Path) -> tuple[bool, str]:
         document = json.loads(snapshot_path.read_text(encoding='utf-8'))
         if hashlib.sha256(cp.read_bytes()).hexdigest() != document.get('org_sha256'):
             return False, 'saved Org checkpoint differs from its snapshot checksum'
-        restored = _restore(document, space.name)
+        restored = _restore(document, space.name, source_space=space)
     except FileNotFoundError:
         return False, 'legacy Org-only checkpoint has no complete ledger snapshot; write a new checkpoint'
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:

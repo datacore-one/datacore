@@ -87,7 +87,7 @@ def candidates(hosts: list[str]) -> dict[str, dict[str, str]]:
 def signatures(root: Path) -> dict[str, list[tuple[dict, str]]]:
     """{actor: [(body, sig_hex)]} for every signed event in every space."""
     sigs: dict[str, list[tuple[dict, str]]] = collections.defaultdict(list)
-    for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")):
+    for path in sorted(root.glob("[0-9]-*/.datacore/events/*.jsonl")) + sorted(root.glob("[0-9]-*/.datacore/telemetry/*.jsonl")):
         voids = for_events_dir(path.parent)
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line.strip():

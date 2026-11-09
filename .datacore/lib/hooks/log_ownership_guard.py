@@ -191,6 +191,25 @@ def changed(rng: str) -> list[str]:
     return files
 
 
+def never_leaves(rng: str, path: str) -> bool:
+    """True when the pushed tip lacks `path` and no remote has ever held it.
+
+    Such a log is written and removed again inside unpublished commits, so the
+    push publishes nothing in another actor's log. On 2026-11-07 a test
+    fixture's log leaked into a real space locally; its removal still left the
+    add and the remove in the range and this guard refused every push. No
+    remote refs at all means it cannot be told, so the answer is False.
+    """
+    tip = rng.split("..", 1)[-1].lstrip(".") or "HEAD"
+    if git("cat-file", "-e", f"{tip}:{path}")[0] == 0:
+        return False
+    rc, refs = git("for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes")
+    if rc != 0 or not refs.strip():
+        return False
+    rc, held = git("log", "--remotes", "-1", "--format=%H", "--", path)
+    return rc == 0 and not held.strip()
+
+
 def members(root: Path) -> list[str]:
     p = root / ".datacore" / "members.yaml"
     if not p.is_file():
@@ -238,7 +257,7 @@ def main(argv: list[str]) -> int:
             # after principal_of() and the seq high-water mark. Resolve through
             # base_writer() so the guard keeps catching a genuine foreign log.
             who = base_writer(m.group(1))
-            if who not in mine and who not in SHARED_ROLE_LOGS:
+            if who not in mine and who not in SHARED_ROLE_LOGS and not never_leaves(rng, f):
                 foreign.add(m.group(1))
 
     if not foreign:

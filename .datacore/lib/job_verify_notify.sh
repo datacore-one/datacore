@@ -136,7 +136,10 @@ if [ "$RC" -ne 0 ] && [ -n "$OUT" ]; then
     FMT="$(printf '%s\n' "$MSG" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" --fit \
       --more "$LOG on $(hostname -s)" 2>/dev/null)"
     [ -n "$FMT" ] && MSG="$FMT"
-    _deliver "$MSG"
+    if _deliver "$MSG"; then
+      printf '%s\n' "$MSG" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" --sent job_verify_notify \
+        >/dev/null 2>&1 || true
+    fi
   fi
 fi
 
