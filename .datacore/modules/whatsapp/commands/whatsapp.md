@@ -103,7 +103,7 @@ When run without subcommand, shows interactive menu:
 /whatsapp send "Brett Krause" "Great meeting at Davos! Would love to connect about the gaming fund..."
 ```
 
-## Instructions
+## Workflow
 
 When user runs `/whatsapp`:
 
@@ -125,6 +125,21 @@ For send operations:
 1. Resolve contact name to phone number
 2. Confirm message before sending
 3. Send via WAHA client
+
+## Your Boundaries
+
+- **Can:** import exported chats into CRM contacts, show gateway status, and send a message the user confirmed.
+- **Cannot:** send any message without the user confirming its text and recipient, or delete contacts or chat exports.
+- **Must:** report created, matched and skipped counts after an import, and stop when the gateway session is not authenticated.
+
+## Error Handling
+
+| Error | Recovery |
+|-------|----------|
+| No exports found | Say where exports are expected (`.datacore/state/whatsapp/exports/`) and stop |
+| Gateway session not running or needs a QR scan | Report the session state; ask the user to scan in the mobile app |
+| Contact name does not resolve to one number | List the candidates and ask; never guess |
+| Send fails | Report the gateway's error; do not retry automatically |
 
 ## Agent Context
 
