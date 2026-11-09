@@ -1185,6 +1185,19 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
     rewrites = _incoming_rewrites(space, f"origin/{db}")
     if rewrites:
         return _rewrite_refusal(db, f"origin/{db}", rewrites, autosaved)
+    # INCOMING-LOSS CHECK (MEM-61). git_fleet_sync guards its _pull with this
+    # already; converge had no equivalent, so a machine that deleted 25 tracked
+    # files and pushed sent a clean fast-forward that silently removed the files
+    # here. Same threshold as git_fleet_sync: 10 deleted files or a file shrunk
+    # to ≤20 % of its baseline (MASS_DELETION=10, SHRINK_KEEP=0.2).
+    from git_fleet_sync import incoming_losses as _incoming_losses
+    losses = _incoming_losses(space, f"origin/{db}")
+    if losses:
+        return Result(False,
+                      f"refused: origin/{db} would remove tracked content — "
+                      f"{'; '.join(losses[:3])}. Nothing was merged; "
+                      f"a human merges if intended (MEM-61)",
+                      {"branch": db, "incoming_loss": losses})
     ok, err, resolved, kept = _merge(space, f"origin/{db}", keep_both=True)
     unfiled: list[str] = []
     if kept:
