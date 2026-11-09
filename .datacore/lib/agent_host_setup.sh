@@ -125,7 +125,7 @@ case "$PROFILE" in
     # (INS-7, 2026-09-26) -- the same gap hermes had until 2026-09-06.
     # --alert command: Data's machine sends its own alerts through its own bot
     # (~/.datacore/alerts.yaml -> agent_alert.py --bot data-telegram-bot; owner 2026-09-30).
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command 2>&1 | $LIB/tee_timestamp.sh $STATE/job_verify.log")
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data $LIB/tee_timestamp.sh $STATE/job_verify.log python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command")
     ;;
   hermes)
     CRON_KEYS=(phase1-cycle job-verify)
@@ -137,7 +137,7 @@ case "$PROFILE" in
     # --manifest: hermes has no ~/Data/.datacore/lib; the runner copy is the canonical one (test_runner_manifest_matches_canonical).
     # --alert command: Tris's machine sends its own alerts through its own bot
     # (owner decision 2026-09-30): ~/.datacore/alerts.yaml runs agent_alert.py --bot tris-telegram-bot.
-    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command 2>&1 | $LIB/tee_timestamp.sh $STATE/job_verify.log")
+    CRON_LINES+=("0 8 * * * JOB_VERIFY_RUNNER=$RUNNER DATACORE_ROOT=$HOME/Data $LIB/tee_timestamp.sh $STATE/job_verify.log python3 $LIB/job_verify.py --machine $HOST --manifest $LIB/jobs/manifest.yaml --alert command")
     ;;
   dayshift)
     # The owner's session server never sleeps, so it cycles on a clock like the
