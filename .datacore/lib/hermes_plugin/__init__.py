@@ -331,7 +331,9 @@ _ROUTING_FRAME = (
     "for miles, tris or data, with done_when and a check; then reply in one line who has it. "
     "Do not research or investigate it yourself, and do not ask the founder for facts the agent "
     "can find. Only if no agent can take it (datacore_who_has_what shows them paused or down) "
-    "say so and that you will do it yourself. Status questions: datacore_who_has_what.")
+    "say so and that you will do it yourself. Status questions: datacore_who_has_what. "
+    "An earlier session about the same request is not evidence that filing fails now: "
+    "file it in this turn and trust only the reply you get.")
 
 
 def _winston() -> bool:
@@ -666,8 +668,16 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         return f"Refused: nothing was filed; {why}"
     space, payload, kw = _normalise_filing(space, payload, kw)
     etype = str(kw.get("type") or "").strip()
-    if not etype and isinstance(payload, dict) and payload.get("title") and payload.get("assignee"):
-        etype = "item.create"  # a task-shaped payload with no type is a delegation
+    if not etype and isinstance(payload, dict):
+        # The type under another common name (2026-11-08: ten refusals in a row).
+        for alias in ("event_type", "event", "kind"):
+            if str(payload.get(alias) or "") in EVENT_TYPES:
+                payload = dict(payload)
+                etype = str(payload.pop(alias))
+                break
+    if not etype and isinstance(payload, dict) and any(
+            payload.get(k) for k in ("assignee", "asked_by", "route", "done_when")):
+        etype = "item.create"  # a delegation-shaped payload with no type
     if etype not in EVENT_TYPES:
         return (f"Refused: {etype!r} is not a declared event type. "
                 f"Known: {', '.join(sorted(EVENT_TYPES))}. To delegate, file: {_EXAMPLE}")
