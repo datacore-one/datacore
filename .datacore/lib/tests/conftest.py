@@ -15,6 +15,25 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 
+@pytest.fixture(autouse=True)
+def _executor_registry_restored(monkeypatch):
+    """A test that registers an executor (the delegation drill's local one) or
+    selects one through $DATACORE_EXECUTOR leaves both as it found them. Left
+    behind, the drill's adapter showed up in test_executors' registry check
+    when it ran later in the same process."""
+    # Touching it makes monkeypatch put back whatever was there before the test.
+    monkeypatch.delenv("DATACORE_EXECUTOR", raising=False)
+    yield
+    # Not imported here: importing executors before a scratch fleet redirects
+    # DATACORE_ROOT binds the ledger stack to the real install. Only adapters
+    # defined outside the executors package (a test's or the drill's) go.
+    base = sys.modules.get("executors.base")
+    if base is not None:
+        for name, cls in list(base._REGISTRY.items()):
+            if not cls.__module__.startswith("executors"):
+                del base._REGISTRY[name]
+
+
 @pytest.fixture
 def briefing_principals(tmp_path, monkeypatch):
     """Exercise real policy checks with declared, disposable identities."""
