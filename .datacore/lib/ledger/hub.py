@@ -294,21 +294,20 @@ def _file_has_evidence(path: Path) -> bool:
     """Does one log file hold hub evidence? Parses only lines that could: any
     JSON spelling of `hub.enable` or of a `hub` field holds the letters
     "hub" or a backslash escape. Lines are split on LF only, as the event
-    reader splits them. Cached on the file's inode, size and times."""
-    try:
-        st = path.stat()
-    except OSError:
-        return False
-    # The inode change time too (re-check 3, D4): it moves on every write and
-    # cannot be set back, unlike the modification time.
-    key = (str(path), st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-    if key in _FILE_EVIDENCE:
-        return _FILE_EVIDENCE[key]
-    found = False
+    reader splits them. Cached on the file's content, which saves the parse."""
     try:
         raw = path.read_bytes()
     except OSError:
-        raw = b""
+        return False
+    # The content, not the times (re-check 3, D4). The inode change time moves
+    # on every write but only once per kernel clock tick: a same-size rewrite
+    # within one tick left size, mtime and ctime unchanged and was served the
+    # old answer (test_r7b_the_evidence_cache_sees_a_same_size_rewrite, failing
+    # 2 runs in 3 on dayshift, 2026-11-10).
+    key = (str(path), hashlib.blake2b(raw, digest_size=16).digest())
+    if key in _FILE_EVIDENCE:
+        return _FILE_EVIDENCE[key]
+    found = False
     if b"hub" in raw or b"\\" in raw:
         for line in raw.split(b"\n"):        # exactly as the event reader splits (re-check 3, D3)
             if b"hub" not in line and b"\\" not in line:
