@@ -1102,6 +1102,13 @@ module_commands:
     - formal-verify
     status: active
     trigger: check proofs|verify check|are the proofs current
+  dev:security-audit:
+    name: security-audit
+    description: Security audit or pen test of a repository with the security-audit skill — sandboxed, profile-sized, report to the private space, fixes only after the owner approves the findings
+    version: 0.1.0
+    source: .datacore/modules/dev/commands/security-audit.md
+    module: dev
+    status: active
   campaign-plan:
     name: Quarterly Campaign Planning
     description: Create quarterly campaign strategy with themes, objectives, and content pillars

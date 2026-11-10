@@ -75,6 +75,17 @@ def read_text_within(root, path, *, limit=16 * 1024**2):
         if (stamp(before) != stamp(os.fstat(fd)) or len(raw) != before.st_size
                 or stamp(before) != stamp(os.stat(relative.name, dir_fd=parent, follow_symlinks=False))):
             raise ValueError('source changed during read')
+        # A same-size rewrite inside one kernel clock tick leaves size, mtime
+        # and ctime unchanged on coarse-timestamp filesystems, so the stamps
+        # alone cannot see it. Read the bytes once more and compare.
+        again = bytearray()
+        while len(again) <= len(raw):
+            chunk = os.pread(fd, len(raw) + 1 - len(again), len(again))
+            if not chunk:
+                break
+            again.extend(chunk)
+        if again != raw:
+            raise ValueError('source changed during read')
         for parent_fd, name, child_fd in chain:
             observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
             held = os.fstat(child_fd)
