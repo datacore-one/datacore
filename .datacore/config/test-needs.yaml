@@ -580,6 +580,17 @@ tests:
     only: [test_agent_that_only_checked_does_not_close_the_reminder]
     needs: [agent]
     why: a real agent session (DATACORE_AGENT_EVALS=1); it fails rather than skip without one, by design
+  # Production checks in module suites that read other hosts. Run from a module
+  # folder on a host that is not the console (dayshift, 2026-11-09) they failed with
+  # "Could not resolve hostname" / "No such file or directory: 'kubectl'".
+  - test: .datacore/modules/ventures/tests/test_promise_CAD9_too_long_refused_at_setup.py
+    only: [test_no_real_duty_outlives_its_real_scheduler]
+    needs: [fleet]
+    why: reads Hermes's scheduler cap over ssh; only the console reaches the fleet
+  - test: .datacore/modules/chief-of-staff/tests/test_promise_OPS4_retired_stays_retired.py
+    only: [test_no_retired_line_is_scheduled_on_any_host]
+    needs: [fleet]
+    why: reads every host's crontab and the pods' schedules (ssh, kubectl); only the console reaches the fleet
 
   # ---- promise evals: what an agent pod's checkout does not build or carry (2026-11-05) ----
   # Read off Winston's pod board against Miles's on dayshift: these were red only on
