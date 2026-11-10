@@ -223,6 +223,16 @@ def _install_local_executor():
 
 
 class DelegationDrill(Drill):
+    def __init__(self, root: Path, keep: bool = False):
+        super().__init__(root, keep=keep)
+        # The drill never pays a model (module docstring). A caller that builds
+        # the drill without registering the local executor first used to get
+        # the default `claude-code` adapter: a missing binary on a host without
+        # it, a real model call on a host with it. Whether it worked depended on
+        # an earlier test having left $DATACORE_EXECUTOR set. Constructed inside
+        # scratch_fleet, as every caller does, so DATACORE_ROOT is redirected.
+        _install_local_executor()
+
     SCENARIOS = (
         "the_happy_path",
         "addressed_work_reaches_only_its_addressee",

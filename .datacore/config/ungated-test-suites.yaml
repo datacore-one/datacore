@@ -42,6 +42,13 @@ suites:
       against CI install time.
     reviewed: 2026-09-25
     state: green
+  - path: .datacore/modules/dev/skills/architecture-canvas/tests
+    reason: >
+      Added with the architecture-canvas skill (dev module, 2026-10-13); passing
+      locally (24, under a second). The dev module is its own repo, so CI's core
+      checkout does not contain it.
+    reviewed: 2026-11-09
+    state: green
   - path: .datacore/modules/dev/evals/audit/fixture
     reason: >
       Not a suite: a practice project with planted defects that the audit
