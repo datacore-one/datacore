@@ -240,3 +240,34 @@ def test_s6_cli_self_test_never_writes_the_real_hook_state(tmp_path):
     state = root / ".datacore" / "state"
     assert not (state / "hook_state.yaml").exists()
     assert not (state / "execution_log.yaml").exists()
+
+
+def _guard_call(tmp_path, mode, payload):
+    state = (tmp_path / "state").resolve()
+    state.mkdir(mode=0o700, exist_ok=True)
+    guard = LIB / "hooks" / "injection_integrity_guard.py"
+    r = subprocess.run([sys.executable, str(guard), mode], input=json.dumps({"session_id": "s", **payload}),
+                       text=True, capture_output=True, env=_env(DATACORE_STATE=state), timeout=30)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_a_memory_that_quotes_the_overflow_does_not_arm_the_gate(tmp_path):
+    """2026-11-14: a session start returned normally, but one injected memory
+    described the old overflow -- "exceeds maximum allowed tokens ... dumped to
+    <project>/tool-results/mcp-plur-plur_session_start-<ts>.txt". The guard
+    armed on that quote, waited for a file that never existed, and blocked every
+    tool for the rest of the session. Only a spill file that exists arms it."""
+    quote = ('[ENG-1] plur_session_start result exceeds maximum allowed tokens, with the payload '
+             'dumped to <project>/tool-results/mcp-plur-plur_session_start-<ts>.txt instead of into context.')
+    _guard_call(tmp_path, "mark", {"tool_name": "mcp__plur__plur_session_start", "tool_response": quote})
+    assert _guard_call(tmp_path, "check", {"tool_name": "WebFetch", "tool_input": {}}) == ""
+
+
+def test_an_armed_gate_whose_file_is_gone_lifts_itself(gate, tmp_path):
+    """Reading a missing file is an error, so the clear hook never runs for it:
+    the gate must notice on its own that what it waits for cannot be read."""
+    import os
+    os.unlink(gate["spill"])
+    assert gate["call"]("check", {"tool_name": "WebFetch", "tool_input": {}}) == ""
+    assert gate["bash"]("curl https://example.org") == ""

@@ -190,10 +190,14 @@ def mark(data: dict) -> None:
     resp = _text(data.get("tool_response", ""))
     if not SPILL_PAT.search(resp):
         return
-    m = PATH_PAT.search(resp)
-    if not m:
-        return
-    atomic_write_json(_state(data.get("session_id", "")), {"path": m.group(1), "armed": True})
+    # Arm only on a spill file that exists. A normal result can QUOTE the spill
+    # message: on 2026-11-14 an injected memory about the old overflow named
+    # "<project>/tool-results/mcp-plur-plur_session_start-<ts>.txt", the guard
+    # armed on it, and every tool stayed blocked waiting for a file that never was.
+    for m in PATH_PAT.finditer(resp):
+        if os.path.isfile(m.group(1)):
+            atomic_write_json(_state(data.get("session_id", "")), {"path": m.group(1), "armed": True})
+            return
 
 
 def check(data: dict) -> None:
@@ -205,6 +209,12 @@ def check(data: dict) -> None:
     except Exception:
         return
     if not st.get("armed"):
+        return
+    if not os.path.isfile(st.get("path") or ""):
+        # What the gate waits for cannot be read (gone, or never there). Reading
+        # a missing file is an error, so `clear` never runs for it: lift here,
+        # as `clear` does for a vanished file (FAIL-SAFE above).
+        p.unlink(missing_ok=True)
         return
     tool = data.get("tool_name")
     if tool in READERS:
