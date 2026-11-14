@@ -147,3 +147,18 @@ def test_a_role_need_works_without_lib_on_the_import_path(tmp_path):
                        timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
     assert r.returncode == 0, r.stderr[-1500:]
     assert r.stdout.strip() == "False"
+
+
+def test_a_local_overlay_adds_this_installs_own_entries(tmp_path):
+    """Entries that name this install's own space folders (a test inside a space
+    repository, a build in another space) live in the gitignored
+    test-needs.local.yaml beside the shipped file (INS-3); load() reads both."""
+    shipped = tmp_path / "test-needs.yaml"
+    shipped.write_text("tests:\n  - {test: a.py, needs: [agent], why: w}\n")
+    assert [e["test"] for e in ng.load(shipped)] == ["a.py"]
+    (tmp_path / "test-needs.local.yaml").write_text("tests:\n  - {test: 7-x/b.py, needs: [agent], why: w}\n")
+    assert [e["test"] for e in ng.load(shipped)] == ["a.py", "7-x/b.py"]
+
+
+def test_the_overlay_is_never_tracked():
+    assert not _tracked(".datacore/config/test-needs.local.yaml")

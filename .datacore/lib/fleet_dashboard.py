@@ -34,7 +34,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fleet_reach  # noqa: E402
 
 ROOT = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
-OUT = ROOT / "2-datacore" / "content" / "fleet-dashboard" / "index.html"
+
+
+def default_out(root: Path = ROOT) -> Path:
+    """The console page, in the space holding the `system` role (install.yaml);
+    the personal space when none is declared (INS-3)."""
+    from spaces import space_for
+    return root / space_for("system", root, "0-personal") / "content" / "fleet-dashboard" / "index.html"
+
+
+OUT = default_out()
 MANIFEST = Path(__file__).resolve().parent / "jobs" / "manifest.yaml"
 DATACORED = os.environ.get("DATACORED_HEALTH_URL", "http://cos-server:8787/health")
 REPAIR_FRESH_DAYS = 2  # an agent repair older than this that has not fixed it is stuck
@@ -62,15 +71,15 @@ def _build_vessels() -> tuple[list, dict]:
         (primary, primary.upper(), "Owner's workstation", "visitor"),
         (dayshift, dayshift.upper(), "Owner's day host", "host"),
         (box, box.upper(), "Cluster host", "host"),
-        (pods.get("winston", ""), agents.get("miles", "").upper() or "CHIEF", "Chief of Staff", "pod"),
-        (pods.get("tris", ""), agents.get("tris", "").upper() or "RESEARCH", "Research & memory", "pod"),
-        (pods.get("data", ""), agents.get("data", "").upper() or "OPS", "Operations", "pod"),
-        (agents.get("miles", ""), u.get("owner", "").upper() or "OWNER", "Engineering", "user"),
+        (pods.get("chief_of_staff", ""), agents.get("engineering", "").upper() or "CHIEF", "Chief of Staff", "pod"),
+        (pods.get("research", ""), agents.get("research", "").upper() or "RESEARCH", "Research & memory", "pod"),
+        (pods.get("operations", ""), agents.get("operations", "").upper() or "OPS", "Operations", "pod"),
+        (agents.get("engineering", ""), u.get("owner", "").upper() or "OWNER", "Engineering", "user"),
     ]
     pod_deploy = {
-        pods.get("winston", ""): agents.get("miles", ""),
-        pods.get("tris", ""): agents.get("tris", ""),
-        pods.get("data", ""): agents.get("data", ""),
+        pods.get("chief_of_staff", ""): agents.get("engineering", ""),
+        pods.get("research", ""): agents.get("research", ""),
+        pods.get("operations", ""): agents.get("operations", ""),
     }
     return [(v[0], v[1], v[2], v[3]) for v in vessels if v[0]], {k: v for k, v in pod_deploy.items() if k}
 
@@ -85,13 +94,24 @@ TITLES = {
     "inbox": "Inbox processing", "briefing": "Morning briefing", "cos-briefing": "Morning briefing cadence",
     "github-triage": "GitHub triage", "github-triage-report": "GitHub triage report",
     "ledger-invariants": "Ledger consistency", "preflight": "Overnight preflight",
-    "audit-nightly-miles": "Cross-model audit (nightly)", "audit-calibration-miles": "Cross-model audit (calibration)",
-    "audit-calibration-tris": "Cross-model audit (calibration)", "id-churn": "Task ID churn",
+    "audit-nightly": "Cross-model audit (nightly)", "audit-calibration": "Cross-model audit (calibration)",
+    "id-churn": "Task ID churn",
     "cos-cadence-triage": "Chief-of-staff cadence triage", "creds-sync": "Credential sync",
     "nightshift-deadman": "Night-shift dead-man switch", "v2-verify": "Self-test", "tomorrow": "Evening review",
     "ledger-ingest": "Ledger ingest", "ledger-claim": "Ledger claim loop",
 }
-PREFIXES = ("box-", "nightshift-", "hermes-", "plur-claw-", "bridge-", "dayshift-", "cadence-firm-", "mac-")
+_BASE_PREFIXES = ("box-", "nightshift-", "hermes-", "bridge-", "dayshift-", "cadence-firm-", "mac-")
+
+
+def _prefixes(path: Path | None = None) -> tuple[str, ...]:
+    """Machine prefixes of job names: the manifest's own, then every name a
+    roster machine goes by (registry/infrastructure.yaml)."""
+    from jobs.manifest import fleet_names
+    extra = tuple(f"{n}-" for n in fleet_names(path) if f"{n}-" not in _BASE_PREFIXES)
+    return _BASE_PREFIXES + extra
+
+
+PREFIXES = _prefixes()
 
 PROBE = r"""
 echo "head=$(git -C ~/Data rev-parse --short HEAD 2>/dev/null)"
@@ -119,24 +139,43 @@ echo "bk_why=$(sudo -n journalctl -u fleet-backup.service -n 30 --no-pager -o ca
 
 # Exact owner commands for known conditions. Each writes on the box or in a pod,
 # which agents may not do, so the console hands them over rather than running them.
-CMD_BACKUP = "\n".join([
-    "ssh winston \"sudo find /var/tmp -maxdepth 1 -name 'datacore-*' -mtime +2 -exec rm -rf {} +\"",
-    "ssh winston \"sudo rm -rf /var/lib/private/datacore-workers && df -h /\"",
-    "ssh winston \"sudo systemctl start fleet-backup.service; sudo journalctl -u fleet-backup -n 5 --no-pager\"",
-])
+# The always-on machine (roster roles.always_on) is reached by its ssh alias, and
+# its pod by the namespace and deployment the roster declares (INS-3).
+def _cluster(path: Path | None = None) -> tuple[str, str, str]:
+    """(ssh alias, namespace, deployment) of the always-on machine; placeholders
+    the owner fills in where the roster declares none."""
+    from jobs.manifest import _servers, role, ssh_alias
+    machine = role("always_on", path)
+    k8s = (((_servers(path).get(machine) or {}).get("access") or {}).get("k8s") or {}) if machine else {}
+    return ((ssh_alias(machine, path) if machine else None) or "ALWAYS_ON_HOST",
+            str(k8s.get("namespace") or "NAMESPACE"), str(k8s.get("deployment") or "DEPLOYMENT"))
+
+
+def cmd_backup(path: Path | None = None) -> str:
+    ssh = _cluster(path)[0]
+    return "\n".join([
+        f"ssh {ssh} \"sudo find /var/tmp -maxdepth 1 -name 'datacore-*' -mtime +2 -exec rm -rf {{}} +\"",
+        f"ssh {ssh} \"sudo rm -rf /var/lib/private/datacore-workers && df -h /\"",
+        f"ssh {ssh} \"sudo systemctl start fleet-backup.service; sudo journalctl -u fleet-backup -n 5 --no-pager\"",
+    ])
 # $HOME is escaped (\$HOME) so the owner's shell passes it through and the pod's
 # own sh expands it; the pre-commit scan also refuses literal home paths.
-CMD_TOOLS = ("ssh winston \"sudo k3s kubectl -n firm exec deploy/winston -c daemon -- sh -c 'cp \\$HOME/.datacore/mcp.json "
-             "\\$HOME/.datacore/mcp.json.bak-\\$(date +%F) && sed -i -e \\\"s#/usr/bin/node#\\$HOME/.hermes/node/bin/node#g\\\" "
-             "-e \\\"s#\\$HOME/Data/2-datacore/2-projects/datacore-mcp/dist/index.js#\\$HOME/.hermes/node/lib/"
-             "node_modules/@datacore-one/mcp/dist/index.js#\\\" \\$HOME/.datacore/mcp.json' && sudo k3s kubectl -n firm "
-             "rollout restart deploy/winston\"")
+def cmd_tools(path: Path | None = None) -> str:
+    from spaces import space_for
+    ssh, ns, dep = _cluster(path)
+    system = space_for("system", ROOT, "0-personal")
+    return (f"ssh {ssh} \"sudo k3s kubectl -n {ns} exec deploy/{dep} -c daemon -- sh -c 'cp \\$HOME/.datacore/mcp.json "
+            "\\$HOME/.datacore/mcp.json.bak-\\$(date +%F) && sed -i -e \\\"s#/usr/bin/node#\\$HOME/.hermes/node/bin/node#g\\\" "
+            f"-e \\\"s#\\$HOME/Data/{system}/2-projects/datacore-mcp/dist/index.js#\\$HOME/.hermes/node/lib/"
+            f"node_modules/@datacore-one/mcp/dist/index.js#\\\" \\$HOME/.datacore/mcp.json' && sudo k3s kubectl -n {ns} "
+            f"rollout restart deploy/{dep}\"")
 ROSTER = "\\$HOME/Data/.datacore/registry/infrastructure.yaml"
 
 
-def cmd_roster(broken: str, good: str) -> str:
-    k = "sudo k3s kubectl -n firm exec"
-    return (f"ssh winston \"{k} deploy/{broken} -c cron -- sh -c 'cp {ROSTER} {ROSTER}.bak-\\$(date +%F)' "
+def cmd_roster(broken: str, good: str, path: Path | None = None) -> str:
+    ssh, ns, _dep = _cluster(path)
+    k = f"sudo k3s kubectl -n {ns} exec"
+    return (f"ssh {ssh} \"{k} deploy/{broken} -c cron -- sh -c 'cp {ROSTER} {ROSTER}.bak-\\$(date +%F)' "
             f"&& {k} deploy/{good} -c cron -- sh -c 'cat {ROSTER}' | {k} -i deploy/{broken} -c cron -- sh -c 'cat > {ROSTER}'\"")
 
 
@@ -157,9 +196,8 @@ IMPACT = {
     "tomorrow": (2, "The evening review did not happen."),
     "autofix-escalation": (1, "Repairs the agents gave up on are queued for you."),
     "cos-cadence-triage": (1, "Chief-of-staff cadence triage has stopped."),
-    "audit-nightly-miles": (1, "The cross-model audit of agent work has stopped."),
-    "audit-calibration-miles": (1, "The cross-model audit calibration has stopped."),
-    "audit-calibration-tris": (1, "The cross-model audit calibration has stopped."),
+    "audit-nightly": (1, "The cross-model audit of agent work has stopped."),
+    "audit-calibration": (1, "The cross-model audit calibration has stopped."),
     "delegation-canary": (1, "Delegation between agents is not being exercised."),
     "delegation-review": (1, "Delegated work is not being reviewed."),
     "delegation-round": (1, "The weekly delegation round is not running."),
@@ -169,11 +207,46 @@ IMPACT = {
 }
 
 
+#: A cross-model audit job is named per agent (audit-nightly-<agent>); it reads the same whoever it audits.
+_AUDIT = re.compile(r"^(audit-(?:nightly|calibration))-[A-Za-z0-9_-]+$")
+
+
 def _key(name: str) -> str:
     for p in PREFIXES:
         if name.startswith(p):
-            return name[len(p):]
-    return name
+            return _AUDIT.sub(r"\1", name[len(p):])
+    return _AUDIT.sub(r"\1", name)
+
+
+def crew_names() -> dict:
+    """What the owner calls the chief of staff and the operations agent (registry roles)."""
+    import roster
+    cos, ops = roster.by_role("chief of staff"), roster.by_role("chief of operations")
+    return {"cos": roster.display(cos) if cos else "the chief of staff",
+            "ops": roster.display(ops) if ops else "the operations agent"}
+
+
+def pod_agents(path: Path | None = None) -> list[str]:
+    """Display names of the agents living in a pod (roster k8s deployments), roster order."""
+    import roster
+    out = []
+    for name, cfg in fleet_reach.servers(path).items() if _roster_ok(path) else []:
+        if isinstance(cfg, dict) and not cfg.get("retired") and ((cfg.get("access") or {}).get("k8s") or {}).get("deployment"):
+            who = roster.resident_agent(name)
+            if who:
+                out.append(roster.display(who))
+    return out
+
+
+def _roster_ok(path: Path | None = None) -> bool:
+    try:
+        return bool(fleet_reach.servers(path))
+    except Exception:  # noqa: BLE001 -- no roster: no pods to name
+        return False
+
+
+def _or_list(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
 
 
 # -- plain language -----------------------------------------------------------
@@ -184,7 +257,7 @@ def job_title(name: str) -> str:
         if key.startswith(p):
             key = key[len(p):]
             break
-    return TITLES.get(key) or key.replace("-", " ").capitalize()
+    return TITLES.get(_AUDIT.sub(r"\1", key)) or key.replace("-", " ").capitalize()
 
 
 def plain_failure(detail: str) -> str:
@@ -345,21 +418,22 @@ def owner_orders(box: dict, dcd: dict, vessels: list, today: str) -> list:
             short = (used - size * (1 - int(need.group(1)) / 100)) / 1048576
             gb = f" Free about {max(short, 0) + 3:.0f} GB (needs {need.group(1)}% free)."
         orders.append({"severity": "red", "title": "Agent backups have stopped",
-                       "why": f"No copy of Winston, Tris or Data since {newest or 'unknown'}: a lost volume loses that work."
+                       "why": f"No copy of {_or_list(pod_agents()) if pod_agents() else 'the agents'} since {newest or 'unknown'}: a lost volume loses that work."
                               f" The nightly run skips because the box disk is too full.{gb}",
-                       "since": newest, "days": _days(newest, today), "owner": "you", "command": CMD_BACKUP,
+                       "since": newest, "days": _days(newest, today), "owner": "you", "command": cmd_backup(),
                        "machine": "BOX HOST", "job": "fleet-backup",
                        "how": "Clears 15 GB of leftovers (temp audit folders, a worker folder unused since 09-14), then runs the backup."})
     tools = dcd.get("tools") or {}
     down = [k for k in ("datacore", "plur") if tools.get(k) and tools.get(k) != "connected"]
+    cos = crew_names()["cos"]
     if dcd.get("status") == "unreachable":
-        orders.append({"severity": "red", "title": "Winston's app server is unreachable", "why": dcd.get("error") or "",
-                       "owner": "you", "machine": "WINSTON", "job": "datacored",
-                       "brief": "Winston's datacored on the box does not answer its health check. Find out why."})
+        orders.append({"severity": "red", "title": f"{cos[:1].upper()}{cos[1:]}'s app server is unreachable", "why": dcd.get("error") or "",
+                       "owner": "you", "machine": cos.upper(), "job": "datacored",
+                       "brief": f"{cos[:1].upper()}{cos[1:]}'s datacored on the box does not answer its health check. Find out why."})
     elif down:
-        orders.append({"severity": "red", "title": "Winston's app server has no tools",
+        orders.append({"severity": "red", "title": f"{cos[:1].upper()}{cos[1:]}'s app server has no tools",
                        "why": f"It reports ok, but its {' and '.join(down)} links are down: the app's chat cannot read your tasks or memory.",
-                       "owner": "you", "command": CMD_TOOLS, "machine": "WINSTON", "job": "datacored-tools",
+                       "owner": "you", "command": cmd_tools(), "machine": cos.upper(), "job": "datacored-tools",
                        "how": "Fixes two paths in his tool config, then restarts his pod (about a minute)."})
     good = next((POD_DEPLOY[v["key"]] for v in vessels
                  if v.get("key") in POD_DEPLOY and v.get("checker") == "checked today"), None)
@@ -686,7 +760,7 @@ def collect() -> dict:
         "disk_free_gb": round((size - used) / 1048576) if size else None,
         "briefing": (raw.get("box@pod") or {}).get("briefing"),
         "tools": dcd.get("tools"), "app": dcd.get("status"),
-        "promise_board": promise_source,
+        "promise_board": promise_source, **crew_names(),
         "kept": cur.get("green"), "broken": cur.get("red"), "untested": cur.get("could-not-run"), "total": cur.get("total"),
         "kept_delta": (cur.get("green", 0) - prev.get("green", 0)) if prev else None,
         "broken_delta": (cur.get("red", 0) - prev.get("red", 0)) if prev else None,
@@ -880,11 +954,11 @@ const vit=[
  ["disk","DISK",V.disk_pct!=null?V.disk_pct+"%":"?",V.disk_pct>=88?"red":V.disk_pct>=80?"amber":"green",
   `Box disk ${V.disk_pct??"?"}% used, ${V.disk_free_gb??"?"} GB free.\nBackups need about 20% free.`,
   V.disk_pct!=null?`<div class="meter"><i style="width:${V.disk_pct}%;background:${V.disk_pct>=88?"var(--red)":"var(--amber)"}"></i></div>`:""],
- ["mail","BRIEFING",V.briefing==="yes"?"✓":"✗",V.briefing==="yes"?"green":"red",V.briefing==="yes"?"Today's morning briefing was delivered.":"No briefing folder for today on Winston.",""],
+ ["mail","BRIEFING",V.briefing==="yes"?"✓":"✗",V.briefing==="yes"?"green":"red",V.briefing==="yes"?"Today's morning briefing was delivered.":`No briefing folder for today on ${V.cos||"the chief of staff"}.`,""],
  ["zap","TOOLS",`${tup}/2`,V.app!=="ok"?"red":tup===2?"green":"red",
-  `Winston's app server: ${V.app||"?"}\nDatacore link: ${tl.datacore||"?"}\nPLUR link: ${tl.plur||"?"}`,""],
+  `${V.cos||"The chief of staff"}'s app server: ${V.app||"?"}\nDatacore link: ${tl.datacore||"?"}\nPLUR link: ${tl.plur||"?"}`,""],
  ["shield","PROMISES",pk!=null?pk+"%":"?",pk>=90?"green":"amber",
-  V.total?`${V.kept} kept${sgn(V.kept_delta)}\n${V.broken} broken${sgn(V.broken_delta)}\n${V.untested} could not be tested\nof ${V.total} promises (last night's ${V.promise_board==="fleet"?"fleet ":"Miles's "}scoreboard)`:"No scoreboard.",
+  V.total?`${V.kept} kept${sgn(V.kept_delta)}\n${V.broken} broken${sgn(V.broken_delta)}\n${V.untested} could not be tested\nof ${V.total} promises (last night's ${V.promise_board==="fleet"?"fleet ":(V.ops||"the operations agent")+"'s "}scoreboard)`:"No scoreboard.",
   V.total?`<div class="meter"><i style="width:${100*V.kept/V.total}%;background:var(--ok)"></i><i style="width:${100*V.broken/V.total}%;background:var(--red)"></i></div>`:""],
 ];
 $("vitals").innerHTML=vit.map(([ic,k,v,c,t,m])=>`<div class="vital ${c}"${tipAttr(t)}><div class="ic">${I(ic)}</div><div class="v">${esc(v)}</div>${m}<div class="k">${k}</div></div>`).join("");

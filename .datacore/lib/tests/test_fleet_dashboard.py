@@ -226,3 +226,56 @@ def test_the_newest_saved_answer_per_row_wins(tmp_path):
         {"board": "other", "savedAt": "2026-10-30T17:00:00Z", "decisions": {"a": {"choice": "x"}}}))
     s = fd.saved_answers(tmp_path)
     assert s["a"]["choice"] == "crew" and s["a"]["at"] == "2026-10-30T16:36:15Z"
+
+
+# -- INS-3: no host, agent or space of this install's in the shipped code ----
+
+INFRA = """roles:
+  always_on: hub
+servers:
+  hub:
+    kind: server
+    ssh_alias: hub-alias
+    access: {k8s: {namespace: crew, deployment: aide}}
+  worker: {kind: server}
+"""
+
+
+def test_the_owner_commands_reach_the_always_on_host_by_its_roster_alias(tmp_path):
+    infra = tmp_path / "infrastructure.yaml"
+    infra.write_text(INFRA)
+    backup = fd.cmd_backup(infra)
+    assert backup.startswith('ssh hub-alias "') and "fleet-backup" in backup
+    tools = fd.cmd_tools(infra)
+    assert "ssh hub-alias" in tools and "-n crew exec deploy/aide" in tools and "rollout restart deploy/aide" in tools
+    assert fd.cmd_roster("a", "b", infra).startswith('ssh hub-alias "sudo k3s kubectl -n crew exec deploy/a')
+
+
+def test_job_prefixes_include_every_roster_machine(tmp_path):
+    infra = tmp_path / "infrastructure.yaml"
+    infra.write_text(INFRA)
+    assert "worker-" in fd._prefixes(infra) and "box-" in fd._prefixes(infra)
+
+
+def test_a_per_agent_audit_job_reads_as_the_audit_whoever_runs_it():
+    assert fd.job_title("nightshift-audit-nightly-someone") == "Cross-model audit (nightly)"
+    assert fd.job_title("hermes-audit-calibration-other") == "Cross-model audit (calibration)"
+    assert fd.IMPACT[fd._key("nightshift-audit-calibration-x")][0] == 1
+
+
+def test_the_console_is_written_into_the_system_space(tmp_path):
+    (tmp_path / "7-sys" / ".datacore").mkdir(parents=True)
+    (tmp_path / "install.yaml").write_text("roles:\n  system: sys\n")
+    assert fd.default_out(tmp_path) == tmp_path / "7-sys" / "content" / "fleet-dashboard" / "index.html"
+
+
+def test_the_agents_are_named_from_the_registry(tmp_path, monkeypatch):
+    import actor_identity
+    p = tmp_path / "principals.yaml"
+    p.write_text("version: 1\nprincipals:\n"
+                 "  aide: {kind: agent, display: Aide, role: chief of staff}\n"
+                 "  fixer: {kind: agent, display: Fixer, role: chief of operations}\n")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+    assert fd.crew_names() == {"cos": "Aide", "ops": "Fixer"}
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", tmp_path / "missing.yaml")
+    assert fd.crew_names() == {"cos": "the chief of staff", "ops": "the operations agent"}

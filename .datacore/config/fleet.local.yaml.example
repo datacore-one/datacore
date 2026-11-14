@@ -9,18 +9,18 @@ machines: {}
   # primary: "YOUR_WORKSTATION_HOSTNAME"
   # dayshift: "YOUR_DAY_HOST_HOSTNAME"    # optional: your day host (if different from primary)
   # box: "CLUSTER_HOSTNAME"               # cluster management host
-  # pods:
-  #   winston: "BOX_POD_NAME@LOCATION"    # Chief of Staff pod identity
-  #   tris: "RESEARCH_POD_LOCATION"       # Research & memory pod host
-  #   data: "OPS_POD_LOCATION"            # Operations pod host
+  # pods:                               # keyed by role, never by an agent's name (INS-3)
+  #   chief_of_staff: "BOX_POD_NAME@LOCATION"  # Chief of Staff pod identity
+  #   research: "RESEARCH_POD_LOCATION"        # Research & memory pod host
+  #   operations: "OPS_POD_LOCATION"           # Operations pod host
 
 users: {}
   # Principals and actors in your install. Replaces hardcoded names in code.
   # owner: "YOUR_FIRST_NAME"                       # the owner (appears in escalation)
-  # agents:
-  #   miles: "YOUR_NIGHTSHIFT_AGENT_ID"            # nightshift agent principal
-  #   tris: "YOUR_RESEARCH_AGENT_ID"               # research agent principal
-  #   data: "YOUR_OPS_AGENT_ID"                    # operations agent principal
+  # agents:                                       # keyed by role
+  #   engineering: "YOUR_NIGHTSHIFT_AGENT_ID"      # nightshift agent principal
+  #   research: "YOUR_RESEARCH_AGENT_ID"           # research agent principal
+  #   operations: "YOUR_OPS_AGENT_ID"              # operations agent principal
 
 # paths: {}
 #   owner_home: "/home/YOUR_NAME"        # owner's home on boxes

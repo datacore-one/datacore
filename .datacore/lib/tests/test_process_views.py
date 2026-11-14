@@ -178,3 +178,26 @@ def test_previous_is_frozen_before_the_rebuild_and_differs_where_the_rebuild_cha
     assert any(s[4] == "ledger.void" for s in PREVIOUS["ledger-corrections"]["steps"])
     html = pv.page(pv.load_inventory())
     assert 'id="ledger-corrections-prev-pane"' in html and "Reverse it" in html
+
+
+# ---- INS-3: the drawings describe this install, so they live in its own gitignored file ----
+
+def test_the_page_data_comes_from_the_local_file_when_present(tmp_path):
+    import process_data
+    local = tmp_path / "processes.local.yaml"
+    local.write_text("version: 1\nflows: [{slug: mine}]\nupgrades: {}\nplan_progress: []\n"
+                     "previous: {as_of: '2026-01-01', commit: abc, flows: {}}\n")
+    assert process_data.load(local)["flows"] == [{"slug": "mine"}]
+
+
+def test_without_a_local_file_the_placeholder_example_is_drawn(tmp_path):
+    import process_data
+    d = process_data.load(tmp_path / "missing.yaml")
+    assert d["flows"] and d == process_data.load(process_data.EXAMPLE)
+    assert process_data.EXAMPLE.name == "processes.local.yaml.example"
+
+
+def test_the_system_space_holds_the_page(tmp_path):
+    (tmp_path / "7-sys" / ".datacore").mkdir(parents=True)
+    (tmp_path / "install.yaml").write_text("roles:\n  system: sys\n")
+    assert pv.arch_dir(tmp_path) == tmp_path / "7-sys" / "1-tracks" / "dev" / "architecture"

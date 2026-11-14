@@ -1,0 +1,82 @@
+# The processes page data for THIS installation (process_views.py, lib/process_data.py).
+#
+# THIS IS THE TEMPLATE. The real file is `processes.local.yaml`, which is
+# gitignored: it draws your own machines, agents and spaces, which a public
+# repository must not carry (INS-3). Copy it to `processes.local.yaml` and draw
+# your processes. Until you do, the page draws the placeholders below.
+#
+# A flow: slug, group (one of process_views.GROUP_ORDER), title, lede, source,
+# lanes (at most 4 columns), steps, edges, notes.
+#   step: [id, lane, row, name (<= 26 chars), technical line (<= 28 chars), state, "focal"|"", marks]
+#         marks: S signed by the writer, O signed by the owner, c co-sign (optional), r receipt (optional)
+#   edge: [from id, to id, label]   (always downwards)
+# upgrades.<slug>: the Desired view -- summary, then either `keep` (why nothing changes)
+#   or lanes/steps/edges (a step state "new" is drawn dashed) and changes:
+#   [what, why, needs] or [what, why, needs, [status, evidence]]
+#   needs: "your decision" | "DIP amendment" | "code fix" | "install"
+#   status: done | ratified | in progress | waiting on you | next | not started
+# previous: the Previous view, frozen at `as_of` (commit) -- same shape as a flow.
+version: 1
+flows:
+- slug: task-lifecycle
+  group: Work
+  title: A task's lifecycle
+  lede: From capture to done. A placeholder drawing; replace it with your own.
+  source: org_workspace_adapter.py add (item.create) · ledger_claim.py
+  lanes: [OWNER · WORKSTATION, SHARED LEDGER, AGENT · SERVER]
+  steps:
+  - [cap, 0, 0, You add a task, org adapter · item.create, TODO, '', Sc]
+  - [pub, 1, 1, On the shared ledger, published after a sync, '', focal, '']
+  - [clm, 2, 2, An agent claims it, claim · run, '', '', Sr]
+  - [ok, 0, 3, You check it, item.verify, DONE, '', S]
+  edges:
+  - [cap, pub, PUBLISH]
+  - [pub, clm, ':ASSIGNEE:']
+  - [clm, ok, TO REVIEW]
+  notes: [A placeholder note.]
+- slug: ledger-finality
+  group: Ledger
+  title: How an event becomes final
+  lede: A placeholder drawing; replace it with your own.
+  source: ledger/log.py · ledger/hub.py
+  lanes: [WRITER, HUB]
+  steps:
+  - [w, 0, 0, A writer appends an event, ledger/log.py, '', '', S]
+  - [seal, 1, 1, The hub seals the space, ledger/hub.py, '', focal, O]
+  edges:
+  - [w, seal, ADMIT]
+  notes: [A placeholder note.]
+upgrades:
+  task-lifecycle:
+    summary: A placeholder proposal.
+    lanes: [OWNER · WORKSTATION, SHARED LEDGER, AGENT · SERVER]
+    steps:
+    - [cap, 0, 0, You add a task, org adapter · item.create, TODO, '', S]
+    - [clm, 2, 1, An agent claims it, claim from the hub, '', new, Sr]
+    edges:
+    - [cap, clm, ':ASSIGNEE:']
+    changes:
+    - [Claim from the hub, A placeholder reason., code fix, [next, a placeholder evidence line]]
+    - [Decide who reviews, A placeholder reason., your decision]
+  ledger-finality:
+    summary: Keep as is.
+    keep: A placeholder reason to keep it.
+plan_progress:
+- [A, A placeholder phase, not started, a placeholder evidence line]
+plan_path: ''
+overlap_fixed: []
+previous:
+  as_of: '2000-01-01'
+  commit: '0000000'
+  flows:
+    task-lifecycle:
+      title: A task's lifecycle
+      lede: The placeholder before-picture.
+      lanes: [OWNER · WORKSTATION, AGENT · SERVER]
+      steps:
+      - [cap, 0, 0, You add a task, org adapter · item.create, TODO, '', S]
+      - [run, 1, 1, An agent runs it, a queue file, '', '', '']
+      edges:
+      - [cap, run, QUEUE]
+      notes: [A placeholder note.]
+      source: a placeholder source line

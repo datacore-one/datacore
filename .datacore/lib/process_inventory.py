@@ -37,7 +37,30 @@ LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LIB))
 ROOT = LIB.parent.parent
 MANIFEST = LIB / "jobs" / "manifest.yaml"
-OUT = ROOT / "2-datacore" / "1-tracks" / "dev" / "architecture" / "processes.yaml"
+
+
+def default_out(root: Path = ROOT) -> Path:
+    """processes.yaml in the architecture folder of the space holding the `system`
+    role (install.yaml); the personal space when none is declared (INS-3)."""
+    from spaces import space_for
+    return root / space_for("system", root, "0-personal") / "1-tracks" / "dev" / "architecture" / "processes.yaml"
+
+
+def schedule_places(path: Path | None = None) -> list[tuple[str, bool]]:
+    """(machine, host?) for every roster machine that runs fleet schedules: not a
+    person's workstation, not retired, in roster order. The always-on machine
+    (roles.always_on) is read on its host too, beside its pod."""
+    import fleet_reach as fr
+    from jobs.manifest import role_all
+    host_too = set(role_all("always_on", path))
+    out: list[tuple[str, bool]] = []
+    for name, e in fr.servers(path).items():
+        if not isinstance(e, dict) or e.get("retired") or e.get("kind") == "workstation":
+            continue
+        out.append((name, False))
+        if name in host_too:
+            out.append((name, True))
+    return out
 
 #: Script-like tokens in a command line: the thing that identifies a process.
 _SCRIPT = re.compile(r"([A-Za-z0-9_.-]+\.(?:py|sh))\b|-m\s+([A-Za-z_][A-Za-z0-9_.]*)")
@@ -213,8 +236,7 @@ def overlaps(procs: list[dict], live: dict[str, list[str]]) -> list[dict]:
 
 def build(live: bool = True) -> dict:
     procs = manifest_processes()
-    sched = live_schedules([("box", False), ("box", True), ("nightshift", False), ("hermes", False),
-                            ("plur-claw", False)]) if live else {}
+    sched = live_schedules(schedule_places()) if live else {}
     return {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": "jobs/manifest.yaml + live schedules via fleet_reach (read-only); built by process_inventory.py",
@@ -226,7 +248,7 @@ def build(live: bool = True) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--out", default=str(default_out()))
     ap.add_argument("--no-live", action="store_true", help="manifest only; skip reading the machines")
     a = ap.parse_args(argv)
     data = build(live=not a.no_live)
