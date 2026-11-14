@@ -484,3 +484,35 @@ def test_variants_of_title_words_do_not_count_as_content():
 
 def test_an_html_escaped_check_is_unescaped():
     assert dw.clean_check("test -s f &amp;&amp; grep -q 'a&lt;b' f") == "test -s f && grep -q 'a<b' f"
+
+
+# ── INS-3: the names this check knows come from the install's registry ───────
+
+def _registry(tmp_path, monkeypatch):
+    import actor_identity
+    p = tmp_path / "principals.yaml"
+    p.write_text("version: 1\nprincipals:\n"
+                 "  boss: {kind: human, display: Boss, decision: final}\n"
+                 "  aide: {kind: agent, display: Aide, role: chief of staff}\n"
+                 "  helper: {kind: agent, display: Helper}\n")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+
+
+def test_a_grep_for_any_registered_agent_name_is_not_content(tmp_path, monkeypatch):
+    _registry(tmp_path, monkeypatch)
+    f = "1-tracks/research/x.md"
+    p = {"asked_by": "boss", "assignee": "aide", "title": "Write a note on the ledger",
+         "check": f"test -s {f} && grep -qi helper {f} && grep -qi boss {f}"}
+    assert dw.check_problem(p)
+
+
+def test_the_request_report_is_headed_with_the_chief_of_staffs_name(tmp_path, monkeypatch):
+    _registry(tmp_path, monkeypatch)
+    assert dw._assistant() == "Aide"
+
+
+def test_without_a_registry_the_report_names_nobody(tmp_path, monkeypatch):
+    import actor_identity
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", tmp_path / "missing.yaml")
+    assert dw._assistant() == "your assistant"
+    assert dw._agent_names() == {"nightshift"}

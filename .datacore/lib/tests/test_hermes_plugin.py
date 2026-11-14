@@ -7,6 +7,7 @@ the fact. These tests pin the gate that refuses it before the call runs, and
 the two states in which the gate deliberately stands down."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -782,6 +783,7 @@ def filing(as_tris, tmp_path, monkeypatch):
     monkeypatch.setattr(dw, "listening_problem", lambda space_dir, payload: None)
     monkeypatch.setattr(dw, "pauses", lambda root, **kw: {})
     monkeypatch.setattr(hp, "_publish_soon", lambda space_dir: None)  # no real converge in tests
+    monkeypatch.setattr(hp, "_owner", lambda: "gregor")  # the registry's owner (INS-3: the code names nobody)
     return written
 
 
@@ -979,3 +981,58 @@ def test_the_frame_and_the_stop_name_the_delegate_tool():
 def test_the_weak_check_example_has_no_double_quote():
     import delegation_watch as dw
     assert '"' not in dw._CHECK_EXAMPLE
+
+
+# ── INS-3: who the requests go to is the install's registry, not the code ────
+
+DESK = ("version: 1\nprincipals:\n"
+        "  boss: {kind: human, display: Boss, decision: final}\n"
+        "  aide: {kind: agent, display: Aide, role: chief of staff}\n"
+        "  fixer: {kind: agent, display: Fixer}\n"
+        "  scout: {kind: agent, display: Scout}\n"
+        "delegation_desk:\n"
+        "  assignees: {fixer: 'code, ops', scout: research}\n"
+        "  example_space: 3-home\n")
+
+
+@pytest.fixture()
+def desk(tmp_path, monkeypatch):
+    import importlib
+    actor_identity = importlib.import_module("actor_identity")
+    p = tmp_path / "principals.yaml"
+    p.write_text(DESK)
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+    return p
+
+
+def test_the_frame_and_the_schemas_name_the_registrys_assignees(desk):
+    d = hp._desk()
+    assert d["owner"] == "boss" and d["space"] == "3-home"
+    frame = hp.routing_frame(d)
+    assert frame.startswith("[Aide charter]") and "assignee fixer or scout" in frame
+    assert "assignee fixer or scout" in hp.stall_text(d)
+    deleg = hp.delegate_schema(d)["function"]
+    assert "fixer (code, ops) or scout (research)" in deleg["description"]
+    assert deleg["parameters"]["properties"]["assignee"]["description"] == "fixer or scout."
+    assert "e.g. 3-home" in deleg["parameters"]["properties"]["space"]["description"]
+    pay = hp.ledger_append_schema(d)["function"]["parameters"]["properties"]["payload"]["description"]
+    assert "assignee (fixer or scout)" in pay and '"asked_by": "boss"' in pay and '"assignee": "fixer"' in pay
+
+
+def test_the_routing_frame_is_on_for_whoever_is_chief_of_staff(monkeypatch):
+    aide = {**TRIS, "actor": "aide", "principal": "aide", "display": "Aide", "role": "chief of staff"}
+    monkeypatch.setattr(hp, "_IDENTITY", aide)
+    monkeypatch.setattr(hp, "_ROUTING", {})
+    out = hp.pre_llm_call(session_id="s9", turn_id="t1", platform="telegram")
+    assert out and "datacore_delegate" in out["context"]
+    monkeypatch.setattr(hp, "_IDENTITY", dict(TRIS))
+    assert hp.pre_llm_call(session_id="s9", turn_id="t2", platform="telegram") is None
+
+
+def test_without_a_registry_nothing_of_ours_is_named(tmp_path, monkeypatch):
+    import importlib
+    actor_identity = importlib.import_module("actor_identity")
+    monkeypatch.setattr(actor_identity, "PRINCIPALS", tmp_path / "missing.yaml")
+    d = hp._desk()
+    text = hp.routing_frame(d) + hp.stall_text(d) + hp._example(d) + json.dumps(hp.delegate_schema(d))
+    assert d["assignees"] == {} and "charter" in text

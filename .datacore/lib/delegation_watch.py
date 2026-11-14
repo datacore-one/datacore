@@ -319,7 +319,18 @@ def listening_problem(space_dir: Path, payload: dict, *, repo_of: Callable = _re
             f"{', '.join(entry['listens_in'])}. File it there, with a pointer to where the work lives.")
 
 
-_AGENT_NAMES = {"miles", "tris", "data", "winston", "nightshift", "gregor"}
+def _agent_names() -> set[str]:
+    """Every person's and agent's name in this install's registry (roster), plus
+    the overnight module's writer name. Shipped code names nobody of ours (INS-3)."""
+    try:
+        import roster
+        names = {str(n).lower() for n, p in roster.entries().items()
+                 if isinstance(p, dict) and p.get("kind") in ("agent", "human")}
+    except Exception:  # noqa: BLE001 -- an unreadable registry names nobody; the check still runs
+        names = set()
+    return {"nightshift"} | names
+
+
 _COUNTED = re.compile(r"(grep\s+(-\w*\s+)*-\w*c|wc\s+-l)")
 _COMPARED = re.compile(r"-(ge|gt|eq)\s+\"?\d")
 _PR_SEARCH = ("api.github.com", "gh pr ")
@@ -393,7 +404,7 @@ def check_problem(payload: dict) -> str | None:
                 + _CHECK_EXAMPLE)
     if any(s in check for s in _PR_SEARCH):
         return None
-    trivial = _words(payload.get("title")) | _words(payload.get("assignee")) | _AGENT_NAMES
+    trivial = _words(payload.get("title")) | _words(payload.get("assignee")) | _agent_names()
     content, weak = 0, []
     for pat in _grep_patterns(check):
         if not _trivial_pattern(pat, trivial):
@@ -599,6 +610,16 @@ def _stages_due(it, now_ms: int, pauses: dict | None = None) -> list[tuple[str, 
     return out
 
 
+def _assistant() -> str:
+    """What the owner calls the chief of staff who files their requests (roster)."""
+    try:
+        import roster
+        cos = roster.by_role("chief of staff")
+        return roster.display(cos) if cos else "your assistant"
+    except Exception:  # noqa: BLE001 -- a heading is a courtesy, never a failure
+        return "your assistant"
+
+
 def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAULT_REQUESTS_STATE,
                     send: Callable[[str], bool] | None = None, pauses: dict | None = None) -> dict:
     """Tell the owner each stage of each request once, in their own chat. {reported, unsent}."""
@@ -627,7 +648,7 @@ def report_requests(folded: dict, *, now_ms: int | None = None, state_path=DEFAU
         lines.append(f"{head}: {it.title[:100]} [{p.get('assignee') or p.get('runner') or 'nobody'}, "
                      f"{space} {iid}]{why}")
     keys = sorted({d[0] for d in due})
-    if not send(("Your requests to Winston:\n" + "\n".join(lines))[:3400]):
+    if not send((f"Your requests to {_assistant()}:\n" + "\n".join(lines))[:3400]):
         return {"reported": [], "unsent": keys}
     for k, stage, *_ in due:
         seen.setdefault(k, []).append(stage)

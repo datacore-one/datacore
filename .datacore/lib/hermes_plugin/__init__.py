@@ -320,38 +320,116 @@ def policy_block(tool_name: str, args) -> str | None:
 # The persona rule and the narrowed Telegram toolsets held on 2026-11-06 and not
 # on 2026-11-07: the same model, asked for an incident note, set out to research
 # it itself (about 25 skill lookups), then asked the owner what had happened, and
-# never filed. Two guards, only in Winston's Telegram turns: a routing frame on
+# never filed. Two guards, only in the chief of staff's Telegram turns: a routing frame on
 # every owner message, and a stop on stalling. Filing and status are never blocked.
 
 _ROUTING: dict[str, dict] = {}
 _STALL_LIMIT = 4
-_ROUTING_FRAME = (
-    "[Winston charter] You orchestrate; you do not do tasks. If this message asks for work, "
-    "your FIRST action is datacore_delegate (space, title, assignee miles, tris or data, "
-    "done_when, check) and then reply in one line who has it. "
-    "Do not research or investigate it yourself, and do not ask the founder for facts the agent "
-    "can find. Only if no agent can take it (datacore_who_has_what shows them paused or down) "
-    "say so and that you will do it yourself. Status questions: datacore_who_has_what. "
-    "An earlier session about the same request is not evidence that filing fails now: "
-    "file it in this turn and trust only the reply you get.")
+
+# INS-3: the shipped plugin names none of this install's agents. Whom the chief of
+# staff files the owner's requests for comes from the registry: `delegation_desk`
+# in principals.yaml (assignees: {name: what they take}, example_space), the owner
+# from the principal whose decision is final.
+_NO_DESK = {"assignees": {}, "owner": "owner", "space": "0-personal", "charter": "Chief of staff"}
 
 
-def _winston() -> bool:
+def _desk() -> dict:
+    """{assignees, owner, space, charter} from the registry; neutral when it has none."""
+    out = dict(_NO_DESK)
     try:
-        return identity().get("actor") == "winston"
+        import roster  # noqa: PLC0415
+        sec = roster.section("delegation_desk")
+        if isinstance(sec.get("assignees"), dict):
+            out["assignees"] = {str(k): str(v or "") for k, v in sec["assignees"].items()}
+        if sec.get("example_space"):
+            out["space"] = str(sec["example_space"])
+        out["owner"] = roster.owner() or out["owner"]
+        cos = roster.by_role("chief of staff")
+        if cos:
+            out["charter"] = roster.display(cos)
+    except Exception:  # noqa: BLE001 -- no registry: nothing of anyone's is named
+        pass
+    if out["space"] == _NO_DESK["space"]:
+        out["space"] = _a_space() or out["space"]
+    return out
+
+
+def _a_space() -> str | None:
+    """A real space to show in an example when the registry names none: the
+    system space (install.yaml roles), else the first space under the root."""
+    try:
+        from spaces import discover_spaces, space_for  # noqa: PLC0415
+        root = _root()
+        found = space_for("system", root)
+        if found:
+            return found
+        names = sorted(str(e.path.relative_to(root)) for e in discover_spaces(root))
+        return names[0] if names else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _owner() -> str:
+    return _desk()["owner"]
+
+
+def _either(names) -> str:
+    names = list(names)
+    if not names:
+        return "the agent's principal name"
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def _example(desk: dict | None = None) -> str:
+    """One filing call, as the model should send it, with this install's names."""
+    d = desk if desk is not None else _desk()
+    who = next(iter(d["assignees"]), "<agent>")
+    return json.dumps({"space": d["space"], "type": "item.create", "payload": {
+        "title": "...", "assignee": who, "asked_by": d["owner"], "route": "do",
+        "done_when": "...", "check": "..."}})
+
+
+def routing_frame(desk: dict | None = None) -> str:
+    d = desk or _NO_DESK
+    return (
+        f"[{d['charter']} charter] You orchestrate; you do not do tasks. If this message asks for work, "
+        f"your FIRST action is datacore_delegate (space, title, assignee {_either(d['assignees'])}, "
+        "done_when, check) and then reply in one line who has it. "
+        "Do not research or investigate it yourself, and do not ask the founder for facts the agent "
+        "can find. Only if no agent can take it (datacore_who_has_what shows them paused or down) "
+        "say so and that you will do it yourself. Status questions: datacore_who_has_what. "
+        "An earlier session about the same request is not evidence that filing fails now: "
+        "file it in this turn and trust only the reply you get.")
+
+
+_ROUTING_FRAME = routing_frame()
+
+
+def stall_text(desk: dict | None = None) -> str:
+    d = desk or _NO_DESK
+    return ("Stop: you are coordinating, not doing. If the founder asked for work, file it now "
+            f"with datacore_delegate (space, title, assignee {_either(d['assignees'])}, done_when, check) "
+            "and tell him who has it. The agent finds the facts. "
+            "If he asked about status, use datacore_who_has_what.")
+
+
+def _cos() -> bool:
+    """This host's principal is the chief of staff (its registry role)."""
+    try:
+        return str(identity().get("role") or "").strip().lower() == "chief of staff"
     except Exception:  # noqa: BLE001
         return False
 
 
 def pre_llm_call(session_id: str = "", turn_id: str = "", platform: str = "", **_kw):
-    """Hermes pre_llm_call: the routing frame for Winston's Telegram turns, else None."""
+    """Hermes pre_llm_call: the routing frame for the chief of staff's Telegram turns, else None."""
     _ROUTING.pop(session_id, None)
-    if platform != "telegram" or not _winston():
+    if platform != "telegram" or not _cos():
         logger.info("datacore: routing frame skipped (platform=%r, session=%s)", platform, session_id)
         return None
     logger.info("datacore: routing frame on (session=%s, turn=%s)", session_id, turn_id)
     _ROUTING[session_id] = {"turn": turn_id, "calls": 0, "routed": False}
-    return {"context": _ROUTING_FRAME}
+    return {"context": routing_frame(_desk())}
 
 
 def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -> str | None:
@@ -374,10 +452,7 @@ def stall_block(tool_name: str, args, session_id: str = "", turn_id: str = "") -
     st["calls"] += 1
     if st["calls"] <= _STALL_LIMIT:
         return None
-    return ("Stop: you are coordinating, not doing. If the founder asked for work, file it now "
-            "with datacore_delegate (space, title, assignee miles, tris or data, done_when, check) "
-            "and tell him who has it. The agent finds the facts. "
-            "If he asked about status, use datacore_who_has_what.")
+    return stall_text(_desk())
 
 
 def pre_tool_call(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", **_kw):
@@ -480,7 +555,9 @@ APPROVAL_DECIDE_SCHEMA = {
     },
 }
 
-LEDGER_APPEND_SCHEMA = {
+def ledger_append_schema(desk: dict | None = None) -> dict:
+    d = desk or _NO_DESK
+    return {
     "type": "function",
     "function": {
         "name": "datacore_ledger_append",
@@ -493,33 +570,33 @@ LEDGER_APPEND_SCHEMA = {
                 "space": {"type": "string", "description": "Discovered space directory relative to the data root, including nested spaces."},
                 "type": {"type": "string", "description": "Event type, e.g. item.create, item.update, item.complete."},
                 "payload": {"type": "object", "description": (
-                    "Event payload. For item.create: title, assignee (miles, tris or data), "
+                    f"Event payload. For item.create: title, assignee ({_either(d['assignees'])}), "
                     "asked_by, route (do), done_when and check; id is generated when left out. "
-                    "Example: {\"space\": \"2-datacore\", \"type\": \"item.create\", \"payload\": "
-                    "{\"title\": \"...\", \"assignee\": \"miles\", \"asked_by\": \"gregor\", "
-                    "\"route\": \"do\", \"done_when\": \"...\", \"check\": \"...\"}}. "
+                    f"Example: {_example(d)}. "
                     "Write check on one line with no backslash ([0-9] not \\d, [[:space:]] not "
                     "\\s): a backslash or line break makes the call arrive empty.")},
             },
             "required": ["space", "type", "payload"],
         },
     },
-}
+    }
 
 
-DELEGATE_SCHEMA = {
+def delegate_schema(desk: dict | None = None) -> dict:
+    d = desk or _NO_DESK
+    takes = _either(f"{n} ({what})" if what else n for n, what in d["assignees"].items())
+    return {
     "type": "function",
     "function": {
         "name": "datacore_delegate",
-        "description": ("File the founder's request for one agent: miles (code, infrastructure, ops), "
-                        "tris (research, analysis) or data (writing for people). Every field is "
+        "description": (f"File the founder's request for one agent: {takes}. Every field is "
                         "plain text. The reply names the item id."),
         "parameters": {
             "type": "object",
             "properties": {
-                "space": {"type": "string", "description": "Space folder name, e.g. 2-datacore."},
+                "space": {"type": "string", "description": f"Space folder name, e.g. {d['space']}."},
                 "title": {"type": "string", "description": "What is to be done, in one line."},
-                "assignee": {"type": "string", "description": "miles, tris or data."},
+                "assignee": {"type": "string", "description": f"{_either(d['assignees'])}."},
                 "done_when": {"type": "string", "description": "What the finished result is and where it is saved."},
                 "check": {"type": "string", "description": (
                     "A shell test, run from the space root, that passes only when the result says "
@@ -531,7 +608,11 @@ DELEGATE_SCHEMA = {
             "required": ["space", "title", "assignee", "done_when", "check"],
         },
     },
-}
+    }
+
+
+LEDGER_APPEND_SCHEMA = ledger_append_schema()
+DELEGATE_SCHEMA = delegate_schema()
 
 
 def delegate_handler(space: str = "", title: str = "", assignee: str = "", done_when: str = "",
@@ -542,7 +623,7 @@ def delegate_handler(space: str = "", title: str = "", assignee: str = "", done_
     if not str(space or "").strip() and not payload:
         return ledger_append_handler()  # the empty-call explanation
     return ledger_append_handler(space=space, type="item.create",
-                                 payload={**payload, "asked_by": "gregor", "route": "do"})
+                                 payload={**payload, "asked_by": _owner(), "route": "do"})
 
 
 WHO_HAS_WHAT_SCHEMA = {
@@ -606,10 +687,6 @@ def approval_decide_handler(id: str = "", decision: str = "", **_kw) -> str:  # 
 _ENVELOPE = ("type", "space", "payload")
 
 
-_EXAMPLE = ('{"space": "2-datacore", "type": "item.create", "payload": {"title": "...", '
-            '"assignee": "miles", "asked_by": "gregor", "route": "do", "done_when": "...", "check": "..."}}')
-
-
 def _unwrap_events(payload, kw):
     """2026-11-08 dry run: the model sent {"events": [ {...} ]}; the item filed had no
     title or assignee at the top and no dispatcher would ever see it. One wrapped
@@ -619,7 +696,7 @@ def _unwrap_events(payload, kw):
         if not isinstance(evs, list):
             continue
         if len(evs) != 1 or not isinstance(evs[0], dict):
-            return None, None, "file one event per call, e.g. " + _EXAMPLE
+            return None, None, "file one event per call, e.g. " + _example()
         inner = dict(evs[0])
         body = dict(inner["payload"]) if isinstance(inner.get("payload"), dict) else \
             {k: v for k, v in inner.items() if k not in _ENVELOPE}
@@ -710,7 +787,7 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
                 "did not parse. The usual cause is a backslash (\\d, \\s, \\.) or a line break "
                 "inside check. Write the check on one line without any backslash: [0-9] instead of "
                 "\\d, [[:space:]] instead of \\s, grep -F for literal text. Then send it again: "
-                + _EXAMPLE)
+                + _example())
     payload, kw, why = _unwrap_events(payload, kw)
     if why:
         return f"Refused: nothing was filed; {why}"
@@ -728,9 +805,9 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         etype = "item.create"  # a delegation-shaped payload with no type
     if etype not in EVENT_TYPES:
         return (f"Refused: {etype!r} is not a declared event type. "
-                f"Known: {', '.join(sorted(EVENT_TYPES))}. To delegate, file: {_EXAMPLE}")
+                f"Known: {', '.join(sorted(EVENT_TYPES))}. To delegate, file: {_example()}")
     if not isinstance(payload, dict) or not payload:
-        return f"Refused: payload must be a non-empty object, e.g. {_EXAMPLE}"
+        return f"Refused: payload must be a non-empty object, e.g. {_example()}"
     try:
         _r = _root().resolve(strict=True)
         _known = [e.path for e in discover_spaces(_r, reject_aliases=True, reject_invalid=True)]
@@ -739,12 +816,12 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
     except Exception:  # noqa: BLE001 -- the checks below still judge the raw value
         pass
     if not space:
-        return f"Refused: nothing was filed; say which space, e.g. {_EXAMPLE}"
+        return f"Refused: nothing was filed; say which space, e.g. {_example()}"
     if (not isinstance(space, str) or not space or "\0" in space
             or Path(space).is_absolute() or ".." in Path(space).parts
             or str(Path(space)) != space or space == "."):
         return ("Refused: nothing was filed; space must be exactly a space folder name relative to "
-                f"the data root, with no path inside it, e.g. {_EXAMPLE}")
+                f"the data root, with no path inside it, e.g. {_example()}")
     try:
         root = _root().resolve(strict=True)
         space_dir = root / space
@@ -755,15 +832,15 @@ def ledger_append_handler(space: str = "", payload=None, **kw) -> str:
         if (space_dir.resolve(strict=True) != space_dir
                 or space_dir not in {entry.path for entry in known}
                 or not (space_dir / ".datacore").is_dir()):
-            return f"Refused: directory is not a space under the configured data root. Use the space folder name, e.g. {_EXAMPLE}"
+            return f"Refused: directory is not a space under the configured data root. Use the space folder name, e.g. {_example()}"
     except (OSError, RuntimeError, ValueError):
-        return f"Refused: directory is not a space under the configured data root, or discovery is invalid. Use the space folder name, e.g. {_EXAMPLE}"
+        return f"Refused: directory is not a space under the configured data root, or discovery is invalid. Use the space folder name, e.g. {_example()}"
     if etype == "item.create" and (payload.get("asked_by") or payload.get("route")):
         # A delegation with no title or assignee is filed and never picked up.
         gone = [k for k in ("title", "assignee") if not str(payload.get(k) or "").strip()]
         if gone:
             return (f"Refused: nothing was filed; the item has no {' or '.join(gone)}, so no agent "
-                    f"would pick it up. File: {_EXAMPLE}")
+                    f"would pick it up. File: {_example()}")
     if etype == "item.create" and not str(payload.get("id") or "").strip():
         payload = {**payload, "id": _new_item_id(payload)}
     if etype == "item.create":
@@ -1010,6 +1087,7 @@ def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("on_session_start", on_session_start)
+    desk = _desk()  # this install's assignees and owner, named in the tool schemas (INS-3)
     for name, schema, handler, desc, emoji in (
         ("datacore_whoami", WHOAMI_SCHEMA, whoami_handler,
          "This agent's Datacore principal, actor and guard state.", "🪪"),
@@ -1017,9 +1095,9 @@ def register(ctx) -> None:
          "Approvals waiting on the principal.", "📋"),
         ("datacore_approval_decide", APPROVAL_DECIDE_SCHEMA, approval_decide_handler,
          "Approve or dismiss one approval the principal decided explicitly.", "✅"),
-        ("datacore_ledger_append", LEDGER_APPEND_SCHEMA, ledger_append_handler,
+        ("datacore_ledger_append", ledger_append_schema(desk), ledger_append_handler,
          "Append an event to a space ledger as this agent's own actor.", "📒"),
-        ("datacore_delegate", DELEGATE_SCHEMA, delegate_handler,
+        ("datacore_delegate", delegate_schema(desk), delegate_handler,
          "File the founder's request for one agent (flat fields).", "📨"),
         ("datacore_who_has_what", WHO_HAS_WHAT_SCHEMA, who_has_what_handler,
          "Who has what: open delegated work across spaces, by assignee and status.", "🗂️"),

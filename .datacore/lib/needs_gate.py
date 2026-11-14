@@ -76,12 +76,18 @@ def _sibling(name: str):
 
 
 def load(path: Path = DECLARED) -> list[dict]:
-    """[{test, only: [names]?, needs: [..], why}] -- a missing file declares nothing."""
-    if not path.exists():
-        return []
+    """[{test, only: [names]?, needs: [..], why}] -- a missing file declares nothing.
+
+    The shipped file is followed by its gitignored overlay, `<name>.local.yaml`
+    beside it: entries that name this install's own space folders (a test inside
+    a space repository, a build in another space) never ship (INS-3)."""
     import yaml
-    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return list(doc.get("tests") or [])
+    out: list[dict] = []
+    for p in (path, path.with_name(path.stem + ".local" + path.suffix)):
+        if p.exists():
+            doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            out += list(doc.get("tests") or [])
+    return out
 
 
 def kind(need: str) -> str:

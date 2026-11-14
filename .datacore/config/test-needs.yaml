@@ -533,7 +533,7 @@ tests:
   - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
     only: [test_loaded_memory_holds_no_forbidden_detail]
     needs: [machine:mac]
-    why: reads the auto-memory index of the Mac's project folder (-Users-gregor-Data)
+    why: reads the auto-memory index of the Mac's project folder for ~/Data (under ~/.claude/projects)
   - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
     only: [test_writing_a_forbidden_index_line_is_not_silently_allowed]
     needs: [workstation]
@@ -553,17 +553,14 @@ tests:
   - test: .datacore/lib/tests/test_promise_OPS7_retired_credential_gone_everywhere.py
     needs: [file:.datacore/secrets/scripts/distribute.sh, file:.datacore/specs/credential-index.yaml]
     why: drives the credential store's distribute script and index, which live only where the broker's store is
-  - test: .datacore/lib/tests/test_promise_MEM_68_install_reports_module_failure.py
-    needs: [cli:node, file:3-fds/2-projects/datacore-cli/dist/index.js]
-    why: runs the built datacore-cli installer; its build lives in another space's checkout
   - test: .datacore/modules/chief-of-staff/tests/test_promise_DAY7_evening_review_with_buttons.py
     only: [test_winston_ran_delivered_and_asked_last_evening]
     needs: [fleet]
-    why: reads Winston's pod over ssh; only the console reaches him
+    why: reads the chief of staff's pod over ssh; only the console reaches it
   - test: .datacore/modules/chief-of-staff/tests/test_promise_INB_1_every_space_every_morning.py
     only: [test_winston_runs_the_current_inbox_job_every_morning]
     needs: [fleet]
-    why: reads Winston's pod over ssh; only the console reaches him
+    why: reads the chief of staff's pod over ssh; only the console reaches it
   - test: .datacore/modules/ventures/tests/test_promise_AGT4_login_limit_says_so_and_waits.py
     only: [test_agent_says_the_login_expired_and_does_not_pay]
     needs: [agent]
@@ -596,13 +593,13 @@ tests:
   # Read off Winston's pod board against Miles's on dayshift: these were red only on
   # the pod, each for a piece the pod's checkout lacks. They stay judged wherever it exists.
   - test: .datacore/lib/tests/test_promise_KNW1_capture_right_space_folder.py
-    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    needs: [role:system/2-projects/datacore-mcp/dist/index.js]
     why: every test starts the built MCP server (a separate repository's build output)
   - test: .datacore/lib/tests/test_promise_MOD1_module_exact_surface.py
-    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    needs: [role:system/2-projects/datacore-mcp/dist/index.js]
     why: every test starts the built MCP server (a separate repository's build output)
   - test: .datacore/lib/tests/test_promise_MOD2_broken_module_reported_isolated.py
-    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    needs: [role:system/2-projects/datacore-mcp/dist/index.js]
     why: every test starts the built MCP server (a separate repository's build output)
   - test: .datacore/lib/tests/test_promise_AGT5_no_agent_merges.py
     only: [test_the_shepherd_never_merges_even_a_perfect_low_risk_pr]
@@ -612,24 +609,22 @@ tests:
     only: [test_the_overnight_rescue_loses_nothing_and_records_and_names_what_it_set_aside, test_a_rescue_that_cannot_be_pushed_keeps_the_branch_and_says_so, test_the_rescue_code_never_stashes_resets_the_tree_or_cleans]
     needs: [module:nightshift]
     why: loads the nightshift module's run.py and run_rescue.py
-  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_DAY_3_briefing_open_only.py
-    needs: [python:fastapi]
-    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
-  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_DAY4_numbers_trace_to_data.py
-    needs: [python:fastapi]
-    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
-  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_DAY5_what_needs_you_complete.py
-    needs: [python:fastapi]
-    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
-  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_MOD8_daemon_serves_and_recovers.py
-    needs: [python:fastapi]
-    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
-  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_MSG9_never_calls_failing_healthy.py
-    needs: [python:fastapi]
-    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
-  - test: 2-datacore/2-projects/datacore-app/daemon/tests/test_promise_TSK_9_decision_age_limit.py
-    needs: [python:fastapi]
-    why: the app daemon's conftest imports fastapi; an agent pod's eval interpreter lacks it
+
+  # ---- ordinary tests that pin this install's own process drawings (INS-3, 2026-11-14) ----
+  # The processes page draws one installation's machines, agents and spaces, so
+  # its data moved to the gitignored config/processes.local.yaml (template:
+  # processes.local.yaml.example). These tests check facts of that data, not the
+  # drawing code; the code's own tests run everywhere on the template.
+  - test: .datacore/lib/tests/test_process_views.py
+    only:
+      - test_the_ledger_and_schedule_flows_exist
+      - test_the_page_shows_the_rebuild_plan_progress
+      - test_corrections_have_a_forward_only_proposal
+      - test_the_current_corrections_drawing_has_no_reversal
+      - test_phase_b_is_done
+      - test_previous_is_frozen_before_the_rebuild_and_differs_where_the_rebuild_changed_it
+    needs: [file:.datacore/config/processes.local.yaml]
+    why: checks this install's own process drawings, which live in its gitignored local file
 
   # ---- ordinary tests whose subject lives outside this repository (2026-11-09) ----
   # Each failed on every Gates run with a missing file or module, never with a
@@ -697,7 +692,7 @@ tests:
     needs: [module:mail]
     why: the profile lists modules/mail/requirements.txt only where the mail module is installed
   - test: .datacore/lib/tests/test_command_handoff.py
-    needs: [file:2-datacore/2-projects/datacore-mcp/dist/index.js]
+    needs: [role:system/2-projects/datacore-mcp/dist/index.js]
     why: starts the built MCP server (a separate repository's build output)
   - test: .datacore/lib/tests/test_local_mcp_server_handoff.py
     needs: [file:.datacore/modules/node_modules/@datacore-one/mcp, module:nightshift]
