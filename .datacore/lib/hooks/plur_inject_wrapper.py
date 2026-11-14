@@ -142,12 +142,23 @@ def main(argv=None):
     except (ValueError, RecursionError):
         output = {}
 
+    # PLUR's hook-inject nests its context under hookSpecificOutput (0.22); older
+    # releases put it at the top level. Read either, and give the result in both
+    # places: Claude Code reads the nested form, and this wrapper's contract (the
+    # reminder below, promise SPC-6) is the top-level one.
+    nested = output.get('hookSpecificOutput')
+    if not isinstance(nested, dict):
+        nested = None
+    existing = output.get('additionalContext') or (nested or {}).get('additionalContext') or ''
+    if not isinstance(existing, str):
+        existing = ''
     if session_id and not _session_marked(session_id) and not os.environ.get('DATACORE_HEADLESS'):
-        existing = output.get('additionalContext', '')
-        if not isinstance(existing, str):
-            existing = ''
         reminder = 'Call plur_session_start before beginning work to load session memory.'
-        output['additionalContext'] = f'{reminder}\n\n{existing}' if existing else reminder
+        existing = f'{reminder}\n\n{existing}' if existing else reminder
+    if existing:
+        output['additionalContext'] = existing
+        if nested is not None:
+            nested['additionalContext'] = existing
     print(json.dumps(output))
 
 
