@@ -121,3 +121,53 @@ def test_installed_cli_ignores_ambient_python_startup_and_working_directory(tmp_
         text=True, capture_output=True, timeout=15, check=True)
     assert json.loads(result.stdout)['ok'] is True
     assert not marker.exists()
+
+
+def test_a_spent_time_budget_reports_the_rest_unverified_never_ok(tmp_path, monkeypatch):
+    """datacore_status runs this check inside the 30 s MCP limit (promise MOD-7).
+    On a machine with no verified-prefix markers (a fresh install, a cleared state
+    folder) the full verify took over two minutes, so the tool gave no answer at
+    all. The check is bounded: spaces it has no time left for are unverified --
+    never verified -- and the reason says why."""
+    for name in ('0-a', '1-b', '2-c'):
+        space(tmp_path, name)
+    now = [0.0]
+    monkeypatch.setattr(health.time, 'monotonic', lambda: now[0])
+    original = health._verify_file
+
+    def slow_verify(path, registry):        # each log costs 100 s of the budget
+        ok = original(path, registry)
+        now[0] += 100.0
+        return ok
+    monkeypatch.setattr(health, '_verify_file', slow_verify)
+    result = health.check(tmp_path, budget_s=10)
+    assert result['ok'] is None and result['spaces_broken'] == 0
+    assert result['spaces_verified'] >= 1 and result['spaces_unverified'] >= 1
+    assert result['spaces_verified'] + result['spaces_unverified'] == 3
+    assert result['reason'] == 'time-budget'
+
+
+def test_no_budget_given_checks_everything(tmp_path):
+    for name in ('0-a', '1-b'):
+        space(tmp_path, name)
+    assert health.check(tmp_path)['spaces_verified'] == 2
+
+
+def test_the_budget_also_stops_inside_a_large_space(tmp_path, monkeypatch):
+    """One space can hold many logs (2-datacore: 13 task logs, 53 s cold), so the
+    budget is checked between logs too; a space cut short is unverified."""
+    target = space(tmp_path, '0-big')
+    for writer in ('w1', 'w2', 'w3'):
+        EventLog(target, writer, sign=False).append('item.create', {'id': writer, 'title': 'Synthetic'})
+    now = [0.0]
+    monkeypatch.setattr(health.time, 'monotonic', lambda: now[0])
+    original = health._verify_file
+
+    def slow_verify(path, registry):
+        ok = original(path, registry)
+        now[0] += 100.0
+        return ok
+    monkeypatch.setattr(health, '_verify_file', slow_verify)
+    result = health.check(tmp_path, budget_s=10)
+    assert result['spaces_unverified'] == 1 and result['spaces_verified'] == 0
+    assert result['ok'] is None and result['reason'] == 'time-budget'

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -63,12 +64,25 @@ def _verify_file(path, registry):
         os.close(fd)
 
 
-def check(root, per_space=None):
+#: Seconds the check may spend before it stops starting new spaces. The MCP
+#: server's datacore_status runs this inside a 30 s call limit (promise MOD-7);
+#: with no verified-prefix markers (a fresh install, a cleared state folder) a
+#: full verify took over two minutes and the tool answered nothing at all.
+DEFAULT_BUDGET_S = float(os.environ.get("DATACORE_LEDGER_HEALTH_BUDGET_S") or 20)
+
+
+def check(root, per_space=None, budget_s=None):
     """Content-free verdict over every space's ledger.
 
     `per_space` (a list) receives one (space name, ok | broken | could not check)
     per space with a ledger -- for the `--report` mode, never in the JSON.
+
+    `budget_s` bounds the work: once spent, every space not yet started is
+    unverified (reason `time-budget`), never verified. What was verified leaves
+    its markers, so the next call goes further. None checks everything.
     """
+    started = time.monotonic()
+    out_of_time = False
     result = {'version': 1, 'ok': None, 'spaces_verified': 0,
               'spaces_broken': 0, 'spaces_unverified': 0, 'reason': 'no-ledger'}
     note = per_space.append if per_space is not None else (lambda row: None)
@@ -81,6 +95,11 @@ def check(root, per_space=None):
     except (OSError, ValueError):
         return dict(result, reason='discovery-unverified')
     for space in spaces:
+        if budget_s is not None and (out_of_time or time.monotonic() - started > budget_s):
+            out_of_time = True
+            result['spaces_unverified'] += 1
+            note((space.path.name, 'could not check'))
+            continue
         events = space.path / '.datacore/events'
         witnesses = space.path / '.datacore/state/seq-hwm'
         # Task logs and the per-space telemetry logs (decision 3): both history.
@@ -97,6 +116,12 @@ def check(root, per_space=None):
             files = files + t_files
             broken = False
             for path in files:
+                if budget_s is not None and time.monotonic() - started > budget_s:
+                    # Out of time inside a space: the rest of it is not judged,
+                    # so the space is unverified (a broken log already found
+                    # still counts as broken).
+                    out_of_time = unverified = True
+                    break
                 try:
                     broken |= not _verify_file(path, root / '.datacore/keys/registry.yaml')
                 except (OSError, ValueError):
@@ -114,7 +139,7 @@ def check(root, per_space=None):
     if result['spaces_broken']:
         result.update(ok=False, reason='broken')
     elif result['spaces_unverified']:
-        result['reason'] = 'verification-incomplete'
+        result['reason'] = 'time-budget' if out_of_time else 'verification-incomplete'
     elif result['spaces_verified']:
         result.update(ok=True, reason='verified')
     return result
@@ -128,7 +153,9 @@ def main():
                              '1 broken, 3 could not check (never a pass)')
     args = parser.parse_args()
     if not args.report:
-        print(json.dumps(check(args.root), sort_keys=True))
+        # The JSON mode is the runtime probe (datacore_status): bounded. --report
+        # is the scheduled health check: it checks everything.
+        print(json.dumps(check(args.root, budget_s=DEFAULT_BUDGET_S), sort_keys=True))
         return
     # The ledger-only health check (audit C7): integrity of every space's
     # ledger and nothing about the fleet -- the thing to alert on.
