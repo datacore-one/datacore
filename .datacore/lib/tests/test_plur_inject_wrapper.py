@@ -69,3 +69,36 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as directory:
         test_timeout_kills_whole_process_group(Path(directory))
     print("PASS: timeout kills the whole process group (no orphan)")
+
+
+def _main_with_hook_output(monkeypatch, capsys, hook_stdout, session="s-1", headless=True):
+    import io
+    import json
+    mod = _load()
+    monkeypatch.setattr(mod, "_run_hook", lambda stdin, rehydrate=False: hook_stdout)
+    monkeypatch.setattr(mod, "_try_lock", lambda sid: io.StringIO())
+    if headless:
+        monkeypatch.setenv("DATACORE_HEADLESS", "1")
+    else:
+        monkeypatch.delenv("DATACORE_HEADLESS", raising=False)
+        monkeypatch.setattr(mod, "_session_marked", lambda sid: False)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": session, "prompt": "q"})))
+    mod.main([])
+    return json.loads(capsys.readouterr().out)
+
+
+def test_nested_hook_context_is_also_given_at_the_top_level(monkeypatch, capsys):
+    """PLUR's hook-inject (0.22) nests its context under hookSpecificOutput. The
+    wrapper's contract -- read by promise SPC-6 and by the reminder merge below --
+    is a top-level additionalContext; it must carry the memories too."""
+    nested = '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "[ENG-1] USDC"}}'
+    out = _main_with_hook_output(monkeypatch, capsys, nested)
+    assert out["additionalContext"] == "[ENG-1] USDC"
+    assert out["hookSpecificOutput"]["additionalContext"] == "[ENG-1] USDC"
+
+
+def test_the_session_reminder_joins_the_memories_in_both_places(monkeypatch, capsys):
+    nested = '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "[ENG-1] USDC"}}'
+    out = _main_with_hook_output(monkeypatch, capsys, nested, headless=False)
+    for ctx in (out["additionalContext"], out["hookSpecificOutput"]["additionalContext"]):
+        assert ctx.startswith("Call plur_session_start") and ctx.endswith("[ENG-1] USDC")
