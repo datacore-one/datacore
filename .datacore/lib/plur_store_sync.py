@@ -710,6 +710,17 @@ def main(argv=None) -> int:
         state["remote_head"] = _rev(store, f"origin/{state['branch']}")
         state["in_sync"] = bool(state["head"]) and state["head"] == state["remote_head"] and not state["error"]
     _count(store, state)
+    # The sync commits with plumbing (hash-object, commit-tree), which never triggers git's
+    # own packing: the Mac's store reached 5.3 GB of loose objects that pack to 135 MB
+    # (2026-11-14). Lossless; a failure is recorded, never fatal to the sync.
+    state["packed"] = None
+    if (store / ".git").is_dir():
+        try:
+            import git_compact
+            state["packed"] = git_compact.pack_if_heavy(
+                store, loose_mb=float(os.environ.get("PLUR_SYNC_PACK_LOOSE_MB", 100)))
+        except Exception as e:  # noqa: BLE001
+            state["packed"] = f"error: {type(e).__name__}: {str(e)[:200]}"
     state["duration_s"] = round(time.monotonic() - t0, 1)
     out = Path(a.state).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
