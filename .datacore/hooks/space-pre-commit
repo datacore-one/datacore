@@ -138,7 +138,38 @@ echo "$staged" | while IFS= read -r file; do
     }' >> "$tagfile"
 done
 
+# --- D. Large binaries ----------------------------------------------------------
+# Owner, 2026-11-14: large files are blocked. They live in the space's media/
+# folder, outside git, backed up to the storage host (media_store.py). The cap is the
+# DIP-0015 tier-2 threshold, 10 MB. git's --numstat shows a binary as "-<TAB>-";
+# text is never capped here, since the ledger's signed logs are large text by
+# design. The agents' autosave asks this hook file by file (SYN-8), so a refused
+# binary is held back alone and the rest of the space still syncs.
+bigfile=$(mktemp)
+trap 'rm -f "$vfile" "$sfile" "$tagfile" "$bigfile"' EXIT
+max_mb=${SPACE_MAX_BINARY_MB:-10}
+case "$max_mb" in ''|*[!0-9]*) max_mb=10 ;; esac
+if [ "${SAFETY_ONLY:-0}" != "1" ]; then
+  _tab=$(printf '\t')
+  git -c core.quotePath=false diff --cached --numstat --diff-filter=AM 2>/dev/null |
+  while IFS="$_tab" read -r _add _del file; do
+    [ "$_add" = "-" ] && [ "$_del" = "-" ] || continue
+    _size=$(git cat-file -s ":$file" 2>/dev/null) || continue
+    if [ "$_size" -ge $((max_mb * 1048576)) ]; then
+      printf "  %s (%s MB binary)\n" "$file" $((_size / 1048576)) >> "$bigfile"
+    fi
+  done
+fi
+
 fail=0
+if [ -s "$bigfile" ]; then
+  printf "\033[1;31mLARGE BINARY\033[0m — binaries of %s MB or more stay out of git (owner, 2026-11-14):\n\n" "$max_mb"
+  cat "$bigfile"
+  printf "\nMove each into this space's media/ folder (outside git, backed up to the storage host);\n"
+  printf "a symlink stays in its place. Then stage the symlink:\n"
+  printf "  python3 ~/Data/.datacore/lib/media_store.py move <path> && git add <path>\n"
+  fail=1
+fi
 if [ -s "$tagfile" ]; then
   printf "\033[1;31mINVALID ORG TAGS\033[0m\n\n"
   cat "$tagfile"
