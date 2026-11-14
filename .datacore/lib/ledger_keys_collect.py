@@ -128,6 +128,32 @@ def proves(verify_key_hex: str, evidence: list[tuple[dict, str]]) -> tuple[int, 
     return ok, bad
 
 
+def row(signed: list[tuple[dict, str]], held: dict[str, str]) -> tuple[int, int, str, str | None]:
+    """(verified, failed, status, proven key or None) for one writer.
+
+    A key is PROVEN -- registrable -- only when it verifies every signature.
+    But a writer with one foreign-signed event among thousands is not a writer
+    no key proves: the row shows what the best key explains and how many
+    signatures nothing explains (2026-11-14, every writer read 'NO KEY PROVES'
+    over a single foreign line). Two different keys that each prove everything
+    is ambiguous and refused.
+    """
+    scored = {h: (k, *proves(k, signed)) for h, k in held.items()}
+    winners = {k for k, ok, bad in scored.values() if bad == 0 and ok > 0}
+    if len(winners) > 1:
+        return 0, 0, f"AMBIGUOUS: {len(winners)} keys verify; refusing", None
+    if winners:
+        key = winners.pop()
+        hosts = ",".join(sorted(h for h, (k, _, _) in scored.items() if k == key))
+        return len(signed), 0, f"proven (from {hosts})", key
+    best = max(scored.items(), key=lambda kv: kv[1][1], default=None)
+    if best is None or best[1][1] == 0:
+        return 0, len(signed), f"NO KEY PROVES {len(signed)} signature(s)", None
+    host, (key, ok, bad) = best
+    return ok, bad, (f"{host}'s key proves {ok} of {len(signed)}; {bad} signed by a key no "
+                     f"collected host holds (not registered)"), None
+
+
 def proves_history(history: list[tuple[int | None, str]],
                    evidence: list[tuple[dict, str]]) -> tuple[int, int]:
     """(verified, failed) when each signature is checked with the key valid at its time.
@@ -257,20 +283,13 @@ def main() -> int:
             state = "rotated, each key for its period" if bad == 0 else "ROTATED KEYS DO NOT PROVE ALL"
             print(f"{actor:<14}{ok:>9}{bad:>7}  {state} ({len(history)} keys; change with --rotate)")
             continue
-        scored = {h: proves(k, signed) for h, k in held.get(actor, {}).items()}
-        winners = {h: held[actor][h] for h, (ok, bad) in scored.items() if bad == 0 and ok > 0}
-        distinct = set(winners.values())
-        if not distinct:
-            print(f"{actor:<14}{0:>9}{len(signed):>7}  NO KEY PROVES {len(signed)} signature(s)")
+        ok, bad, status, key = row(signed, held.get(actor, {}))
+        if key is None:
+            print(f"{actor:<14}{ok:>9}{bad:>7}  {status}")
             continue
-        if len(distinct) > 1:
-            print(f"{actor:<14}{'-':>9}{'-':>7}  AMBIGUOUS: {len(distinct)} keys verify; refusing")
-            continue
-        key = distinct.pop()
-        ok, bad = proves(key, signed)
         state = "already registered" if registered.get(actor) == key else (
             "REPLACES a different registered key" if actor in registered else "new")
-        print(f"{actor:<14}{ok:>9}{bad:>7}  {state} (from {','.join(sorted(winners))})")
+        print(f"{actor:<14}{ok:>9}{bad:>7}  {state} {status[len('proven '):]}")
         proven[actor] = key
 
     stray = {a: hs for a, hs in held.items() if len(set(hs.values())) > 1}

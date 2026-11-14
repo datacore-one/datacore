@@ -156,3 +156,34 @@ def test_the_local_host_is_collected_without_ssh(monkeypatch):
     found = kc.candidates(["local"])
     assert found == {"mac": {"local": "ab" * 32}}
     assert calls and calls[0][0] != "ssh" and kc._DERIVE in calls[0]
+
+
+def test_one_foreign_signature_does_not_hide_the_key_that_proves_the_rest():
+    """2026-11-14, run from the console: every writer read 'NO KEY PROVES', the
+    registered winston key included, because one event in 129,998 was signed by
+    a key no host held -- a key had to verify ALL signatures to count, and the
+    row then printed 0 verified. The report shows what the best key proves and
+    how many signatures nothing explains; it still registers only a key that
+    proves every one."""
+    real, real_pub = _keypair()
+    foreign, _ = _keypair()
+    evidence = [_signed("winston", real, i) for i in range(1, 4)] + [_signed("winston", foreign, 4)]
+    ok, bad, status, proven = kc.row(evidence, {"box": real_pub})
+    assert (ok, bad) == (3, 1)
+    assert "3 of 4" in status and "1" in status and "box" in status
+    assert proven is None, "a key that leaves a signature unexplained is not registered"
+
+
+def test_a_key_that_proves_everything_is_still_the_proven_key():
+    real, real_pub = _keypair()
+    evidence = [_signed("winston", real, i) for i in range(1, 4)]
+    ok, bad, status, proven = kc.row(evidence, {"box": real_pub})
+    assert (ok, bad, proven) == (3, 0, real_pub)
+
+
+def test_no_candidate_that_verifies_anything_reads_no_key_proves():
+    real, _ = _keypair()
+    _, other_pub = _keypair()
+    evidence = [_signed("winston", real, i) for i in range(1, 3)]
+    ok, bad, status, proven = kc.row(evidence, {"box": other_pub})
+    assert (ok, bad, proven) == (0, 2, None) and "NO KEY PROVES" in status
