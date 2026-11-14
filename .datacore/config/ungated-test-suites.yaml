@@ -42,6 +42,21 @@ suites:
       against CI install time.
     reviewed: 2026-09-25
     state: green
+  - path: .datacore/modules/health/tests
+    reason: >
+      The health module (the Practice) is a private repo on the owner's own git
+      server, so CI's core checkout never contains it, and its suite needs its
+      own scientific stack (pandas, pyarrow, presidio). On dayshift 2026-11-14:
+      1,673 passed, 61 failed, 5 errors -- mostly expectations that read the
+      Mac's own health data (no_data where the Mac has readings).
+    reviewed: 2026-11-14
+    state: red
+  - path: .datacore/modules/health/app/tests
+    reason: >
+      The health module's desktop app (Tauri shell and its daemon), same private
+      repo as above; run on the machine that builds the app.
+    reviewed: 2026-11-14
+    state: unknown
   - path: .datacore/modules/dev/skills/architecture-canvas/tests
     reason: >
       Added with the architecture-canvas skill (dev module, 2026-10-13); passing
