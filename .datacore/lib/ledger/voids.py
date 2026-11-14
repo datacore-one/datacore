@@ -350,12 +350,61 @@ def for_events_dir(events_dir: Path, registry_path=None) -> Voids:
     return result
 
 
+_HUB_CACHE: dict = {}
+_HUB_CACHE_TTL_S = 60.0
+
+
+def _hub_inputs_signature(space: Path, registry_path) -> tuple | None:
+    """Stat signature of everything a hub space's voids are read from: its event
+    and telemetry logs, its hub config, the key registry, the principals and the
+    approvals policy. None when any of it cannot be stat'ed (then: no caching)."""
+    import actor_identity
+    try:
+        from . import keys, policy
+        dc = space / ".datacore"
+        files = sorted(dc.glob("events/*.jsonl")) + sorted(dc.glob("telemetry/*.jsonl"))
+        extra = [dc / "ledger-hub.json", Path(registry_path or keys.DEFAULT_REGISTRY_PATH),
+                 Path(actor_identity.PRINCIPALS), Path(policy.DEFAULT_POLICY_PATH)]
+        extra += sorted(Path(policy.DEFAULT_POLICY_PATH).parent.glob("approvals_policy*.yaml"))
+        sig = []
+        for p in files + extra:
+            try:
+                st = p.stat()
+                sig.append((str(p), st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns))
+            except FileNotFoundError:
+                sig.append((str(p), None))
+        return tuple(sig)
+    except Exception:  # noqa: BLE001 -- cannot tell what changed: do not cache
+        return None
+
+
 def _hub_space_voids(events_dir: Path, registry_path=None):
     """The effective reversals of a hub space, or None for a space without a hub.
 
     A hub space whose authority cannot be read excuses nothing (an empty set):
-    a reversal never gains force from a broken record."""
+    a reversal never gains force from a broken record.
+
+    Cached per process on the stat signature of every input, for at most
+    _HUB_CACHE_TTL_S (the fold reads the clock: leases expire). Verifying each
+    of a hub space's logs in turn re-folded the whole space once per log --
+    7 s each in 2-datacore -- so datacore_status's ledger check ran past the
+    30 s MCP limit (promise MOD-7, dayshift 2026-11-14)."""
+    import time
     space = events_dir.parent.parent
+    sig = _hub_inputs_signature(space, registry_path)
+    ck = (str(space), str(registry_path), sig)
+    hit = _HUB_CACHE.get(ck) if sig is not None else None
+    if hit is not None and time.monotonic() - hit[0] < _HUB_CACHE_TTL_S:
+        return hit[1]
+    result = _hub_space_voids_uncached(events_dir, space, registry_path)
+    if sig is not None:
+        if len(_HUB_CACHE) > 32:
+            _HUB_CACHE.clear()
+        _HUB_CACHE[ck] = (time.monotonic(), result)
+    return result
+
+
+def _hub_space_voids_uncached(events_dir: Path, space: Path, registry_path=None):
     try:
         from .hub import load_config
         cfg = load_config(space)

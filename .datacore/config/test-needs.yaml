@@ -55,6 +55,10 @@ tests:
   - test: .datacore/lib/tests/test_promise_MOD7_tools_start_and_answer_in_time.py
     needs: [file:.mcp.json]
     why: starts the MCP servers this install configures
+  - test: .datacore/lib/tests/test_promise_MOD7_tools_start_and_answer_in_time.py
+    only: ["test_the_server_starts_within_the_limit[datacore-app]"]
+    needs: [machine:mac]
+    why: the desktop app's UI-control server (datacore-app/shell/app-mcp-server.mjs) runs beside the app on the Mac; a host without a screen has no app to control
   - test: .datacore/lib/tests/test_promise_SPC4_context_rebuilt_and_checked.py
     needs: [file:~/.claude/settings.json]
     why: reads this machine's session-start hooks
