@@ -685,7 +685,7 @@ def on_release(event: dict, *, state_for: Callable | None = None, send: Callable
     if "released" in (seen.get(k) or []):
         return
     why = str(p.get("doer_said") or p.get("error") or p.get("reason") or "no reason recorded")[:400]
-    text = (f"Your requests to Winston:\n↩️ {_person(event.get('actor'))} released it without finishing: "
+    text = (f"Your requests to {_assistant()}:\n↩️ {_person(event.get('actor'))} released it without finishing: "
             f"{it.title[:100]} [{space} {iid}]. Reason: {why}")
     if not (send or _send_owner)(text):
         raise RuntimeError("the release message was not delivered")
