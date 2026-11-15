@@ -584,7 +584,10 @@ def cmd_add(args):
         requested_by=getattr(args, "requested_by", None) or _os.environ.get("DATACORE_REQUESTED_BY") or None,
         hops=int(_os.environ.get("DATACORE_HOPS") or 0),
     )
-    _assignee = _assignee_from_tags(file_path, sorted(tags) if tags else None)
+    # An explicit `:ASSIGNEE:` names the writer; role tags are the fallback.
+    from ledger.genesis import assignee_of
+    _assignee = (assignee_of(_create_payload["org"].get("properties"))
+                 or _assignee_from_tags(file_path, sorted(tags) if tags else None))
     if _assignee:
         _create_payload["assignee"] = _assignee
     if generated:
@@ -1433,6 +1436,12 @@ def cmd_update(args):
         _payload['deadline'] = current['deadline']
     if getattr(args, 'property', None):
         _payload['org'] = {'properties': _props}
+        # Assigning later is how a backlog task becomes a delegation (owner,
+        # 2026-11-15). `ASSIGNEE=` (empty) un-assigns. The ledger decides who
+        # may change an assignee (hub_policy: approver, creator, owner, assignee).
+        if any(str(kv).split('=', 1)[0].strip() == 'ASSIGNEE' for kv in args.property):
+            from ledger.genesis import assignee_of
+            _payload['assignee'] = assignee_of(_props)
     emitted = _ledger_emit(file_path, "item.update", _payload)
     if args.state:
         # DIP-0009 v2.0 ruling 5. An `item.update` carrying state DONE left the
