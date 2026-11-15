@@ -1727,6 +1727,16 @@ jobs:
       - path: ~/.datacore/state/ledger-claim.log
         check: no_crash
         max_age_hours: 2
+      # WHAT THE LOOP DID, not that it ran (audit 2026-11-15). A log that is
+      # recent says nothing: the loop was green while it stopped on a stray
+      # file, refused the same item every tick, and ran in one space of ten.
+      # `^OK ` and nothing looser: FAIL names the space and the reason. A
+      # delegated task failing its own check is not a FAIL -- that is the loop
+      # working, and the delegation watcher tells the owner about the task.
+      - path: ~/.datacore/state/ledger-claim-status.txt
+        check: regex
+        arg: "^OK claim"
+        max_age_hours: 2
 
   - name: box-autofix-escalation
     # Never delegated: this job IS the delegation machinery, and handing its
