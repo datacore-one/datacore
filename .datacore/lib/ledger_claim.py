@@ -680,15 +680,20 @@ def plan(state, events, actor: str, runner: str | None = None) -> Plan:
     """
     claimable = [i for i in state.items.values() if i.status == CLAIMABLE]
 
-    # A genesis-imported GTD task is a MIRROR of an org heading, not a work
-    # queue. Both land at status `created`, so before this filter a single
-    # space offered 343 "claimable items" -- the whole backlog -- and a
-    # scheduled dispatcher would have started working through the principal's
-    # personal todo list unattended. Delegation is opt-in: only items that were
-    # materialized as delegations are dispatchable. The discriminator is the
-    # payload's `org` block, which genesis writes (heading, level, filetags,
-    # parent) and materialize() never does.
-    pending = [i for i in claimable if not (i.payload or {}).get("org")]
+    # A TASK BECOMES A DELEGATION WHEN IT IS ASSIGNED (owner, 2026-11-15) --
+    # at creation or any time later. The owner's backlog is not a queue: an org
+    # task with no assignee is never dispatched, and is counted, not listed
+    # (one space held 343 of them when this filter was first written).
+    #
+    # Until 2026-11-15 this dropped EVERY item that came from an org file (its
+    # payload carries the `org` block genesis writes), assigned or not, so a
+    # task added the normal way could never reach an agent, and the GTD spec's
+    # way of assigning (`:ASSIGNEE:`) had no effect. Assignment is the
+    # discriminator now, the same one every later rule below already uses.
+    def _backlog(i) -> bool:
+        payload = i.payload or {}
+        return bool(payload.get("org")) and not payload.get("assignee")
+    pending = [i for i in claimable if not _backlog(i)]
     mirrored = len(claimable) - len(pending)
 
     # ADDRESSED WORK GOES TO ITS ADDRESSEE. `item.claim` is an append, not a
@@ -943,7 +948,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
         print(f"NOT YET  {((i.payload or {}).get('title') or i.id)[:70]} -- starts {(i.payload or {}).get('not_before')}")
     pending = p.ready
 
-    mirror_note = f" ({mirrored} org-mirrored task(s) skipped -- not delegations)" if mirrored else ""
+    mirror_note = f" ({mirrored} unassigned task(s) in the backlog -- not delegations until assigned)" if mirrored else ""
     if addressed:
         mirror_note += f"; {len(addressed)} addressed to another agent"
     for i in siblings:

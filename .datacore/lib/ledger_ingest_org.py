@@ -317,10 +317,10 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         # the adapter CLI). Without this clause, genesis never fills the gap
         # for headings with no properties and no priority -- they always match
         # the empty defaults and the condition never fires, leaving the item
-        # permanently without an org block. ledger_claim.py uses org-block
-        # presence to distinguish org-mirrored tasks from delegation items;
-        # a missing block makes the claim filter treat an org task as a
-        # delegation item and agents claim it unattended. See datacore#161.
+        # permanently without an org block, and the projector cannot rebuild
+        # its heading. (Until 2026-11-15 the claim loop also read this block to
+        # tell backlog from delegations, datacore#161; assignment alone decides
+        # that now -- ledger_claim.plan.)
         if "org" not in cur or props_now != {k: str(v) for k, v in (cur_org.get("properties") or {}).items()} or prio_now != (cur_org.get("priority") or None):
             want["org"] = {**cur_org, "priority": prio_now, "properties": props_now}
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}

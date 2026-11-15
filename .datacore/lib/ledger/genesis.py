@@ -253,6 +253,18 @@ def body_text(node) -> str:
     return '\n'.join(lines)
 
 
+def assignee_of(properties) -> str | None:
+    """The writer a task's `:ASSIGNEE:` property names, or None.
+
+    The ONE reading of that property (GTD spec: assignment is a property, never
+    a state). The adapter sends it as the item's `assignee` on add and on a
+    later update; the claim loop dispatches on `assignee` alone.
+    """
+    value = (properties or {}).get("ASSIGNEE")
+    value = str(value).strip().lower() if value is not None else ""
+    return value or None
+
+
 def task_payload(node, space: str, date: str, rung: str) -> dict:
     """One task as an `item.create` payload.
 
