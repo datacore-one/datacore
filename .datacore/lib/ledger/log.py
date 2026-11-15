@@ -414,6 +414,28 @@ def _require_own_log(actor: str, space_dir: Path | None = None) -> None:
             f"records (AGT-10); write as {declared!r}, or ask {owner} to record it.")
 
 
+class LedgerWriteFenced(PermissionError):
+    """A write under DATACORE_LEDGER_WRITE_FENCE was refused (nothing written)."""
+
+
+def _fenced(space_dir: Path) -> str | None:
+    """The fenced root this space lies under, or None.
+
+    The test suite sets DATACORE_LEDGER_WRITE_FENCE to the real installation so
+    that no test -- and no process a test starts, which inherits the variable --
+    writes a real event (2026-11-15: 1,170 events in four real logs were signed
+    by tests' throwaway keys). Unset everywhere else, so production is untouched.
+    """
+    fence = os.environ.get("DATACORE_LEDGER_WRITE_FENCE")
+    if not fence:
+        return None
+    try:
+        Path(space_dir).resolve().relative_to(Path(fence).resolve())
+    except (ValueError, OSError):
+        return None
+    return fence
+
+
 class EventLog:
     """Append-only event log for one actor within one space.
 
@@ -551,6 +573,11 @@ class EventLog:
         from disk -- a writer passes the stamp of a hub lease it was granted but
         has not yet pulled, so its completion can never fold before the lease.
         """
+        fence = _fenced(self.space_dir)
+        if fence:
+            raise LedgerWriteFenced(
+                f"{self.space_dir} is inside the fenced installation {fence} "
+                f"(DATACORE_LEDGER_WRITE_FENCE): a test must write into its own scratch space")
         if self.hub_required and not self.sign:
             raise HubSigningRequired(
                 f"{self.space_dir} is served by a hub: every writer signs (DIP-0034 amendment D). "
