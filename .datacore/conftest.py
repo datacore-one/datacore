@@ -95,6 +95,22 @@ def _isolated_ledger_keys(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fenced_ledger(monkeypatch):
+    """No test, and no process a test starts, writes into this installation's
+    ledger: EventLog refuses any write under DATACORE_LEDGER_WRITE_FENCE.
+
+    The patches beside this one reach only this process; a child process
+    (ledger_cli.py, org_workspace_adapter.py, job_verify's task filing) inherits
+    the real DATACORE_ROOT and used to write real events signed with the test's
+    throwaway key -- 1,170 of them in four real logs by 2026-11-15, none
+    verifiable by any key in the fleet. The variable is inherited, so the fence
+    holds across the process boundary.
+    """
+    from pathlib import Path
+    monkeypatch.setenv("DATACORE_LEDGER_WRITE_FENCE", str(Path(__file__).resolve().parents[1]))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_attestations(tmp_path_factory, monkeypatch):
     """No test may attest into a real space's ledger.
 
