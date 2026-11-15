@@ -74,8 +74,14 @@ def test_the_start_time_counts_from_not_before_not_creation():
     assert kinds([item("a", created=NOW - 100 * H, not_before=nb)], kind_of=_kind) == {("a", "not_picked_up")}
 
 
-def test_a_task_for_a_person_or_an_org_mirror_is_not_a_gap():
-    assert kinds([item("a", assignee="gregor"), item("b", org=True)], kind_of=_kind) == set()
+def test_a_task_for_a_person_or_the_unassigned_backlog_is_not_a_gap():
+    assert kinds([item("a", assignee="gregor"), item("b", org=True, assignee=None)], kind_of=_kind) == set()
+
+
+def test_an_org_task_assigned_to_an_agent_is_a_delegation_like_any_other():
+    # Owner, 2026-11-15: a task becomes a delegation when it is assigned. This
+    # used to be skipped as "an org mirror", so it could wait forever unseen.
+    assert kinds([item("b", org=True)], kind_of=_kind) == {("b", "not_picked_up")}
 
 
 def test_claimed_for_a_day_unfinished_is_stuck():

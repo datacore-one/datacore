@@ -682,6 +682,27 @@ jobs:
         arg: "\"errors\": \\{\\}, \"gaps\": \\d+"
         max_age_hours: 2
 
+  # DOES DELEGATION WORK (audit 2026-11-15). The watcher above reports each gap
+  # as it opens; nothing said, once a day, how the whole thing is doing -- and
+  # the ledger promises were green while most of a week's delegations were not
+  # done. Two measures from real events, written daily:
+  #   delegations 7d: N of M finished or closed by a person (P%); ...
+  #   task lists: N of M match the ledger; differs: ...
+  # This contract judges that the measure was produced (and every space read),
+  # not that the numbers are good: what counts as good is the owner's promise,
+  # not a job's.
+  - name: box-delegation-outcome
+    machine: box
+    schedule: "40 5 * * *"
+    cmd: "python3 ~/Data/.datacore/lib/delegation_watch.py outcomes >> ~/.datacore/state/delegation-outcome.log 2>&1"
+    on_fail: telegram
+    delegate: false
+    artifacts:
+      - path: "~/.datacore/state/delegation-outcome.txt"
+        check: regex
+        arg: "^delegations 7d: "
+        max_age_hours: 26
+
   # Agent registry integrity. registry_gc.py existed and was never scheduled --
   # capability with no runner. Contracted on "duplicate keys (0)", an
   # unambiguous corruption signal that is TRUE today, rather than on

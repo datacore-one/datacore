@@ -265,6 +265,17 @@ def assignee_of(properties) -> str | None:
     return value or None
 
 
+def is_backlog(payload) -> bool:
+    """An org task nobody is assigned to: the owner's backlog, not a delegation.
+
+    The ONE rule the claim loop, the delegation watcher and the outcome measures
+    share (owner, 2026-11-15): a task from an org file becomes a delegation when
+    it is assigned, at creation or later.
+    """
+    payload = payload or {}
+    return bool(payload.get("org")) and not payload.get("assignee")
+
+
 def task_payload(node, space: str, date: str, rung: str) -> dict:
     """One task as an `item.create` payload.
 
