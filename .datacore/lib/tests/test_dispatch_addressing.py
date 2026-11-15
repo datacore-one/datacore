@@ -216,9 +216,12 @@ def test_one_items_leftover_does_not_burn_a_model_call_on_the_next(tmp_path, cap
 
     out = _plan(space, "miles", capsys, execute=True)
 
-    assert "STOPPING" in out, out
-    assert "left-behind.txt" in out, out
-    assert "commit or discard it" in out
+    # 2026-11-15: a leftover is attributed, not fatal. It is named, left exactly
+    # as it is, and the items still run (the run used to STOP here, so one stray
+    # file meant no delegated work at all).
+    assert "STOPPING" not in out, out
+    assert "left-behind.txt" in out and "left as they are" in out, out
+    assert (space / "left-behind.txt").read_text() == "uncommitted\n"
 
 
 def test_an_uncommitted_telemetry_log_does_not_block_verification(tmp_path):
