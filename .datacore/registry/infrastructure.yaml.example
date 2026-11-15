@@ -19,6 +19,7 @@ roles:
   assets: server           # heavy-asset mirror (assets_sync.py)
   executor: server         # overnight execution host (smoke.py)
   hermes_hosts: [server]   # where hermes_plugin/deploy.sh installs the plugin
+  media_backup: "user@storage-host:/path/media"   # rsync target for spaces' media/ (media_store.py backup)
 servers:
   laptop:
     role_label: workstation      # shown instead of the name under --redact
