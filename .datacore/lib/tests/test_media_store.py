@@ -100,3 +100,19 @@ def test_backup_without_a_destination_says_so(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(media_store, "default_dest", lambda: None)
     assert media_store.main(["backup"]) == 2
     assert "roles.media_backup" in capsys.readouterr().err
+
+
+def test_backup_ends_with_one_summary_line_for_the_job_verifier(tmp_path, capsys):
+    """The scheduled job's artifact is judged on its last line (job_verify last_line_regex)."""
+    root = tmp_path / "Data"
+    space = _space(root)
+    (space / "media").mkdir()
+    (space / "media" / "a.bin").write_bytes(b"x")
+    dest = tmp_path / "storage"
+    dest.mkdir()
+    media_store.backup(root, str(dest), host="mac")
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "media_store: ok 1 space(s)"
+    missing = tmp_path / "file-not-dir"
+    missing.write_text("")
+    media_store.backup(root, str(missing), host="mac")
+    assert capsys.readouterr().out.strip().splitlines()[-1].startswith("media_store: FAILED 1 of 1")

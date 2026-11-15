@@ -99,25 +99,33 @@ def backup(root: Path, dest: str, *, host: str | None = None,
     """Copy every space's media/ to <dest>/<host>/<space>/. Returns the number of failures."""
     host = host or _host()
     remote, _, base = dest.rpartition(":") if ":" in dest else ("", "", dest)
-    failures = 0
+    failures = copied = 0
     for space in sorted(Path(root).glob("[0-9]-*")):
         media = space / "media"
         if not media.is_dir() or space.name.endswith("-archive"):
             continue
+        copied += 1
         target = f"{base}/{host}/{space.name}"
         if remote:
             mk = subprocess.run([*SSH, remote, "mkdir", "-p", target], capture_output=True, text=True)
-            ok = mk.returncode == 0
+            ok, why = mk.returncode == 0, (mk.stderr or mk.stdout)
         else:
-            Path(target).mkdir(parents=True, exist_ok=True)
-            ok = True
-        # Never --delete: a file removed here stays on the storage host.
-        cmd = ["rsync", "-a", *(["--dry-run"] if dry_run else []), "-e", " ".join(SSH),
-               f"{media}/", f"{remote}:{target}/" if remote else f"{target}/"]
-        r = subprocess.run(cmd, capture_output=True, text=True) if ok else mk
-        status = "ok" if r.returncode == 0 else f"FAILED: {(r.stderr or r.stdout).strip()[:200]}"
-        failures += r.returncode != 0
-        print(f"[media] {space.name}: {status}")
+            try:
+                Path(target).mkdir(parents=True, exist_ok=True)
+                ok, why = True, ""
+            except OSError as e:
+                ok, why = False, str(e)
+        if ok:
+            # Never --delete: a file removed here stays on the storage host.
+            cmd = ["rsync", "-a", *(["--dry-run"] if dry_run else []), "-e", " ".join(SSH),
+                   f"{media}/", f"{remote}:{target}/" if remote else f"{target}/"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            ok, why = r.returncode == 0, (r.stderr or r.stdout)
+        failures += not ok
+        print(f"[media] {space.name}: {'ok' if ok else 'FAILED: ' + why.strip()[:200]}")
+    # One last line for the scheduled job's verifier (job_verify last_line_regex).
+    print(f"media_store: ok {copied} space(s)" if not failures
+          else f"media_store: FAILED {failures} of {copied} space(s)")
     return failures
 
 
