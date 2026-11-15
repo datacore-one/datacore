@@ -77,6 +77,21 @@ def _run(store, tmp_path, name="state.json"):
     return rc, json.loads(state.read_text())
 
 
+def test_a_sync_packs_its_loose_objects_once_they_pass_the_limit(fleet, tmp_path, monkeypatch):
+    """2026-11-14: the sync commits with plumbing, which never triggers git's own packing;
+    the Mac's store held 5.3 GB of loose objects that pack to 135 MB."""
+    remote, mac, host = fleet
+    monkeypatch.setenv("PLUR_SYNC_PACK_LOOSE_MB", "0")
+    h = _read(host / "engrams.yaml")
+    h.append(_eng(30, statement="learned on the host"))
+    _write(host, "engrams.yaml", h)
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    loose = dict(l.split(": ", 1) for l in _git(host, "count-objects", "-v").splitlines())
+    assert loose["count"] == "0"
+    assert state["packed"] in ("repacked", "compacted")
+
+
 def test_diverged_stores_converge_and_keep_both_sides(fleet, tmp_path):
     remote, mac, host = fleet
     # The mac corrects an engram (supersedes it) and learns a new one.
