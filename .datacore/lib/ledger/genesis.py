@@ -303,7 +303,11 @@ def task_payload(node, space: str, date: str, rung: str) -> dict:
     if own is None:
         own = node.tags or []
     tags = sorted(t for t in own if t)
+    #: Typed into the drawer by hand: the task is a delegation from its first
+    #: import, as one added through the task tool is (owner, 2026-11-15).
+    assigned = assignee_of(node.properties)
     return {
+        **({"assignee": assigned} if assigned else {}),
         "id": node.get_property("ID"),
         "title": node.node.get_heading(format='raw'),
         "state": node.todo,

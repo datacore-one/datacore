@@ -40,7 +40,7 @@ LIB = Path(__file__).resolve().parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ledger.fold import fold  # noqa: E402
-from ledger.genesis import import_space, scan  # noqa: E402
+from ledger.genesis import assignee_of, import_space, scan  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 from ledger_dismiss_orphans import confirm_and_dismiss  # noqa: E402
 from org_transaction import SafeOrgWorkspace, serialized  # noqa: E402
@@ -323,6 +323,24 @@ def sync_state(space: Path, actor: str | None = None, dry_run: bool = False) -> 
         # that now -- ledger_claim.plan.)
         if "org" not in cur or props_now != {k: str(v) for k, v in (cur_org.get("properties") or {}).items()} or prio_now != (cur_org.get("priority") or None):
             want["org"] = {**cur_org, "priority": prio_now, "properties": props_now}
+        # THE ASSIGNEE, WHEN A PERSON TYPED IT. A task is a delegation once it
+        # is assigned (owner, 2026-11-15). The task tool sent `:ASSIGNEE:` to
+        # the ledger; a line typed into the file did not, so the task stayed
+        # backlog and no agent picked it up. Only a CHANGED line counts (typed,
+        # retyped or removed since the ledger last saw the drawer): an
+        # unchanged one is the projection's own rendering, and following it
+        # would undo an assignment made in the ledger since.
+        typed, seen = assignee_of(props_now), assignee_of(cur_org.get("properties"))
+        held = cur.get("assignee") or None
+        if typed != seen:
+            if typed:
+                want["assignee"] = typed
+            elif held == seen:                      # the line was removed and nobody reassigned since
+                want["assignee"] = None
+        # NOT backfilled: a task whose unchanged line the ledger already holds
+        # stays as it is. On 2026-11-16 that was 627 open tasks, 72 of them
+        # addressed to an agent; starting those is the owner's decision, made
+        # per task by re-saving the assignee through the task tool.
         diff = {k: v for k, v in want.items() if (cur.get(k) or None) != v}
         if not diff:
             continue

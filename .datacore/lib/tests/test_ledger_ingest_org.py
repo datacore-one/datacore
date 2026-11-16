@@ -467,3 +467,71 @@ def test_a_property_set_in_org_reaches_the_ledger_and_the_projection(space):
     from ledger.projector import project
     rendered = project(fold(read_events(space)), space="0-testspace").text
     assert ":SURFACE: 2-datacore" in rendered and ":DONE_WHEN: the file exists" in rendered
+
+
+# ---- an assignee typed by hand (audit 2026-11-15, step 1 gap) -----------------
+#
+# A task is a delegation once it is assigned (owner, 2026-11-15). The task tool
+# sent `:ASSIGNEE:` to the ledger; a line typed into the file did not, so the
+# task stayed backlog and no agent ever picked it up.
+
+def _retype(space, old, new):
+    org = space / "org" / "next_actions.org"
+    text = org.read_text(encoding="utf-8")
+    assert old in text
+    org.write_text(text.replace(old, new), encoding="utf-8")
+
+
+_NEXT = "* NEXT Still working on it\n:PROPERTIES:\n:ID: task-next\n"
+
+
+def test_an_assignee_typed_into_the_file_assigns_the_task(space):
+    _retype(space, _NEXT, _NEXT + ":ASSIGNEE: Miles\n")
+    ingest.sync_state(space, actor="test")
+    assert _items(space)["task-next"].payload.get("assignee") == "miles"
+    before = len(list(read_events(space)))
+    ingest.sync_state(space, actor="test")
+    assert len(list(read_events(space))) == before, "settles"
+
+
+def test_retyping_the_assignee_reassigns_and_removing_the_line_unassigns(space):
+    _retype(space, _NEXT, _NEXT + ":ASSIGNEE: miles\n")
+    ingest.sync_state(space, actor="test")
+    _retype(space, ":ASSIGNEE: miles\n", ":ASSIGNEE: tris\n")
+    ingest.sync_state(space, actor="test")
+    assert _items(space)["task-next"].payload.get("assignee") == "tris"
+    _retype(space, ":ASSIGNEE: tris\n", "")
+    ingest.sync_state(space, actor="test")
+    assert not _items(space)["task-next"].payload.get("assignee")
+
+
+def test_an_assignment_made_in_the_ledger_is_not_undone_by_the_file(space):
+    """The drawer line is what a person typed. When it did not change, the
+    ledger's assignment stands: assigned with no line, or reassigned since."""
+    EventLog(space, "test").append("item.update", {"id": "task-next", "assignee": "data"})
+    ingest.sync_state(space, actor="test")
+    assert _items(space)["task-next"].payload.get("assignee") == "data"
+    _retype(space, _NEXT, _NEXT + ":ASSIGNEE: miles\n")
+    ingest.sync_state(space, actor="test")                      # typed: the file wins once
+    EventLog(space, "test").append("item.update", {"id": "task-next", "assignee": "tris"})
+    ingest.sync_state(space, actor="test")                      # line unchanged: the ledger stands
+    assert _items(space)["task-next"].payload.get("assignee") == "tris"
+
+
+def test_a_new_task_typed_with_an_assignee_is_imported_assigned(tmp_path):
+    space = tmp_path / "0-testspace"
+    (space / "org").mkdir(parents=True)
+    (space / "org" / "next_actions.org").write_text(
+        "* NEXT Draft the note\n:PROPERTIES:\n:ID: task-new\n:ASSIGNEE: miles\n:END:\n", encoding="utf-8")
+    found = {i["id"]: i for i in ingest.scan(space).importable}
+    assert found["task-new"].get("assignee") == "miles"
+
+
+def test_a_line_the_ledger_already_holds_does_not_assign_by_itself(space):
+    """Hundreds of old tasks carry an assignee line the ledger recorded as a
+    plain property. Shipping this change must not start them all at once."""
+    EventLog(space, "test").append("item.update", {
+        "id": "task-next", "org": {"priority": None, "properties": {"ASSIGNEE": "miles"}}})
+    _retype(space, _NEXT, _NEXT + ":ASSIGNEE: miles\n")
+    ingest.sync_state(space, actor="test")
+    assert not _items(space)["task-next"].payload.get("assignee")
