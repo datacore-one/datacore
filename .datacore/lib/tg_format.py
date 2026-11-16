@@ -43,6 +43,9 @@ import re
 import socket
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -184,6 +187,67 @@ def record_undelivered(sender: str, reason: str, text: str = "") -> bool:
         return False
 
 
+def post(token: str, chat: str, text: str, parse_mode: str | None = None, timeout: int = 30) -> tuple[int, object]:
+    """THE one sendMessage call of the system library: (HTTP status, message id).
+    Raises what the network raises; `deliver` is the caller that never does."""
+    fields = {"chat_id": chat, "text": text}
+    if parse_mode:
+        fields["parse_mode"] = parse_mode
+    data = urllib.parse.urlencode(fields).encode()
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data,
+                                    timeout=timeout) as r:
+            try:   # the id is a courtesy; the status is the proof of delivery
+                mid = (json.loads(r.read() or b"{}").get("result") or {}).get("message_id")
+            except (ValueError, AttributeError):
+                mid = None
+            return r.status, mid
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
+def deliver(sender: str, text: str, token: str, chat: str, *, html: bool = False,
+            preformatted: bool = False, summary: str | None = None, log_sent: bool = False,
+            timeout: int = 30) -> tuple[bool, str]:
+    """One alert to the owner's group; (delivered, why). Never raises.
+
+    The one sender (audit 2026-11-15: five copies had drifted). `chat` is the
+    group and nothing else: an empty one is a failure, never a fallback to a
+    1:1 chat (MSG-1). Unless `preformatted`, the text is normalised and cut to
+    one phone screen with a pointer to the full text (MSG-4); `html` escapes it
+    and sends it as HTML. Every failure is recorded as undelivered for the
+    morning sweep (MSG-10), with `summary` (default: the text) as its head. The
+    reason never carries the token: an exception is named by its type only.
+    """
+    def failed(why: str) -> tuple[bool, str]:
+        record_undelivered(sender, why, summary if summary is not None else text)
+        return False, why
+
+    if not chat:
+        return failed("ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat")
+    if not token:
+        return failed("no bot token (TELEGRAM_BOT_TOKEN)")
+    body = text
+    if not preformatted:
+        try:
+            body = normalize(text)
+            short = fit(body)
+            if short != body:
+                short = fit(body, more=keep_full(body, sender) or None)
+            body = html_safe(short) if html else short
+        except Exception:  # noqa: BLE001 -- a formatting fault must not stop the alert
+            body = text
+    try:
+        status, mid = post(token, chat, body, "HTML" if html else None, timeout)
+    except Exception as e:  # noqa: BLE001 -- a sender never crashes its job
+        return failed(f"telegram unreachable ({type(e).__name__})")
+    if status != 200:
+        return failed(f"http {status}")
+    if log_sent:
+        record_sent(sender, text)
+    return True, f"sent (message_id={mid})"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="format Telegram text from stdin")
     ap.add_argument("--html", action="store_true")
@@ -193,8 +257,17 @@ def main() -> int:
     ap.add_argument("--undelivered", nargs=2, metavar=("SENDER", "REASON"))
     ap.add_argument("--sent", metavar="SENDER",
                     help="record a successful delivery: tg_format.py --sent SENDER (text on stdin)")
+    ap.add_argument("--deliver", metavar="SENDER",
+                    help="send stdin as it is to the group: token from $TELEGRAM_BOT_TOKEN (else "
+                         "$WINSTON_BOT_TOKEN), group from $ALERT_CHAT_ID. Exit 0 only when delivered")
     a = ap.parse_args()
     raw = sys.stdin.read()
+    if a.deliver:
+        ok, why = deliver(a.deliver, raw.rstrip("\n"),
+                          os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("WINSTON_BOT_TOKEN") or "",
+                          os.environ.get("ALERT_CHAT_ID") or "", preformatted=True)
+        print(why, file=sys.stderr if not ok else sys.stdout)
+        return 0 if ok else 1
     if a.undelivered:
         return 0 if record_undelivered(a.undelivered[0], a.undelivered[1], raw) else 1
     if a.sent:

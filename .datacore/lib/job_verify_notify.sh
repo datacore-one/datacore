@@ -87,19 +87,15 @@ _deliver() {
     # shellcheck disable=SC1090
     set -a; [ -r "${DATACORE_ROOT:-$HOME/Data}/.datacore/env/.env" ] && . "${DATACORE_ROOT:-$HOME/Data}/.datacore/env/.env"
     . "${JOB_VERIFY_ENV_FILE}"; set +a
-    local tok="${TELEGRAM_BOT_TOKEN:-${WINSTON_BOT_TOKEN:-}}"
-    # Errors go ONLY to The Firm group (MSG-1). There is no fallback to
-    # TELEGRAM_CHAT_ID / WINSTON_CHAT_ID: those are an agent's 1:1 chat with the
-    # owner, where an error landed on 2026-09-25 because ALERT_CHAT_ID was unset.
-    local chat="${ALERT_CHAT_ID:-}"
-    [ -n "$chat" ] || { _undelivered "ALERT_CHAT_ID unset in $JOB_VERIFY_ENV_FILE: alerts go only to The Firm group" "$msg"; return 1; }
-    [ -n "$tok" ] || { _undelivered "no bot token (TELEGRAM_BOT_TOKEN) in $JOB_VERIFY_ENV_FILE" "$msg"; return 1; }
-    # The HTTP status is the proof of delivery: `curl -s` alone exits 0 on a 401.
-    local code
-    code="$(curl -s -m 15 -o /dev/null -w '%{http_code}' -X POST "https://api.telegram.org/bot${tok}/sendMessage" \
-      -d "chat_id=${chat}" --data-urlencode "text=${msg}")"
-    [ "$code" = "200" ] && return 0
-    _undelivered "direct telegram send failed (http ${code:-none})" "$msg"; return 1
+    # Errors go ONLY to The Firm group (MSG-1): no fallback to TELEGRAM_CHAT_ID /
+    # WINSTON_CHAT_ID, an agent's 1:1 chat with the owner, where an error landed
+    # on 2026-09-25 because ALERT_CHAT_ID was unset. The one sender
+    # (tg_format.deliver) holds that rule, takes HTTP 200 as the only proof of
+    # delivery and records what it could not deliver; this only logs it.
+    local why
+    why="$(printf '%s' "$msg" | "$PY_BIN" "$RUNNER/.datacore/lib/tg_format.py" --deliver job_verify_notify 2>&1 >/dev/null)" && return 0
+    printf 'RELAY FAILED: direct telegram send failed (%s)\n' "${why:-no reason given}" >> "$LOG"
+    return 1
   fi
   # Paths are the RELAY HOST's, expanded by its shell: winston runs as a
   # normal user with Data under $HOME. The previous /root/Data and

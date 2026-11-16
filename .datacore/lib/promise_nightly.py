@@ -502,43 +502,15 @@ def send_to_firm(text: str) -> tuple[bool, str]:
         _undelivered(why, text)
         return False, why
     cfg = _settings()
-    token, chat = cfg.get("TELEGRAM_BOT_TOKEN", ""), cfg.get("ALERT_CHAT_ID", "")
-    if not chat:
-        why = "ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat"
-        _undelivered(why, text)
-        return False, why
-    if not token:
-        why = "no bot token (TELEGRAM_BOT_TOKEN)"
-        _undelivered(why, text)
-        return False, why
-    body = text
     try:
-        import tg_format
-        body = tg_format.normalize(text)
-        short = tg_format.fit(body)
-        if short != body:
-            short = tg_format.fit(body, more=tg_format.keep_full(body, "promise_nightly") or None)
-        body = short
-    except Exception:  # noqa: BLE001 -- a missing formatter must not stop the alert
-        pass
-    data = urllib.parse.urlencode({"chat_id": chat, "text": body}).encode()
-    try:
-        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data,
-                                    timeout=15) as r:
-            if r.status == 200:
-                try:
-                    from tg_format import record_sent as _record_sent
-                    _record_sent("promise_nightly", text)
-                except Exception:  # noqa: BLE001
-                    pass
-                return True, "sent"
-            why = f"http {r.status}"
-    except urllib.error.HTTPError as e:
-        why = f"http {e.code}"
+        from tg_format import deliver
     except Exception as e:  # noqa: BLE001
-        why = f"{type(e).__name__}"
-    _undelivered(why, text)
-    return False, why
+        why = f"no sender ({type(e).__name__})"
+        _undelivered(why, text)
+        return False, why
+    ok, why = deliver("promise_nightly", text, cfg.get("TELEGRAM_BOT_TOKEN", ""), cfg.get("ALERT_CHAT_ID", ""),
+                      log_sent=True, timeout=15)
+    return ok, ("sent" if ok else why)
 
 
 # ---- main --------------------------------------------------------------------------
