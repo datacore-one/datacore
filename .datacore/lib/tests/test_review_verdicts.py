@@ -183,3 +183,28 @@ def test_main_writes_the_status_line_and_its_exit_code_follows_it(root, monkeypa
     monkeypatch.setattr(review_verdicts, "_gh_ready", lambda: False)
     assert review_verdicts.main(["--data-dir", str(root)]) == 1
     assert status.read_text(encoding="utf-8").startswith("FAIL review-verdicts:")
+
+
+def test_the_daily_check_of_this_job_passes_on_a_good_run_and_fails_on_a_bad_one(root, monkeypatch):
+    """Every scheduled job is declared in jobs/manifest.yaml and its output is
+    checked daily (OPS-1). The row's check must hold on the line a successful
+    run writes and break on the line of a failed one."""
+    import dataclasses
+
+    from jobs import checks
+    from jobs.manifest import load_manifest
+
+    rows = [j for j in load_manifest(LIB / "jobs" / "manifest.yaml")
+            if j.name == "nightshift-review-verdicts"]
+    assert len(rows) == 1, "the review step is not declared in the job manifest"
+    (artifact,) = rows[0].artifacts
+    status = Path(review_verdicts.status_file())
+    assert Path(artifact.path).name == status.name
+    here = dataclasses.replace(artifact, path=str(status))
+
+    assert review_verdicts.main(["--data-dir", str(root)]) == 0
+    assert checks.run_check(here) == []
+
+    monkeypatch.setattr(review_verdicts, "_gh_ready", lambda: False)
+    assert review_verdicts.main(["--data-dir", str(root)]) == 1
+    assert checks.run_check(here) != []

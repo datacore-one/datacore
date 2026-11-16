@@ -1,0 +1,7 @@
+# fixture for nightshift-review-verdicts artifact[0]
+# producer artifact: ~/.datacore/state/review-verdicts.txt, written by the producer's first real run (2026-11-16, on mac; the job is scheduled on nightshift)
+# harvested: 2026-11-16
+# regex under test: ^OK review-verdicts: closed
+# represents: SUCCESS
+# ---
+OK review-verdicts: closed 0 (done 0, cancelled 0), still open 0, unverified 0, left for the next run 0
