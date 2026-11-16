@@ -18,6 +18,8 @@ owner=$(printf '%s' "$prompt" | sed -n 's/.*OWNER=\([A-Za-z0-9-]*\).*/\1/p' | he
 outrel=$(printf '%s' "$prompt" | sed -n 's/.*OUT=\([A-Za-z0-9/_-]*\).*/\1/p' | head -1)
 echo "OWNER $owner" >> "$STUB_LOG.owner"
 echo "$scope $mode $(command -v gh)" >> "$STUB_LOG"
+# What is still uncommitted in the output folder when this scope's run starts.
+git -C "$DATA_DIR/0-personal" status --porcelain -- "$outrel" 2>/dev/null | sed "s/^/$scope /" >> "$STUB_LOG.unsaved"
 out="$DATA_DIR/0-personal/$outrel"; mkdir -p "$out"
 echo "# report $scope" > "$out/$date-$scope.md"
 cat > "$out/$date-$scope.board.json" <<JSON
@@ -60,8 +62,14 @@ def test_two_separate_runs_readonly_gh_and_commit_only_outputs(tmp_path):
     assert [c.split()[0] for c in calls] == ["public", "enterprise"]
     assert all(c.split()[1] == "incremental" for c in calls)  # 2026-09-30 is a Wednesday
     assert all(c.split()[2] == str(SKILL / "bin" / "gh") for c in calls)
-    committed = subprocess.run(["git", "-C", str(personal), "show", "--name-only", "--format=", "HEAD"],
+    # One commit per scope, each made as soon as that scope's board validates.
+    committed = subprocess.run(["git", "-C", str(personal), "log", "-2", "--name-only", "--format="],
                                capture_output=True, text=True).stdout.split()
+    # 2026-11-15: both scopes were committed once, at the end. The Sunday full sweep
+    # ran past 03:45, the nightshift preflight rescued the still-uncommitted public
+    # outputs onto a branch during the enterprise run, and the commit found nothing
+    # to add. Nothing of the public scope may be unsaved when the enterprise run starts.
+    assert (tmp_path / "calls.log.unsaved").read_text() == ""
     # Reports live in the space's content/reports/ (DIP-0009), the triage in its own subfolder.
     out = "content/reports/github-triage"
     assert sorted(committed) == sorted([
