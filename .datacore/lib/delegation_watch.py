@@ -59,6 +59,9 @@ LABEL = {"not_picked_up": "not picked up", "stuck": "claimed, not finished",
          "gave_up": "given up after 3 failures", "no_assignee": "addressed to nobody"}
 
 
+from ledger.genesis import is_backlog  # noqa: E402 -- the one backlog rule
+
+
 def _hlc_ms(text) -> int | None:
     try:
         return int(str(text).split(".", 1)[0])
@@ -106,8 +109,8 @@ def gaps_in(space: str, state, *, now_ms: int, kind_of: Callable = _default_kind
     for iid in sorted(state.items):
         it = state.items[iid]
         p = it.payload or {}
-        if p.get("org"):
-            continue                      # an org mirror, not a delegation
+        if is_backlog(p):
+            continue                      # the owner's backlog; a delegation once assigned
         assignee, runner = p.get("assignee"), p.get("runner")
         if assignee and kind_of(assignee) == "human" and not runner:
             continue                      # the owner's own list
@@ -132,6 +135,96 @@ def gaps_in(space: str, state, *, now_ms: int, kind_of: Callable = _default_kind
                 out.append({**base, "kind": "gave_up", "since_ms": closed,
                             "detail": str(it.closed_reason)[:300]})
     return out
+
+
+# ── outcome measures: does delegation work (audit 2026-11-15) ────────────────
+DAY_MS = 24 * 3600 * 1000
+DEFAULT_OUTCOME = STATE_DIR / "delegation-outcome.txt"
+
+
+def outcomes(folded: dict, *, now_ms: int, days: int = 7, kind_of: Callable = _default_kind_of) -> dict:
+    """Of the work delegated to agents that could start between `days` days ago
+    and one day ago: how much was finished, closed by a person, given up, or is
+    still open. A day's grace, because work delegated an hour ago is not late.
+
+    `share` is (finished + closed) / total, or None when nothing was delegated:
+    no work is not a score of 100%.
+    """
+    counts = {"finished": 0, "closed": 0, "gave_up": 0, "open": 0}
+    not_done = []
+    for space, state in sorted(folded.items()):
+        for iid in sorted(state.items):
+            it = state.items[iid]
+            p = it.payload or {}
+            assignee, runner = p.get("assignee"), p.get("runner")
+            if is_backlog(p) or not (assignee or runner):
+                continue
+            if assignee and kind_of(assignee) == "human" and not runner:
+                continue                  # the owner's own list
+            start = _start_ms(it)
+            if start is None or not (now_ms - days * DAY_MS <= start <= now_ms - DAY_MS):
+                continue
+            if it.status in ("completed", "verified"):
+                kind = "finished"
+            elif it.status == "dismissed" and str(it.closed_reason or "").startswith(GAVE_UP):
+                kind = "gave_up"
+            elif it.status == "dismissed":
+                kind = "closed"
+            else:
+                kind = "open"
+            counts[kind] += 1
+            if kind in ("gave_up", "open"):
+                not_done.append({"space": space, "id": iid, "title": it.title,
+                                 "assignee": assignee or runner, "kind": kind})
+    total = sum(counts.values())
+    return {**counts, "total": total, "days": days, "not_done": not_done,
+            "share": (counts["finished"] + counts["closed"]) / total if total else None}
+
+
+def task_lists(root, *, check: Callable | None = None, spaces=None) -> dict:
+    """Does each space's task list match the ledger? {ok, differs, unchecked}.
+
+    `check` is `org_readonly.trial_check`: its last line is the verdict. A space
+    whose check could not run is `unchecked` with the reason -- never ok.
+    """
+    if check is None:
+        from org_readonly import trial_check as check
+    if spaces is None:
+        from ledger.union import ledger_spaces
+        spaces = ledger_spaces(root)
+    out = {"ok": [], "differs": {}, "unchecked": {}}
+    for space in spaces:
+        lines: list[str] = []
+        try:
+            rc = check(space, lines.append)
+        except Exception as exc:  # noqa: BLE001 -- named, never counted as matching
+            out["unchecked"][space.name] = f"{type(exc).__name__}: {exc}"[:200]
+            continue
+        if rc == 0:
+            out["ok"].append(space.name)
+        else:
+            out["differs"][space.name] = lines[-1] if lines else "the check failed and said nothing"
+    return out
+
+
+def outcome_lines(m: dict, lists: dict) -> list[str]:
+    """Two plain lines: the day's answer to "does delegation work"."""
+    if m["total"]:
+        done = m["finished"] + m["closed"]
+        a = (f"delegations {m['days']}d: {done} of {m['total']} finished or closed by a person "
+             f"({round(100 * m['share'])}%); {m['gave_up']} given up, {m['open']} still open")
+    else:
+        a = f"delegations {m['days']}d: no delegated work had a day to run"
+    n = len(lists["ok"]) + len(lists["differs"]) + len(lists["unchecked"])
+    b = f"task lists: {len(lists['ok'])} of {n} match the ledger"
+    if lists["differs"]:
+        def short(name, line):
+            tail = line.split(" task(s), ", 1)[1] if " task(s), " in line else line
+            return f"{name} ({tail})"
+        b += "; differs: " + ", ".join(short(k, v) for k, v in sorted(lists["differs"].items()))
+    if lists["unchecked"]:
+        b += "; could not check: " + ", ".join(sorted(lists["unchecked"]))
+    return [a, b]
 
 
 def states(root, *, fold=None) -> tuple[dict, dict]:
@@ -741,7 +834,9 @@ def refresh_open_requests(root, folded: dict) -> list[str]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=("check", "briefing", "who"))
+    ap.add_argument("cmd", choices=("check", "briefing", "who", "outcomes"))
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUTCOME)
     ap.add_argument("--root", type=Path, default=Path.home() / "Data")
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
@@ -757,6 +852,18 @@ def main(argv=None) -> int:
         return 1 if errors else 0
     folded, errors = states(a.root)
     now_ms = int(time.time() * 1000)
+    if a.cmd == "outcomes":
+        m = outcomes(folded, now_ms=now_ms, days=a.days)
+        lists = task_lists(a.root)
+        lines = outcome_lines(m, lists)
+        if errors:
+            lines.append("could not read: " + ", ".join(f"{k} ({v[:80]})" for k, v in sorted(errors.items())))
+        if not a.dry_run:
+            a.out.parent.mkdir(parents=True, exist_ok=True)
+            a.out.write_text("\n".join(lines) + "\n")
+        print(json.dumps({"lines": lines, "outcomes": m, "task_lists": lists, "errors": errors}, sort_keys=True)
+              if a.json else "\n".join(lines))
+        return 1 if errors else 0
     found = [g for name, state in folded.items() for g in gaps_in(name, state, now_ms=now_ms)]
     if a.cmd == "briefing":
         print(briefing_line(found, errors) + " " + requests_line(folded))

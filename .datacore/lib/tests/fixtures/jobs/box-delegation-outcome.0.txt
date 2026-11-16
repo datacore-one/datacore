@@ -1,0 +1,2 @@
+delegations 7d: 31 of 40 finished or closed by a person (78%); 4 given up, 5 still open
+task lists: 2 of 3 match the ledger; differs: 2-b (1 lost, 0 doubled)

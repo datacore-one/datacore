@@ -772,10 +772,8 @@ def plan(state, events, actor: str, runner: str | None = None) -> Plan:
     # task added the normal way could never reach an agent, and the GTD spec's
     # way of assigning (`:ASSIGNEE:`) had no effect. Assignment is the
     # discriminator now, the same one every later rule below already uses.
-    def _backlog(i) -> bool:
-        payload = i.payload or {}
-        return bool(payload.get("org")) and not payload.get("assignee")
-    pending = [i for i in claimable if not _backlog(i)]
+    from ledger.genesis import is_backlog
+    pending = [i for i in claimable if not is_backlog(i.payload)]
     mirrored = len(claimable) - len(pending)
 
     # ADDRESSED WORK GOES TO ITS ADDRESSEE. `item.claim` is an append, not a
