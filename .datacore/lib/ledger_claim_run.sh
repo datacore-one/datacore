@@ -74,25 +74,23 @@ for SP in "${SPACES[@]}"; do
     env -u ANTHROPIC_API_KEY DATACORE_ROOT="$ROOT" python3 "$LIB/ledger_claim.py" \
       --space "$SP" --actor "$ACTOR" --limit "$LIMIT" --execute 2>&1
     echo "claim-exit=$?"
-    # THE SECOND CHECK: work another writer finished for the owner is checked
-    # again here, by a writer that did not do it. Scheduled nowhere until
-    # 2026-11-15, so every request ended "not checked by anyone but the doer".
-    env -u ANTHROPIC_API_KEY DATACORE_ROOT="$ROOT" python3 "$LIB/ledger_claim.py" \
-      --space "$SP" --actor "$ACTOR" --verify-others 2>&1
-    echo "verify-exit=$?"
+    # THE SECOND CHECK (work another writer finished for the owner, checked
+    # again by a writer that did not do it) is part of the dispatcher's own
+    # run since 2026-11-16, so hosts that do not use this script make it too.
     DATACORE_ROOT="$ROOT" python3 "$LIB/ledger_transport.py" converge --line --space "$SP" 2>&1 | tail -1
   } > "$OUT" 2>&1
   cat "$OUT" >> "$LOG"
 
   LINE="$(grep '^CLAIM-STATUS ' "$OUT" | tail -1)"
   RC="$(sed -n 's/^claim-exit=//p' "$OUT" | tail -1)"
-  VRC="$(sed -n 's/^verify-exit=//p' "$OUT" | tail -1)"
   case "$LINE" in
     "CLAIM-STATUS $NAME OK"*) : ;;
     "CLAIM-STATUS $NAME ATTENTION "*) note "$NAME: ${LINE#CLAIM-STATUS $NAME ATTENTION }" ;;
     *) note "$NAME: the dispatcher printed no status (exit ${RC:-?}): $(grep -v '^===' "$OUT" | grep -v -- '-exit=' | tail -1 | cut -c1-160)" ;;
   esac
-  [ "${VRC:-0}" = 0 ] || note "$NAME: the second check could not run (exit $VRC)"
+  if grep -q '^second check could not run' "$OUT"; then
+    note "$NAME: $(grep -m1 '^second check could not run' "$OUT" | cut -c1-160)"
+  fi
   # A damaged line is skipped so one bad record never stops the space -- but
   # what it hid may be delegated work, so the run is not OK until it is looked at.
   if grep -q 'corrupt event log' "$OUT"; then
