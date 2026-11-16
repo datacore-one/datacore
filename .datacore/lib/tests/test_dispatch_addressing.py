@@ -194,7 +194,7 @@ def test_it_commits_only_the_journal(tmp_path):
     assert any(t.startswith("journal/") for t in tracked), tracked
 
 
-def test_one_items_leftover_does_not_burn_a_model_call_on_the_next(tmp_path, capsys):
+def test_one_items_leftover_does_not_burn_a_model_call_on_the_next(tmp_path, capsys, monkeypatch):
     """`_artifact_tree_clean` looks at the whole space, not at one item's
     artifact. So an item whose agent left work uncommitted fails every item
     dispatched after it, each spending a full model call for a result that
@@ -213,12 +213,22 @@ def test_one_items_leftover_does_not_burn_a_model_call_on_the_next(tmp_path, cap
     subprocess.run(["git", "-C", str(space), "commit", "-qm", "seed"], check=True, capture_output=True)
     # What an agent that did the work but could not commit leaves behind.
     (space / "left-behind.txt").write_text("uncommitted\n")
+    # The run reaches the agent now (it used to stop first), so stand in for it:
+    # no test may start a real one.
+    ran = []
+    monkeypatch.setattr(ledger_claim, "run_task",
+                        lambda title, route, cwd, item_id="", hops=0, actor="":
+                        (ran.append(item_id) or True, "did it", {}))
 
     out = _plan(space, "miles", capsys, execute=True)
+    assert ran == ["item-1", "item-2"], out
 
-    assert "STOPPING" in out, out
-    assert "left-behind.txt" in out, out
-    assert "commit or discard it" in out
+    # 2026-11-15: a leftover is attributed, not fatal. It is named, left exactly
+    # as it is, and the items still run (the run used to STOP here, so one stray
+    # file meant no delegated work at all).
+    assert "STOPPING" not in out, out
+    assert "left-behind.txt" in out and "left as they are" in out, out
+    assert (space / "left-behind.txt").read_text() == "uncommitted\n"
 
 
 def test_an_uncommitted_telemetry_log_does_not_block_verification(tmp_path):

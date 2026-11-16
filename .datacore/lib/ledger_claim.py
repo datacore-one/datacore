@@ -398,7 +398,7 @@ def _infrastructure_failure(detail: str) -> bool:
     return any(marker in low for marker in INFRASTRUCTURE_MARKERS)
 
 
-def _commit_result(space: Path, item_id: str) -> tuple[bool, str]:
+def _commit_result(space: Path, item_id: str, baseline: dict | None = None) -> tuple[bool, str]:
     """Record whatever this execution produced, so the check has something to read.
 
     COMPLETION USED TO DEPEND ON THE AGENT REMEMBERING TO COMMIT. The prompt
@@ -414,23 +414,39 @@ def _commit_result(space: Path, item_id: str) -> tuple[bool, str]:
     The check still runs afterwards, in an isolated worktree, and it still
     decides. What changes is only that the evidence exists to be checked.
 
-    Attribution is what makes it safe: the dispatcher refuses to start an item
-    at all unless the tree is clean apart from ledger appends, so anything dirty
-    at this point was produced by THIS execution. That is why the sweep can be
-    broad without being reckless -- there is nothing else here to sweep up.
+    ATTRIBUTION is what makes it safe. `baseline` is what was already
+    uncommitted before the agent ran (`_dirty_snapshot`): a path in it that is
+    unchanged belongs to another writer and is left exactly as it is; a path
+    not in it was produced by THIS execution and is committed. A path that was
+    already dirty AND changed during the run holds two writers' edits that
+    cannot be told apart, so nothing is committed and the reason names it.
+    (Until 2026-11-15 the dispatcher refused to start unless the whole tree was
+    clean, and then swept every dirty path into the result.)
 
     Ledger logs are left alone. They are appends, `_artifact_tree_clean`
     already excludes them, and the transport publishes them on its own terms.
     """
-    rc, staged, _ = _git_out(space, "status", "--porcelain")
+    rc, staged, _ = _git_out(space, "status", "--porcelain", "-uall")
     if rc != 0:
         return False, "the working tree could not be read"
-    paths = []
+    baseline = baseline or {}
+    root = _repo_root(space)
+    paths, mixed = [], []
     for line in staged.splitlines():
         name = line[3:].strip().strip('"')
-        if not name or "/.datacore/events/" in f"/{name}" or name.startswith(".datacore/events/"):
+        if " -> " in name:                    # a rename: the new path is the artifact
+            name = name.split(" -> ", 1)[1].strip().strip('"')
+        if not name or _is_ledger_path(space, root, name):
             continue
+        if name in baseline:
+            if root is not None and _file_sig(root / name) != baseline[name]:
+                mixed.append(name)
+            continue                          # another writer's, untouched: not ours to commit
         paths.append(name)
+    if mixed:
+        return False, ("the agent changed " + ", ".join(sorted(mixed)[:4]) + ", which already held "
+                       "another writer's uncommitted change; the two cannot be told apart, so "
+                       "nothing was committed")
     if not paths:
         return True, ""                       # the agent committed, or produced nothing
     rc, _, err = _git_out(space, "add", "--", *paths)
@@ -454,8 +470,76 @@ def _git_out(space: Path, *args: str) -> tuple[int, str, str]:
     return p.returncode, p.stdout or "", p.stderr or ""
 
 
-def _artifact_tree_clean(space, offenders: list | None = None):
-    """Only ledger append records may differ from the checked commit.
+def _repo_root(space) -> Path | None:
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=space, capture_output=True, text=True)
+    return None if root.returncode else Path(root.stdout.strip()).resolve()
+
+
+def _ledger_prefixes(space, root: Path) -> tuple[str, ...] | None:
+    try:
+        rel = Path(space).resolve().relative_to(root)
+    except ValueError:
+        return None
+    return tuple((rel / ".datacore" / d).as_posix() + "/" for d in ("events", "telemetry"))
+
+
+def _is_ledger_path(space, root: Path | None, name: str) -> bool:
+    """An append-only ledger record (event or telemetry log, or its lock): written
+    by the writers themselves, never the agent's artifact."""
+    prefixes = _ledger_prefixes(space, root) if root is not None else None
+    if prefixes is None:
+        return "/.datacore/events/" in f"/{name}"
+    # The writer's runtime state (sequence marks, locks) is written by the loop
+    # itself on every append. A real space ignores it; one that does not must
+    # still never see it as an artifact or as another writer's work.
+    state = prefixes[0][: -len("events/")] + "state/"
+    if name.startswith(state):
+        return True
+    return any(name.startswith(pre) and "/" not in name[len(pre):]
+               and (name.endswith(".jsonl") or name.endswith(".lock")) for pre in prefixes)
+
+
+def _file_sig(path: Path) -> str:
+    """A content signature for attribution: the bytes, or that the path is gone."""
+    import hashlib
+    try:
+        return hashlib.sha1(path.read_bytes()).hexdigest()
+    except IsADirectoryError:
+        return "dir"
+    except OSError:
+        return "gone"
+
+
+def _uncommitted(space) -> tuple[Path, list[str]] | None:
+    """(repo root, every path that differs from HEAD or is untracked), ledger
+    records excluded; None when the tree cannot be read."""
+    root = _repo_root(space)
+    if root is None or _ledger_prefixes(space, root) is None:
+        return None
+    paths = []
+    for command in (["git", "diff", "--name-only", "-z", "HEAD"],
+                    ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
+        result = subprocess.run(command, cwd=root, capture_output=True)
+        if result.returncode:
+            return None
+        paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
+    return root, [name for name in paths if not _is_ledger_path(space, root, name)]
+
+
+def _dirty_snapshot(space) -> dict | None:
+    """{path: content signature} of what is uncommitted right now, or None when
+    the tree cannot be read. Taken before an agent runs, it is the line between
+    another writer's work in progress and what this run produced."""
+    found = _uncommitted(space)
+    if found is None:
+        return None
+    root, paths = found
+    return {name: _file_sig(root / name) for name in sorted(set(paths))}
+
+
+def _artifact_tree_clean(space, offenders: list | None = None, baseline: dict | None = None):
+    """Only ledger append records -- and what `baseline` says was already
+    uncommitted, unchanged -- may differ from the checked commit.
 
     `offenders`, when given, is filled with the paths that made this False, so
     the caller can NAME them. It said only "commit task changes", which points
@@ -463,31 +547,19 @@ def _artifact_tree_clean(space, offenders: list | None = None):
     hook refusing a top-level `drill/` directory, so the agent's commit could
     never have succeeded and no amount of retrying would have helped. A refusal
     that describes the wrong cause costs more than one that says nothing.
+
+    The event logs and the telemetry logs (plan phase C) are both append-only
+    ledger records, written by the writers themselves -- the verifier's own
+    writer appends telemetry continuously, so refusing it meant no check ever
+    ran in that copy (2026-11-06). Neither is the agent's artifact.
     """
-    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=space, capture_output=True, text=True)
-    if root.returncode:
+    found = _uncommitted(space)
+    if found is None:
         return False
-    root_path = Path(root.stdout.strip()).resolve()
-    try:
-        rel = Path(space).resolve().relative_to(root_path)
-    except ValueError:
-        return False
-    # The event logs and the telemetry logs (plan phase C) are both append-only
-    # ledger records, written by the writers themselves -- the verifier's own
-    # writer appends telemetry continuously, so refusing it meant no check ever
-    # ran in that copy (2026-11-06). Neither is the agent's artifact.
-    prefixes = tuple((rel / ".datacore" / d).as_posix() + "/" for d in ("events", "telemetry"))
-    paths = []
-    for command in (["git", "diff", "--name-only", "-z", "HEAD"],
-                    ["git", "ls-files", "--others", "--exclude-standard", "-z"]):
-        result = subprocess.run(command, cwd=root_path, capture_output=True)
-        if result.returncode:
-            return False
-        paths.extend(os.fsdecode(name) for name in result.stdout.split(b"\0") if name)
-    def permitted(name: str) -> bool:
-        return any(name.startswith(pre) and "/" not in name[len(pre):]
-                   and (name.endswith(".jsonl") or name.endswith(".lock")) for pre in prefixes)
-    bad = [name for name in paths if not permitted(name)]
+    root, paths = found
+    baseline = baseline or {}
+    bad = [name for name in paths
+           if not (name in baseline and _file_sig(root / name) == baseline[name])]
     if offenders is not None:
         offenders.extend(bad)
     return not bad
@@ -509,7 +581,7 @@ def _isolated_check_rc(space: Path, check: str) -> tuple[int, str]:
     return rc, sha
 
 
-def _isolated_check_explained(space: Path, check: str) -> tuple[int, str, str]:
+def _isolated_check_explained(space: Path, check: str, baseline: dict | None = None) -> tuple[int, str, str]:
     """Check a fresh worktree of the committed result, not the agent's directory.
 
     Returns (status, sha, why): 0 passed, WAITING_ON_OWNER when the check said
@@ -557,8 +629,12 @@ def _isolated_check_explained(space: Path, check: str) -> tuple[int, str, str]:
         print(f"         -> {why}")
         return 1, sha, why
 
+    # The check reads the COMMITTED result in a fresh worktree. `baseline` is
+    # what the caller knows was uncommitted before the work (another writer's):
+    # that is ignored. With none given, any uncommitted path fails closed -- an
+    # uncommitted result must never be "verified" against the old HEAD.
     dirty: list[str] = []
-    if not _artifact_tree_clean(space, dirty):
+    if not _artifact_tree_clean(space, dirty, baseline):
         return fail(f"check FAILED CLOSED in {describe_repo(space)}: commit task changes before "
                     "artifact verification; existing index and files preserved"
                     + (f" (uncommitted: {', '.join(sorted(dirty)[:4])})" if dirty else ""))
@@ -602,7 +678,7 @@ def _isolated_check_explained(space: Path, check: str) -> tuple[int, str, str]:
                 why = diagnose(cmd=check, rc=proc.returncode, cwd=wt, repo=space, sha=head,
                                stderr=proc.stderr, stdout=proc.stdout)
             current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
-            intact = current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space)
+            intact = current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space, None, baseline)
             if intact and proc.returncode in (0, WAITING_ON_OWNER):
                 return proc.returncode, head, ""
             if not why:
@@ -858,7 +934,10 @@ def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
         if (item.status != "completed" or not p.get("asked_by") or not p.get("check")
                 or item.owner == actor):
             continue
-        passed, sha = _isolated_check(space, p["check"])
+        # A second check judges work that is already committed, so whatever is
+        # uncommitted in this copy right now is not what is being judged.
+        rc_, sha, _why = _isolated_check_explained(space, p["check"], _dirty_snapshot(space))
+        passed = rc_ == 0
         if passed:
             guarded_append(EventLog(space, actor), "item.verify",
                            {"id": item.id, "check": p["check"], "artifact_commit": sha})
@@ -1029,29 +1108,27 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             print(f"would claim [{route}] {title[:70]}  ({why}; {gate})")
             continue
 
-        # A DIRTY TREE FAILS EVERY CHECK IN THIS RUN, SO STOP AT THE FIRST ONE.
-        # `_artifact_tree_clean` looks at the whole space, not at one item's
-        # artifact. So an item whose agent left work uncommitted does not just
-        # fail itself -- it fails every item dispatched after it, each one
-        # spending a full model call to produce a result that cannot be
-        # verified. Observed 2026-09-18 on nightshift: two items, the second
-        # failed on the first one's leftover, and both answers were correct.
+        # WHAT WAS ALREADY UNCOMMITTED IS NOT THIS ITEM'S WORK. A space is
+        # written to all day by other jobs, so the snapshot taken here is the
+        # line between their work in progress and what this run produces: the
+        # commit below takes only what the run changed, and the check ignores
+        # what was already there. (Until 2026-11-15 any uncommitted file
+        # stopped the whole run -- one stray file, no delegated work at all --
+        # and the commit swept every dirty path into the result.)
         #
-        # Reported as a stop with the offending paths rather than pressed on,
-        # because the condition cannot clear itself mid-run and the cost of
-        # continuing is real money for guaranteed failures.
+        # Only a tree that cannot be read at all still stops the run: nothing
+        # could be attributed or checked, and each item would spend a model
+        # call for a result that cannot be verified.
+        baseline: dict | None = None
         if check:
-            dirty: list[str] = []
-            if not _artifact_tree_clean(space, dirty):
-                # An EMPTY list means the tree could not be read at all (not a
-                # git repo, git unavailable) rather than that nothing is dirty.
-                # Saying "-> " and nothing sends the reader looking for a file.
-                where = (", ".join(sorted(dirty)[:5]) if dirty
-                         else "the working tree could not be read (is this a git repository?)")
-                print(f"STOPPING: the working tree carries uncommitted work, so every check "
-                      f"in this run would fail closed\n         -> {where}"
-                      f"\n         -> commit or discard it, then dispatch again")
+            baseline = _dirty_snapshot(space)
+            if baseline is None:
+                print("STOPPING: the working tree could not be read (is this a git repository?), "
+                      "so no result in this run could be committed or checked")
                 break
+            if baseline:
+                print(f"         ({len(baseline)} file(s) already uncommitted here are left as they are: "
+                      f"{', '.join(sorted(baseline)[:3])}{' ...' if len(baseline) > 3 else ''})")
 
         # A RETRY CHECKS FIRST. An item released before may have done its work
         # and failed only its check -- Datafund P7 was posted, the check misread
@@ -1065,7 +1142,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             # evidence; anything else (the PR was closed unmerged, the job still
             # fails after the merge, a retry's check still fails) -> to the
             # agent as an ordinary attempt.
-            rc, sha = _isolated_check_rc(space, check)
+            rc, sha, _ = _isolated_check_explained(space, check, baseline)
             if is_waiting and rc == WAITING_ON_OWNER:
                 print(f"WAITING  [{route}] {title[:70]}\n         -> still waiting for you "
                       f"(the owner merges); the agent is not re-run")
@@ -1121,7 +1198,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
         if ok:
             claim_backoff.clear(args.actor)
         if ok and check:
-            committed, why_not = _commit_result(space, item.id)
+            committed, why_not = _commit_result(space, item.id, baseline)
             if not committed and why_not:
                 print(f"         -> could not record the result: {why_not}")
             # The ONLY thing that completes an item. An agent that declined
@@ -1129,7 +1206,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             # sniffing that prose for refusal markers both passed a failure as
             # DONE, because the model rephrases ("I can't" / "I could not").
             # Prose is not evidence. A check that passes is.
-            rc, sha, check_why = _isolated_check_explained(space, check)
+            rc, sha, check_why = _isolated_check_explained(space, check, baseline)
             passed = rc == 0
             if rc == WAITING_ON_OWNER:
                 EventLog(space, args.actor).append(
