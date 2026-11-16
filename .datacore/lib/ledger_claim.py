@@ -73,7 +73,13 @@ MAX_ATTEMPTS = 3
 WAITING_ON_OWNER = 3
 #: Release kinds that are not an attempt at the task (see the dead-letter count).
 #: `usage_limit`: the model allowance ran out (W1) -- the budget, not the task.
-NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "usage_limit")
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "usage_limit", "stale_claim")
+
+#: How long this writer's own claim may sit before the next run releases it. A
+#: run is bounded (the executor's limit plus the check's), so a claim older than
+#: this is a run that died, not one still working. Until 2026-11-15 such an
+#: item stayed claimed forever.
+STALE_CLAIM_S = int(os.environ.get("DATACORE_STALE_CLAIM_S") or 3 * 3600)
 
 
 def _task_text(title: str, payload: dict, last_error: str = "") -> str:
@@ -918,6 +924,56 @@ def runner_queue(space: Path, actor: str, runner: str, transport=None):
     return plan(state, events, actor, runner=runner).ready, state, ("hub" if source == "hub" else "git")
 
 
+def _hlc_ms(hlc) -> int | None:
+    try:
+        return int(str(hlc).split(".", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def release_stale_claims(space: Path, actor: str, state, events, now_ms: int | None = None) -> int:
+    """Release this writer's own claims older than STALE_CLAIM_S; return how many.
+
+    Only an item that carries a check: one without is left claimed ON PURPOSE,
+    waiting for the owner's review (`item.verify` needs_review). The release is
+    kind `stale_claim`, which is not an attempt at the task -- the run died, the
+    task was not tried and found wanting.
+    """
+    import time as _time
+    now_ms = int(_time.time() * 1000) if now_ms is None else now_ms
+    last_claim: dict[str, int | None] = {}
+    for ev in events:
+        if ev.type == "item.claim" and ev.actor == actor:
+            last_claim[(ev.payload or {}).get("id")] = _hlc_ms(ev.hlc)
+    released = 0
+    for item in state.items.values():
+        if item.status != "claimed" or item.owner != actor or not (item.payload or {}).get("check"):
+            continue
+        at = last_claim.get(item.id)
+        if at is None or (now_ms - at) / 1000 < STALE_CLAIM_S:
+            continue
+        title = ((item.payload or {}).get("title") or item.id)[:70]
+        try:
+            EventLog(space, actor).append("item.release", {
+                "id": item.id, "owner": actor, "kind": "stale_claim",
+                "reason": f"claimed {int((now_ms - at) / 60000)} min ago and never finished: "
+                          "the run that took it did not complete"})
+        except Exception as exc:  # noqa: BLE001 -- one bad release must not stop the run
+            print(f"         -> could not release the stale claim on {title}: {exc}")
+            continue
+        print(f"RELEASED {title}\n         -> a claim older than {STALE_CLAIM_S // 60} min; back in the queue")
+        released += 1
+    return released
+
+
+def _claim_status(space: Path, attention: list[str], **counts) -> str:
+    """The one line a job contract reads: OK, or ATTENTION with the reason."""
+    facts = " ".join(f"{k}={v}" for k, v in counts.items() if v)
+    if attention:
+        return f"CLAIM-STATUS {space.name} ATTENTION {'; '.join(attention)}" + (f" ({facts})" if facts else "")
+    return f"CLAIM-STATUS {space.name} OK" + (f" {facts}" if facts else " nothing to do")
+
+
 def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
     """Someone other than the doer checks the owner's requests (Winston path step 5,
     owner goal 2026-11-05). (verified, recheck failed).
@@ -994,6 +1050,13 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
         print(f"verified {v}, recheck failed {f}")
         return 0
     state = authoritative_state(space, events)
+    stale_released = 0
+    if args.execute:
+        stale_released = release_stale_claims(space, args.actor, state, events)
+        if stale_released:
+            raw, source = task_events_hub_first(space, transport)
+            events, _ = authoritative_events(space, raw)
+            state = authoritative_state(space, events)
     from actor_identity import dispatch_ambiguity
     p = plan(state, events, args.actor)
     mirrored, ambiguous, addressed, siblings = p.mirrored, p.ambiguous, p.addressed, p.siblings
@@ -1049,6 +1112,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
         mirror_note += f"; {n} left to the {runner} runner"
     if not pending:
         print(f"nothing to dispatch: no delegated items awaiting claim{mirror_note}")
+        print(_claim_status(space, [], stale_released=stale_released))
         return 0
 
     print(f"{len(pending)} delegated item(s) awaiting claim; limit {args.limit}{mirror_note}")
@@ -1062,12 +1126,21 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
         paused, why = claim_backoff.status(args.actor)
         if paused:
             print(f"PAUSED   claiming on this host -- {why}")
+            # Reported by claim_backoff's own alert; the queue is intact.
+            print(_claim_status(space, [], paused=1, waiting_items=len(pending)))
             return 0
         if claim_backoff.probing(args.actor):
             limit = 1
 
     journal_lines: list[str] = []
-    for item in pending[:limit]:
+    # THE LIMIT COUNTS ITEMS TAKEN, NOT ITEMS LOOKED AT. A refused item stays in
+    # the queue (it needs a person), so slicing the queue to the limit let two
+    # of them fill every run and block all the work behind them for good.
+    taken = 0
+    stopped = False
+    for item in pending:
+        if taken >= limit:
+            break
         title = (item.payload or {}).get("title") or item.id
         effects = (item.payload or {}).get("effects") or []
         # A CREATOR THAT KNOWS THE ROUTE MAY SAY SO. The heuristics infer a
@@ -1103,6 +1176,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
                 refused += 1
                 continue
 
+        taken += 1
         if not args.execute:
             gate = f"check: {check}" if check else "NO CHECK -> cannot auto-complete"
             print(f"would claim [{route}] {title[:70]}  ({why}; {gate})")
@@ -1125,6 +1199,7 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
             if baseline is None:
                 print("STOPPING: the working tree could not be read (is this a git repository?), "
                       "so no result in this run could be committed or checked")
+                stopped = True
                 break
             if baseline:
                 print(f"         ({len(baseline)} file(s) already uncommitted here are left as they are: "
@@ -1314,6 +1389,16 @@ def main(argv=None, *, transport=_FROM_ENV) -> int:
     _journal(space, args.actor, journal_lines)
     print(f"\ndispatched {dispatched}, needs-review {review}, failed {failed}, refused {refused}"
           + (f", waiting for you {waiting_n}" if waiting_n else ""))
+    # A FAILED CHECK IS THE LOOP WORKING (released, retried, the owner told). A
+    # run that stopped, or an item that needs a person and will be refused again
+    # next time, is the loop NOT working -- and until 2026-11-15 the job's
+    # contract could not tell: it asked only for a log that was recent.
+    attention = (["stopped: the working tree could not be read"] if stopped else []) \
+        + ([f"refused={refused}: item(s) that need a person stay in the queue"] if refused else [])
+    print(_claim_status(space, attention, dispatched=dispatched, failed=failed, review=review,
+                        waiting=waiting_n, stale_released=stale_released))
+    if attention:
+        return 3
     return 1 if failed else 0
 
 
