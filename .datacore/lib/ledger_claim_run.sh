@@ -18,7 +18,7 @@
 #     FAIL claim <utc> <space>: <why>; ...
 # FAIL means the loop could not do its job (a run stopped, an item needs a
 # person and is refused every tick, the dispatcher crashed, a ledger log has a
-# damaged line). A delegated task
+# damaged line, the space's results could not be published). A delegated task
 # failing its check is NOT a fail: that is the loop working.
 # The box keeps its cron environment in cos.env; a host without it needs nothing.
 set -uo pipefail
@@ -91,6 +91,13 @@ for SP in "${SPACES[@]}"; do
   if grep -q '^second check could not run' "$OUT"; then
     note "$NAME: $(grep -m1 '^second check could not run' "$OUT" | cut -c1-160)"
   fi
+  # Results that never leave this host are not delivered. One agent's run ended
+  # "converged but not published" on every tick for four days (2026-11-12..16)
+  # and this status stayed OK. The LAST converge line is the publish.
+  PUB="$(grep '^converge ' "$OUT" | tail -1)"
+  case "$PUB" in
+    *": FAIL "*) note "$NAME: not published: $(printf '%s' "${PUB#*: FAIL }" | sed 's/^[^A-Za-z]*//' | cut -c1-160)" ;;
+  esac
   # A damaged line is skipped so one bad record never stops the space -- but
   # what it hid may be delegated work, so the run is not OK until it is looked at.
   if grep -q 'corrupt event log' "$OUT"; then
