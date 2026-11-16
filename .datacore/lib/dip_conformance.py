@@ -55,8 +55,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 DIPS = ROOT / ".datacore" / "dips"
 
 # Ranked so "not more-implemented than its dependency" is a comparison.
+# FOUR STATUSES since 2026-11-15 (owner): Draft, Ratified, Superseded, Retired.
+# "Implemented" is no longer a header -- it is what this tool derives. Ratified
+# ranks where Implemented did, so a Ratified DIP whose evidence is missing
+# still shows as an overclaim; the old words stay ranked for headers not yet moved.
 RANK = {"unknown": 0, "draft": 1, "proposed": 1, "accepted": 2,
-        "implemented": 3, "superseded": 3, "deprecated": 3}
+        "implemented": 3, "ratified": 3, "superseded": 3, "deprecated": 3, "retired": 3}
+#: Derived statuses that mean "the evidence shows it built".
+BUILT = {"implemented", "ratified"}
 
 FIELD_RE = re.compile(r"^\|\s*\*\*(?P<k>[^*]+)\*\*\s*\|\s*(?P<v>.*?)\s*\|\s*$", re.M)
 PATH_RE = re.compile(r"`([^`]+)`")
@@ -424,7 +430,7 @@ def main() -> int:
                 print(f"{'':<37}  absent: {p}")
     print("-" * 96)
     print(f"{len(recs)} DIPs · {over} overclaim their status · "
-          f"{sum(1 for r in recs.values() if r['derived']=='implemented')} derive as implemented")
+          f"{sum(1 for r in recs.values() if r['derived'] in BUILT)} derive as built")
     return 1 if over else 0
 
 
