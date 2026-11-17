@@ -109,11 +109,12 @@ def test_read_events_skips_torn_final_line(tmp_path):
     assert events[0].hash == e1.hash
 
 
-def test_read_events_flags_a_malformed_middle_line_and_withholds_the_tail(tmp_path):
+def test_read_events_flags_a_malformed_middle_line_and_reads_the_rest(tmp_path):
     # Replaced 2026-09-26 (LED-7): read_events used to RAISE here, which
     # stopped every reader of the space over one writer's damaged log. It now
-    # flags the damage (naming file and line) and withholds that log's events
-    # from the bad line on.
+    # flags the damage (naming file and line), skips the bad line and reads
+    # the events after it (owner decision 2026-11-17: one bad record never
+    # hides others; until then the rest of that log was withheld).
     log = _mk_log(tmp_path, "mac")
     log.append("item.create", {"id": "t1"})
     log.append("item.claim", {"id": "t1"})
@@ -130,7 +131,7 @@ def test_read_events_flags_a_malformed_middle_line_and_withholds_the_tail(tmp_pa
     with pytest.warns(CorruptLogWarning) as caught:
         events = read_events(tmp_path / "space")
 
-    assert [e.type for e in events] == ["item.create"]
+    assert [e.type for e in events] == ["item.create", "item.claim"]
     msg = str(caught[0].message)
     assert str(log.path) in msg
     assert "line 2" in msg

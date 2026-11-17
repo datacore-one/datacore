@@ -179,7 +179,7 @@ def _writer_events(space: Path, writers: set[str]):
         try:
             file_events, _ = ledger_log._parse_log_bytes(raw, path)
         except ledger_log.CorruptLogError:
-            file_events = ledger_log._parse_prefix(raw)   # same rule as read_events
+            file_events = ledger_log._parse_skipping_damaged(raw)[0]   # same rule as read_events
         out.extend(file_events)
     return out
 

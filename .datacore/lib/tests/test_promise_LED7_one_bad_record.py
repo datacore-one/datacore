@@ -11,8 +11,10 @@ Seeded failures:
     in the space stalls (audit D7). `verify_chain` reports such an event as
     clean.
 
-Promise, as evals: the reader flags the damaged log and withholds only that
-log's tail from the bad line on; other writers' appends ignore a floor more
+Promise, as evals: the reader flags the damaged log, skips the damaged line
+and still reads the events after it (owner decision 2026-11-17, "report, never
+halt": one bad record never hides others; until then that log's tail from the
+bad line on was withheld); other writers' appends ignore a floor more
 than ten minutes ahead of the clock and keep stamping near real time; verify
 flags the future HLC.
 """
@@ -57,7 +59,7 @@ def test_one_malformed_line_does_not_stop_readers_of_the_space(tmp_path):
     ids = {e.payload.get("id") for e in events}
     assert "b1" in ids, "another writer's events must still be read"
     assert "a1" in ids, "the damaged log's events before the bad line are kept"
-    assert not ({"a2", "a3"} & ids), "the damaged log's tail after the bad line is withheld"
+    assert {"a2", "a3"} <= ids, "the damaged log's events after the bad line must still be read"
     assert any("alice.jsonl" in str(w.message) for w in caught), "the damage must be flagged"
 
 
@@ -67,7 +69,7 @@ def test_fold_runs_over_a_space_with_one_damaged_log(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         items = fold(read_events(space)).items
-    assert {"a1", "b1"} <= set(items)
+    assert {"a1", "a2", "a3", "b1"} <= set(items)
 
 
 def test_another_writer_can_still_append(tmp_path):
