@@ -2305,21 +2305,6 @@ jobs:
         arg: '"in_sync": true'
         max_age_hours: 5
 
-  # Distribution plan (owner 2026-11-17): the daily distribution snapshot runs on
-  # dayshift as Miles ("dayshift", "miles" commits the snapshots). It fast-forwards
-  # Miles's copy of the Datafund space, collects npm, GitHub, dev.to, YouTube and
-  # PostHog numbers (PostHog shows n/a without a broker on this host), and commits
-  # only the metrics folder as Miles. Read by the Friday results table.
-  - name: nightshift-distribution-snapshot
-    machine: nightshift
-    schedule: "15 6 * * *"
-    cmd: "GIT_AUTHOR_NAME=Miles GIT_AUTHOR_EMAIL=gregor+miles@datafund.io GIT_COMMITTER_NAME=Miles GIT_COMMITTER_EMAIL=gregor+miles@datafund.io bash ~/.datacore/v2-runner/.datacore/modules/analytics/lib/distribution_job.sh ~/Data/1-datafund 1-tracks/comms/metrics/collector.json >> ~/.datacore/state/distribution-snapshot.log 2>&1"
-    on_fail: telegram
-    artifacts:
-      - path: "~/Data/1-datafund/1-tracks/comms/metrics/{today}.json"
-        check: nonempty
-        max_age_hours: 26
-
   - name: mac-plur-sync
     scope: local
     why_local: "publishes and receives this machine's own PLUR memory store"
