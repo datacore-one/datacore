@@ -114,3 +114,40 @@ def test_the_grantors_log_survives_a_refused_event_out_of_place(env, monkeypatch
     state = H.authoritative_state(h.space_dir)
     assert "after" in state.items and "forged" not in state.items
     assert h.actor in _admission(h.space_dir).refused
+
+
+def test_a_space_with_a_refused_event_still_seals_and_the_seal_verifies(env, monkeypatch, tmp_path):
+    """A seal covers each log up to its first break, so sealing never stops and
+    a hole filled later changes nothing under a watermark."""
+    import shutil
+    from ledger.log import read_events
+    h, wa = _setup(env, monkeypatch)
+    ms = T._real_ms()
+    bad = _foreign_signed_into(env, wa, "item.create", {"id": "forged"}, f"{ms:013d}.0000.wa", tmp_path)
+    after = T._signed_into(env, wa, "item.create", {"id": "after", "assignee": "wa"},
+                           hlc=f"{ms + 1:013d}.0000.wa")
+    shutil.copy(wa.log.path, h.log.path.parent / wa.log.path.name)
+    h.seal()                                                           # raised unsealable before
+    seal = [e for e in read_events(h.space_dir) if e.type == "ledger.seal"][-1]
+    assert seal.payload["watermarks"].get("wa", -1) == bad.seq - 1, seal.payload["watermarks"]
+    ok, detail = H.seal_status(h.space_dir)
+    assert ok is True, detail
+    assert "after" in H.authoritative_state(h.space_dir).items
+    assert after.seq > seal.payload["watermarks"]["wa"]
+
+
+def test_of_two_different_events_at_one_seq_the_first_stands(env, monkeypatch, tmp_path):
+    from ledger.events import from_line
+    h, wa = _setup(env, monkeypatch)
+    lines = wa.log.path.read_text().splitlines()
+    first = T._signed_into(env, wa, "item.create", {"id": "first", "assignee": "wa"})
+    wa.log.path.write_text("\n".join(lines) + "\n")                    # rewind, then write a rival at the same seq
+    rival = T._signed_into(env, wa, "item.create", {"id": "rival", "assignee": "wa"},
+                           hlc=f"{T._real_ms() + 5:013d}.0000.wa")
+    assert rival.seq == first.seq and rival.hash != first.hash
+    from ledger.events import to_line
+    wa.log.path.write_text("\n".join(lines + [to_line(first), to_line(rival)]) + "\n")
+    res = _admission(wa.space_dir)
+    assert "fork" in res.refused["wa"], res.refused
+    state = H.authoritative_state(wa.space_dir)
+    assert "first" in state.items and "rival" not in state.items

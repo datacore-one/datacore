@@ -415,7 +415,8 @@ def judge_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int
         line before it -- is named, and the event is judged on its own; so
         admitting the admitted events again (the refused ones gone from the
         list) gives the same events;
-      * the same event twice in one log counts once.
+      * one event per seq: the same event twice counts once, and of two
+        different events at one seq the first in the file stands.
 
     The cutover manifest is the one rule left about a log as a whole: a log it
     names that does not match it is not admitted at all.
@@ -442,11 +443,17 @@ def judge_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int
         except Refusal as exc:
             return [], [f"seq {events[0].seq if events else '-'}: {exc.code}: {exc.message}"]
     kept.extend(events[:n])
-    seen = {e.hash for e in kept}
+    seen = {e.seq: e.hash for e in kept}
     prior = last = events[n - 1] if n else None     # the line before; the last event kept
     for e in events[n:]:
         verdict, why = _judge_event(e, chain, prior, last, auth, now_ms, rejected, own_grantor_log)
         prior = e
+        if verdict != "refused" and e.seq in seen:
+            # One event per seq (seals and frontiers count by seq): the first
+            # one in the file stands, a second one is named and has no effect.
+            verdict, why = "refused", (
+                "duplicate: the same event is in this log twice; it counts once" if seen[e.seq] == e.hash else
+                f"fork: this log already holds a different event at seq {e.seq}; the first one stands")
         if verdict == "held":
             if held is not None:
                 held.append((e, f"seq {e.seq}: {why}"))
@@ -454,11 +461,8 @@ def judge_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int
             found.append(f"seq {e.seq}: {why}")
         if verdict == "refused":
             continue
-        if e.hash in seen:
-            found.append(f"seq {e.seq}: duplicate: the same event is in this log twice; it counts once")
-            continue
         kept.append(e)
-        seen.add(e.hash)
+        seen[e.seq] = e.hash
         last = e
     return kept, found
 

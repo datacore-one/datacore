@@ -2837,6 +2837,10 @@ class Hub:
             self._reject_sealed_late()
             self._judge_corrections()
             events, _ = self._state()
+            # A seal covers each log up to its first break (report, never halt):
+            # a hole where admission left a refused event out never stops sealing.
+            from .seal import whole_prefixes
+            events = whole_prefixes(events)
             eps = self._authority(cfg).epochs
             if len(eps) > 1:
                 # Every new seal extends the predecessor's frontier (finding 4).
