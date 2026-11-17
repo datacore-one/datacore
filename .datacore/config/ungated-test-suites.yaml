@@ -42,6 +42,12 @@ suites:
       against CI install time.
     reviewed: 2026-09-25
     state: green
+  - path: .datacore/modules/news/tests
+    reason: >
+      The news module is its own repository, so CI's core checkout never
+      contains it. On dayshift 2026-11-17: 22 passed, 1 failed.
+    reviewed: 2026-11-17
+    state: red
   - path: .datacore/modules/health/tests
     reason: >
       The health module (the Practice) is a private repo on the owner's own git
