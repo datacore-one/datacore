@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import distribution_collector as dc  # noqa: E402
 
 HEADER = "id,date,brand,channel,url,title,type,event,cost_eur,notes\n"

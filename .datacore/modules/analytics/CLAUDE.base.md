@@ -28,5 +28,5 @@ Without either, the script says so and exits 1.
 |------|---------|
 | `lib/posthog_daily.py` | Fetches metrics, outputs markdown |
 | `lib/distribution_collector.py` | Daily distribution snapshot (npm, GitHub stars and traffic, dev.to, YouTube, PostHog page views per content-ledger URL) and `--report`, the weekly results table. Config names the ledger and output folder in the space; see the script's docstring |
-| `lib/test_distribution_collector.py` | Its tests (no network): `python3 -m pytest lib/test_distribution_collector.py` |
+| `tests/test_distribution_collector.py` | Its tests (no network): `python3 -m pytest tests/test_distribution_collector.py` |
 | `commands/today-hook.md` | /today integration hook |
