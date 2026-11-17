@@ -972,6 +972,46 @@ def _claim_status(space: Path, attention: list[str], **counts) -> str:
     return f"CLAIM-STATUS {space.name} OK" + (f" {facts}" if facts else " nothing to do")
 
 
+def hand_unassigned_to_owner(space: Path, actor: str, items: list) -> list:
+    """Work nobody is assigned to goes to the owner ONCE, as an inbox item (TSK-12).
+
+    It used to be one log line on every run ("N addressed to NOBODY"): 717
+    times in five days on one machine, read by nobody. Each item becomes one
+    task in the owner's inbox, through the task tool, naming the space and the
+    item; the item is then marked `handed_to_owner` in the ledger, so no other
+    run and no other machine files it again. Returns the items that could NOT
+    be handed over; those are still named in the run's summary.
+    """
+    from datetime import datetime, timezone
+    root = Path(os.environ.get("DATACORE_ROOT") or Path.home() / "Data")
+    inbox = root / "0-personal" / "org" / "inbox.org"
+    left = []
+    for item in items:
+        payload = item.payload or {}
+        marker = f"{space.name}/{item.id}"
+        title = str(payload.get("title") or item.id)
+        try:
+            if marker not in inbox.read_text(encoding="utf-8"):
+                r = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve().parent / "org_workspace_adapter.py"), "add",
+                     "--file", str(inbox), "--heading", f"Assign or drop: {title}"[:200],
+                     "--property", f"LEDGER_ITEM={marker}",
+                     "--body", f"A task in {space.name} has no assignee, so no agent will take it. "
+                               f"Give it one with the task tool, or dismiss it. (item {marker})"],
+                    capture_output=True, text=True, timeout=120,
+                    env={**os.environ, "DATACORE_ROOT": str(root)})
+                if r.returncode != 0 or marker not in inbox.read_text(encoding="utf-8"):
+                    raise RuntimeError((r.stdout + r.stderr).strip()[-200:] or "the task tool wrote nothing")
+            guarded_append(EventLog(space, actor), "item.update",
+                           {"id": item.id,
+                            "handed_to_owner": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+            print(f"TO OWNER {title[:70]} -> one inbox item ({marker})")
+        except Exception as exc:  # noqa: BLE001 -- said in the summary; the run goes on
+            print(f"could not hand {marker} to the owner's inbox: {type(exc).__name__}: {str(exc)[:160]}")
+            left.append(item)
+    return left
+
+
 def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
     """Someone other than the doer checks the owner's requests (Winston path step 5,
     owner goal 2026-11-05). (verified, recheck failed).
@@ -1122,6 +1162,10 @@ def _claim_pass(argv, *, transport=_FROM_ENV) -> int:
                         + dispatch_ambiguity((ambiguous[0].payload or {}).get("assignee"))
                         + ": " + ", ".join((i.payload or {}).get("title", i.id)[:40]
                                            for i in ambiguous[:3]))
+    # Already in the owner's inbox: not a queue to announce again (TSK-12).
+    unaddressed = [i for i in unaddressed if not (i.payload or {}).get("handed_to_owner")]
+    if unaddressed and args.execute:
+        unaddressed = hand_unassigned_to_owner(space, args.actor, unaddressed)
     if unaddressed:
         mirror_note += (f"; {len(unaddressed)} addressed to NOBODY -- not dispatched, "
                         f"give each an assignee: "
