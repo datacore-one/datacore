@@ -73,7 +73,14 @@ MAX_ATTEMPTS = 3
 WAITING_ON_OWNER = 3
 #: Release kinds that are not an attempt at the task (see the dead-letter count).
 #: `usage_limit`: the model allowance ran out (W1) -- the budget, not the task.
-NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "usage_limit", "stale_claim")
+#: A check that exits this says: nothing can be judged yet -- the repaired job
+#: has not run since the repair (jobs/fix_check.py, OPS-18). Like waiting on the
+#: owner: released as `waiting_on_job`, not counted, and later ticks re-run only
+#: the CHECK. Until 2026-11-17 it was a failed attempt, so a good repair of a
+#: daily job was dead-lettered within the hour, hours before the job ran again.
+WAITING_ON_JOB = 4
+NOT_JUDGED = (WAITING_ON_OWNER, WAITING_ON_JOB)
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "waiting_on_job", "usage_limit", "stale_claim")
 
 #: How long this writer's own claim may sit before the next run releases it. A
 #: run is bounded (the executor's limit plus the check's), so a claim older than
@@ -679,13 +686,13 @@ def _isolated_check_explained(space: Path, check: str, baseline: dict | None = N
                 return fail(diagnose(cmd=check, rc=None, cwd=wt, repo=space, sha=head,
                                      timed_out=CHECK_TIMEOUT_S), head)
             why = ""
-            if proc.returncode not in (0, WAITING_ON_OWNER):
+            if proc.returncode not in (0, *NOT_JUDGED):
                 # WAITING's own words are printed by the caller's WAITING line.
                 why = diagnose(cmd=check, rc=proc.returncode, cwd=wt, repo=space, sha=head,
                                stderr=proc.stderr, stdout=proc.stdout)
             current = subprocess.run(["git", "rev-parse", "HEAD"], cwd=space, capture_output=True, text=True)
             intact = current.returncode == 0 and current.stdout.strip() == head and _artifact_tree_clean(space, None, baseline)
-            if intact and proc.returncode in (0, WAITING_ON_OWNER):
+            if intact and proc.returncode in (0, *NOT_JUDGED):
                 return proc.returncode, head, ""
             if not why:
                 why = (f"the check passed, but {describe_repo(space)} moved or gained uncommitted "
@@ -889,7 +896,7 @@ def plan(state, events, actor: str, runner: str | None = None) -> Plan:
             last_turn[iid] = "claim"
         elif ev.type == "item.release" and f"{ev.hlc} {ev.actor}" in applied_releases:
             last_turn[iid] = (ev.payload or {}).get("kind") or "release"
-    waiting = {iid for iid, kind in last_turn.items() if kind == "waiting_on_owner"}
+    waiting = {iid for iid, kind in last_turn.items() if kind in ("waiting_on_owner", "waiting_on_job")}
 
 
     exhausted = [i for i in pending if attempts.get(i.id, 0) >= MAX_ATTEMPTS]
@@ -1281,6 +1288,10 @@ def _claim_pass(argv, *, transport=_FROM_ENV) -> int:
             # fails after the merge, a retry's check still fails) -> to the
             # agent as an ordinary attempt.
             rc, sha, _ = _isolated_check_explained(space, check, baseline)
+            if is_waiting and rc == WAITING_ON_JOB:
+                print(f"WAITING  [{route}] {title[:70]}\n         -> the repaired job has not run yet; "
+                      f"checked again next time")
+                continue
             if is_waiting and rc == WAITING_ON_OWNER:
                 print(f"WAITING  [{route}] {title[:70]}\n         -> still waiting for you "
                       f"(the owner merges); the agent is not re-run")
@@ -1346,6 +1357,17 @@ def _claim_pass(argv, *, transport=_FROM_ENV) -> int:
             # Prose is not evidence. A check that passes is.
             rc, sha, check_why = _isolated_check_explained(space, check, baseline)
             passed = rc == 0
+            if rc == WAITING_ON_JOB:
+                EventLog(space, args.actor).append(
+                    "item.release", {"id": item.id, "owner": args.actor, "kind": "waiting_on_job",
+                                     "artifact_commit": sha,
+                                     "reason": f"the repaired job has not run yet: {check}"})
+                journal_lines.append(
+                    f"WAITING `{item.id[:12]}` {title[:60]} — done by {args.actor}; judged after the job's next run")
+                print(f"WAITING  [{route}] {title[:70]}\n         -> the repair is made; it is judged after "
+                      f"the job's next run; not an attempt")
+                _outcome(item.payload or {}, "waiting", "", args.actor)
+                continue
             if rc == WAITING_ON_OWNER:
                 EventLog(space, args.actor).append(
                     "item.release", {"id": item.id, "owner": args.actor,

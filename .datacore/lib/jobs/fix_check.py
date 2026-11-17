@@ -73,6 +73,60 @@ MANIFEST_PATHS = ("jobs/manifest.yaml", "jobs/fix_check.py", "lib/job_verify.py"
 #: those dead-lettered finished repairs as "miles gave up" (NS-9, 2026-09-26).
 #: ledger_claim reads this code as "waiting for you": no attempt, no re-run.
 WAITING_ON_OWNER = 3
+#: The repair cannot be judged yet: the job has not run since it was made, so
+#: the failing output is from BEFORE the repair (OPS-18). Not a failed attempt.
+#: ledger_claim releases the item as `waiting_on_job` and re-runs only this
+#: check on later ticks, until the job's next run produces output to judge.
+WAITING_ON_JOB = 4
+
+
+def _first_checked(job: str, sha: str, paths: list[str]) -> Path:
+    import hashlib
+    state = Path(os.environ.get("DATACORE_STATE") or Path.home() / ".datacore" / "state")
+    key = hashlib.sha256("|".join([job, sha, *sorted(paths)]).encode()).hexdigest()[:16]
+    return state / "fix-check-first" / f"{job}.{key}"
+
+
+def _judgeable(job: str, sha: str, manifest: Path) -> tuple[bool, Path]:
+    """(may the failing output be judged now, the stamp of this repair's first check).
+
+    The first check of a repair records its time. Until one of the job's
+    artifacts is written after that, what job_verify reads was produced before
+    the repair and says nothing about it. A job that stays silent past its own
+    freshness limit is judged anyway: never producing output is a failure too.
+    """
+    import time
+    import yaml
+    try:
+        jobs = (yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}).get("jobs") or []
+        arts = next((j.get("artifacts") or [] for j in jobs if j.get("name") == job), [])
+    except (OSError, ValueError):
+        arts = []
+    paths = [str(a.get("path")) for a in arts if a.get("path")]
+    stamp = _first_checked(job, sha, paths)
+    if not paths:
+        return True, stamp
+    now = time.time()
+    try:
+        first = stamp.stat().st_mtime
+    except OSError:
+        try:
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text("")
+        except OSError:
+            return True, stamp                     # cannot remember: judge, as before
+        first = now
+    limit = max([float(a.get("max_age_hours") or 26) for a in arts] or [26.0]) * 3600
+    if now - first > limit:
+        return True, stamp
+    written = []
+    for path in paths:
+        try:
+            written.append(Path(path).expanduser().stat().st_mtime)
+        except OSError:
+            continue
+    # No output at all is not "output from before the repair": judged now.
+    return (not written or max(written) > first), stamp
 
 
 def merged_pr(item_id: str, repo: str, *, gh=("gh",)) -> tuple[dict | None, list[str]]:
@@ -191,6 +245,16 @@ def main() -> int:
 
     # job_verify reports every job for the machine; this repair is about one.
     failing = [ln for ln in out.splitlines() if ln.startswith(f"job '{a.job}'")]
+    judge, stamp = _judgeable(a.job, a.contract_sha, manifest)
+    if failing and not judge:
+        print(f"cannot be judged yet: {a.job} has not run since this repair, so its failing output "
+              f"is from before it. Checked again after the job's next run; not a failed attempt.",
+              file=sys.stderr)
+        return WAITING_ON_JOB
+    try:                                           # judged either way: the next repair starts afresh
+        stamp.unlink()
+    except OSError:
+        pass
     if failing:
         print(f"not yet: {a.job} still fails verification", file=sys.stderr)
         for ln in out.splitlines():
