@@ -68,6 +68,12 @@ def _read(day: str) -> list[dict]:
     return result
 
 
+def _session(payload: dict) -> str:
+    sid = str(payload.get("session_id") or payload.get("sessionId")
+              or os.environ.get("CLAUDE_SESSION_ID") or "").strip()
+    return hashlib.sha256(sid.encode()).hexdigest() if sid else "unknown"
+
+
 def record(payload: dict) -> None:
     tool = str(payload.get("tool_name") or payload.get("toolName") or "")
     if tool not in {'Skill', 'SlashCommand'}:
@@ -89,7 +95,11 @@ def record(payload: dict) -> None:
         "command": name,
         "tool": tool,
         "at": now.isoformat(),
-        "session_sha256": hashlib.sha256(os.environ.get('CLAUDE_SESSION_ID', '').encode()).hexdigest(),
+        # WHICH SESSION RAN IT (AUD-8). Claude Code sends the session in the hook
+        # payload and sets no CLAUDE_SESSION_ID for hooks, so hashing the variable
+        # gave every receipt sha256('') -- one value for all, that looked real.
+        # Not known is said as 'unknown', never as a hash.
+        "session_sha256": _session(payload),
         "args_sha256": hashlib.sha256(str(ti.get('args') or '').encode()).hexdigest(),
     }
     with file_lock(path):
