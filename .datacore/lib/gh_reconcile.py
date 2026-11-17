@@ -46,6 +46,12 @@ Informational properties like CONTEXT, ACCEPTANCE_CRITERIA, BOOTSTRAP, RESULT
 are NOT searched for bare refs to prevent accidental closures of tasks that
 merely mention a PR for context.
 
+A bare "PR #NNN" / "issue #NNN" is resolved against the space's default repo
+only when the task does not itself say which repo NNN belongs to.  If a full
+URL of the same kind (anywhere on the task) or an owner/repo#NNN (title,
+tracking property) carries the same number, the bare mention is that reference
+said short and adds no second lookup.
+
 Config
 ------
 ~/.datacore/config/gh-reconcile.yaml  (optional)
@@ -632,15 +638,25 @@ def extract_github_refs(
     for v in task.props.values():
         all_text += v + "\n"
     all_text += "\n".join(task.body_lines) + "\n"
-    add(_extract_urls_from(all_text))
+    url_refs = _extract_urls_from(all_text)
+    add(url_refs)
 
-    # ── 2. Bare refs from title ───────────────────────────────────────────────
-    add(_extract_bare_refs_from(task.title, space_owner, space_repo, extra_repos))
-
-    # ── 3. Bare refs from tracking properties ─────────────────────────────────
+    # ── 2. Bare refs from title, 3. from tracking properties ──────────────────
+    bare = _extract_bare_refs_from(task.title, space_owner, space_repo, extra_repos)
     for prop_name, prop_val in task.props.items():
         if prop_name.upper() in TRACKING_PROPS:
-            add(_extract_bare_refs_from(prop_val, space_owner, space_repo, extra_repos))
+            bare.extend(_extract_bare_refs_from(prop_val, space_owner, space_repo, extra_repos))
+
+    # "PR #N" and "issue #N" name no repository, so they come back resolved
+    # against the space's default one (kind "pr" / "issue"; a ref that names
+    # its repository comes back "unknown"). When the task itself says which
+    # repository N belongs to -- a URL of the same kind anywhere on it, or
+    # owner/repo#N beside it -- the bare mention is that reference said short.
+    # Resolved a second time it is item N of the default repository: an
+    # unrelated one, or none at all, and either keeps the task open for good.
+    named = url_refs + [r for r in bare if r.kind == "unknown"]
+    add([r for r in bare if r.kind == "unknown" or not any(
+        n.num == r.num and n.kind in (r.kind, "unknown") for n in named)])
 
     # ── 4. NIGHTSHIFT_OUTPUT file — read and search for GitHub URLs ────────────
     for prop_name, prop_val in task.props.items():
