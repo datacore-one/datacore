@@ -134,7 +134,7 @@ from jobs.recurrence import RECURRING_AFTER as BREAK_AFTER  # noqa: E402
 
 #: Release kinds that are not an attempt at the repair (ledger_claim's
 #: NOT_AN_ATTEMPT plus the usage limit, which is the budget, not the code).
-NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", USAGE_LIMIT)
+NOT_AN_ATTEMPT = ("infrastructure", "waiting_on_owner", "waiting_on_job", USAGE_LIMIT)
 
 #: How long a usage-limit failure pauses new repairs: the dispatcher's probe
 #: interval (claim_backoff.PROBE_AFTER), so the two pauses end together.
