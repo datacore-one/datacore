@@ -53,14 +53,27 @@ def test_dip_0000_every_dip_carries_the_template_metadata(dip_file):
 def test_dip_0000_status_is_a_recognised_value():
     """An unrecognised status silently ranks as unknown in dip_conformance and
     would let a DIP claim anything at all."""
-    known = {"draft", "proposed", "accepted", "implemented", "superseded",
-             "deprecated", "rejected", "withdrawn"}
+    # The four statuses (owner, 2026-11-15) and, until the DIP repository's
+    # headers are moved, the words they replace.
+    known = {"draft", "ratified", "superseded", "retired",
+             "proposed", "accepted", "implemented", "deprecated", "rejected", "withdrawn"}
     bad = {}
     for f in sorted(DIPS.glob("DIP-*.md")):
         m = re.search(r"^\|\s*\*\*Status\*\*\s*\|\s*(\S+)", f.read_text(errors="replace"), re.M)
         if m and m.group(1).strip().lower().rstrip("—-") not in known:
             bad[f.name] = m.group(1)
     assert not bad, f"unrecognised Status values: {bad}"
+
+
+def test_ratified_is_held_to_the_same_evidence_as_implemented_was():
+    """"Implemented" stopped being a header on 2026-11-15: a DIP is Ratified,
+    and whether it is built is what this tool checks. A Ratified DIP whose
+    files are absent must still show as an overclaim, so the word ranks where
+    Implemented did; Retired ranks with Superseded."""
+    import dip_conformance as dc
+    assert dc.RANK["ratified"] == dc.RANK["implemented"]
+    assert dc.RANK["retired"] == dc.RANK["superseded"]
+    assert dc.BUILT == {"implemented", "ratified"}
 
 
 # --- DIP-0022: Module Specification -----------------------------------------
