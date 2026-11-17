@@ -470,7 +470,7 @@ def delegate_redirect(tool_name: str, args, session_id: str = "", turn_id: str =
     if a and kind and kind != "item.create":
         return None
     return ("File the founder's request with datacore_delegate instead: space, title, assignee "
-            "(miles, tris or data), done_when and check, each plain text; write check on one line "
+            f"({_either(_desk()['assignees'])}), done_when and check, each plain text; write check on one line "
             "with single quotes only. datacore_ledger_append is for other event types.")
 
 
