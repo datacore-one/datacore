@@ -291,7 +291,7 @@ def advance_witness(hwm_path: Path, seq: int, event_hash: str) -> None:
 
 
 class CorruptLogWarning(UserWarning):
-    """One writer's log is damaged; its events from the bad line on are withheld."""
+    """One writer's log has a damaged line; the line is skipped, the rest is read."""
 
 
 class CorruptLogError(ValueError):
@@ -821,18 +821,28 @@ def _parse_log_bytes(raw: bytes, path: Path) -> tuple[list[Event], int]:
     return events, valid_len
 
 
-def _parse_prefix(raw: bytes) -> list[Event]:
-    """The events before the first malformed line of a damaged log."""
+def _parse_skipping_damaged(raw: bytes) -> tuple[list[Event], list[int]]:
+    """(every readable event of a damaged log, the 1-based numbers of the lines skipped).
+
+    One bad record never hides others (owner decision 2026-11-17): a line that
+    does not parse is skipped and named, and the lines after it are read. Until
+    then the first bad line ended the log for every reader."""
     events: list[Event] = []
-    for raw_line in raw.split(b"\n"):
+    skipped: list[int] = []
+    for n, raw_line in enumerate(raw.split(b"\n"), 1):
         line = raw_line.strip()
         if not line:
             continue
         try:
             events.append(from_line(line.decode("utf-8")))
-        except Exception:  # noqa: BLE001 -- the first bad line ends the prefix
-            break
-    return events
+        except Exception:  # noqa: BLE001 -- a damaged line is skipped and named
+            skipped.append(n)
+    return events, skipped
+
+
+def _parse_prefix(raw: bytes) -> list[Event]:
+    """Kept for callers of the old name: the readable events of a damaged log."""
+    return _parse_skipping_damaged(raw)[0]
 
 
 def read_task_events(space_dir: Path) -> list[Event]:
@@ -852,8 +862,8 @@ def read_events(space_dir: Path) -> list[Event]:
 
     A torn final line (a live writer mid-flush, or a crash) is skipped
     silently. A malformed line anywhere else is flagged (`CorruptLogWarning`,
-    naming the file and line) and that log's events from the bad line on are
-    withheld; every other log is read in full. One damaged writer log used to
+    naming the file and line) and skipped; the events after it are read (owner
+    decision 2026-11-17), and every other log is read in full. One damaged writer log used to
     raise `CorruptLogError` here and stop fold, projection, checkpoint and
     policy for the WHOLE space (LED-7, audit A#15). Nothing is repaired: the
     damage stays for verify_chain to report and an operator to address.
@@ -877,16 +887,27 @@ def _read_logs(space_dir: Path, *, telemetry: bool) -> list[Event]:
         try:
             file_events, _valid_len = _parse_log_bytes(raw, path)
         except CorruptLogError as exc:
-            file_events = _parse_prefix(raw)
-            note = (f"{exc}; {path.name}: {len(file_events)} event(s) before it are read, "
-                    "the rest of this log is withheld")
+            file_events, skipped = _parse_skipping_damaged(raw)
+            note = (f"{exc}; {path.name}: {len(skipped)} damaged line(s) skipped "
+                    f"(line {', '.join(map(str, skipped[:5]))}{', ...' if len(skipped) > 5 else ''}); "
+                    f"the {len(file_events)} readable event(s) of this log are read")
             warnings.warn(note, CorruptLogWarning)
-            if file_events:
-                # Carried by the last event read, as a plain attribute (never a
-                # dataclass field, like `log`): verify_events reports a chain
-                # ending in it as incomplete, so a reader that trusts only a
-                # verified chain (job attestations) still fails closed.
-                file_events[-1].damaged_after = note
+            # Carried by the last event read BEFORE the first damaged line, as a
+            # plain attribute (never a dataclass field, like `log`):
+            # verify_events reports the chain as incomplete there, so a reader
+            # that trusts only a verified chain (job attestations) still fails
+            # closed, and the health check names the damage.
+            first_bad = skipped[0] if skipped else 0
+            seen = 0
+            for n, raw_line in enumerate(raw.split(b"\n"), 1):
+                if n >= first_bad:
+                    break
+                if raw_line.strip():
+                    seen += 1
+            if seen:
+                file_events[seen - 1].damaged_after = note
+            elif file_events:
+                file_events[0].damaged_after = note
         for e in file_events:
             # Which chain this event came from. A writer may own MORE THAN ONE
             # log -- datacore#148 gave a run branch its own `<actor>-run-<date>`
