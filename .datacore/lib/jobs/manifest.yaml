@@ -125,8 +125,12 @@ jobs:
     cmd: "~/Data/.datacore/lib/cos_news.sh >> ~/.datacore/cos/news.log 2>&1"
     on_fail: telegram
     artifacts:
+      # The script's own last line. "No crash and a recent log" was green for
+      # eight nights (2026-11-09..17) while every fetch failed and the briefing
+      # had no news: the fetcher's output went to /dev/null.
       - path: "~/.datacore/cos/news.log"
-        check: no_crash
+        check: last_line_regex
+        arg: '^news: ok'
         max_age_hours: 26
 
   - name: box-email-triage
