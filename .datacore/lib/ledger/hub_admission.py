@@ -14,11 +14,11 @@ Now every path asks this module the same question about the same event:
 
   * `check_event`  -- one post-cutover event against the event before it in its
                       log (HTTP append, and each step of `admit`);
-  * `admit_chain`  -- one log, read from disk: the legacy prefix the cutover
+  * `judge_chain`  -- one log, read from disk: the legacy prefix the cutover
                       manifest names, then every later event through
-                      `check_event`. The first refused event ends what is
-                      admitted of that log (fail closed: nothing after a bad
-                      event can be trusted to chain onto it);
+                      `check_event`, each on its own. A refused event is
+                      left out and named; it never hides the events after
+                      it (owner decision 2026-11-17: report, never halt);
   * `admit`        -- a whole space (the hub's state, a rebuild from git, what
                       the hub seals).
 
@@ -238,9 +238,18 @@ def _physical(hlc: str) -> int | None:
     return int(hlc.split(".", 1)[0]) if isinstance(hlc, str) and _HLC.fullmatch(hlc) else None
 
 
+_SAME = object()
+
+
 def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, *,
-                now_ms: int, current_key: bool = False, as_proposal: bool = False) -> None:
+                now_ms: int, current_key: bool = False, as_proposal: bool = False,
+                in_place: bool = True, clock_prior=_SAME) -> None:
     """Raise `Refusal` unless `event` is admissible as the event after `prior` in `chain`.
+
+    `in_place=False`: judge the event on its own -- its hash, signature, hub,
+    domain and authority -- without requiring it to be the next seq after
+    `prior` (`judge_chain`: a break in the chain is named, and refuses nothing
+    by itself). `clock_prior`: the event its hlc must follow (default `prior`).
 
     `current_key`: also require the signature to verify under the key the
     writer holds NOW (`now_ms`), not only at the event's own time -- the network
@@ -289,8 +298,9 @@ def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, 
         raise Refusal("unsigned", "the hub accepts only signed events (amendment D)")
     problems = [p for p in check_events(
         [(event.seq + 1, event)], registry_path=auth.registry_path, strict=True, log=chain,
-        expected_prev=prior.hash if prior is not None else GENESIS,
-        expected_seq=prior.seq + 1 if prior is not None else 0) if p.kind != "clock"]
+        expected_prev=(prior.hash if prior is not None else GENESIS) if in_place else event.prev,
+        expected_seq=(prior.seq + 1 if prior is not None else 0) if in_place else event.seq)
+        if p.kind != "clock"]
     if problems:
         texts = [p.text for p in problems]
         code = ("bad_signature" if any("signature" in t for t in texts)
@@ -308,9 +318,10 @@ def check_event(event: Event, chain: str, prior: Event | None, auth: Authority, 
     if physical > now_ms + FUTURE_TOLERANCE_MS:
         raise Refusal("bad_clock", f"hlc {event.hlc!r} is {(physical - now_ms) // 60000} min ahead of "
                                    "the hub's clock (wrong clock)")
-    if prior is not None and not (event.hlc > prior.hlc):
+    before = prior if clock_prior is _SAME else clock_prior
+    if before is not None and not (event.hlc > before.hlc):
         raise Refusal("bad_clock", f"hlc {event.hlc!r} does not follow {chain}'s previous event "
-                                   f"({prior.hlc!r})")
+                                   f"({before.hlc!r})")
     if current_key:
         from .keys import verify
         if not verify(event.actor, canonical_bytes(event_body(event)), event.sig,
@@ -351,62 +362,105 @@ def _holds_place(e: Event, prior) -> bool:
     return e.seq == expected_seq and e.prev == expected_prev and compute_hash(event_body(e)) == e.hash
 
 
-def admit_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int,
-                rejected=frozenset(), own_grantor_log: bool = False,
-                held: list | None = None) -> tuple[int, str | None]:
-    """(how many leading events of `chain` are admitted, why the next is not -- or None).
-
-    `events` in seq order, as they lie in the log file. `rejected`: the
-    (chain, seq, hash) the grantor recorded as rejected proposals; such an
-    event stays in the chain (no effect on state) instead of ending it.
-
-    `own_grantor_log`: `chain` is a grantor's own log. The grantor writes the
-    `ledger.reject` records, and its log is admitted before any is read, so an
-    event of an UNKNOWN type there could never be rescued and ended the
-    grantor's chain for good -- every later lease, claim and seal with it
-    (2-datacore, 2026-10-28: a stale library wrote unsigned `task.create`
-    events into winston.jsonl). Such an event stays in the chain with no
-    effect -- the fold ignores types it does not know -- as long as it holds
-    its place: the next seq, the previous event's hash, its own hash. Every
-    known type, and every writer's log, keeps the rules above.
-
-    FOREIGN SIGNATURE IN THE GRANTOR'S OWN LOG (owner decision 2026-11-06):
-    on 2026-11-05 a test run wrote one `item.create` into 2-datacore's
-    winston.jsonl signed with a key it generated itself, and every correctly
-    signed event Winston wrote after it counted for nothing. A signed event
-    there that holds its place but fails `bad_signature` is HELD: it stays in
-    the chain, is not admitted (no effect on state), and is appended to `held`
-    as "seq N: bad_signature: ..." so readers name it. Unsigned events, events
-    out of place and every writer's log keep the rules above."""
-    n, prior = 0, None
+def _judge_event(e: Event, chain: str, prior, last, auth: Authority, now_ms: int, rejected,
+                 own_grantor_log: bool) -> tuple[str, str | None]:
+    """("kept" | "held" | "refused", what to report about it -- or None)."""
     try:
-        if chain in auth.legacy:
-            n = _legacy_prefix(chain, events, auth.legacy[chain], auth.excused())
-            prior = events[n - 1] if n else None
-        for e in events[n:]:
-            if own_grantor_log and isinstance(e.type, str) and e.type not in EVENT_TYPES:
-                expected_seq = prior.seq + 1 if prior is not None else 0
-                expected_prev = prior.hash if prior is not None else GENESIS
-                if e.seq != expected_seq or e.prev != expected_prev or compute_hash(event_body(e)) != e.hash:
-                    raise Refusal("bad_chain", f"{chain} seq {e.seq}: an unknown-type event out of place")
-                n, prior = n + 1, e
-                continue
+        in_place = _holds_place(e, prior)
+    except Exception:  # noqa: BLE001 -- a malformed event is not in place; check_event names why
+        in_place = False
+    if own_grantor_log and isinstance(e.type, str) and e.type not in EVENT_TYPES:
+        return ("kept", None) if in_place else ("refused", "bad_chain: an unknown-type event out of place")
+    note = None
+    for placed in (True, False):
+        try:
             try:
-                check_event(e, chain, prior, auth, now_ms=now_ms)
+                check_event(e, chain, prior, auth, now_ms=now_ms, in_place=placed, clock_prior=last)
             except Refusal as exc:
-                if own_grantor_log and exc.code == "bad_signature" and e.sig and _holds_place(e, prior):
-                    if held is not None:
-                        held.append((e, f"seq {e.seq}: {exc.code}: {exc.message}"))
-                    n, prior = n + 1, e
-                    continue
                 if exc.code not in PROPOSAL_CODES or (chain, e.seq, e.hash) not in rejected:
                     raise
-                check_event(e, chain, prior, auth, now_ms=now_ms, as_proposal=True)
-            n, prior = n + 1, e
-    except Refusal as exc:
-        where = events[n].seq if n < len(events) else "-"
-        return n, f"seq {where}: {exc.code}: {exc.message}"
-    return n, None
+                check_event(e, chain, prior, auth, now_ms=now_ms, as_proposal=True, in_place=placed,
+                            clock_prior=last)
+            return "kept", note
+        except Refusal as exc:
+            if own_grantor_log and exc.code == "bad_signature" and e.sig and in_place:
+                return "held", f"{exc.code}: {exc.message}"
+            if exc.code == "bad_chain" and placed:
+                # A break in the chain (a line missing or re-linked before this
+                # event) is named, and the event is judged on its own.
+                note = f"{exc.code}: {exc.message} (the chain breaks here; the event is judged on its own)"
+                continue
+            return "refused", f"{exc.code}: {exc.message}"
+    return "refused", note      # not reached: the second pass returns or raises
+
+
+def judge_chain(chain: str, events: list[Event], auth: Authority, *, now_ms: int,
+                rejected=frozenset(), own_grantor_log: bool = False,
+                held: list | None = None) -> tuple[list[Event], list[str]]:
+    """(the events of `chain` that are admitted, what was found: ["seq N: code: why", ...]).
+
+    `events` in seq order, as they lie in the log file.
+
+    EACH EVENT IS JUDGED ON ITS OWN (owner decision 2026-11-17: an integrity
+    finding is reported and never stops a read or a write; one bad record never
+    hides others). Until then a log ended at its first refused event: every
+    event its writer wrote after it counted for nothing on every machine. Two
+    outages had that shape and each got an exception for the grantor's log
+    only (below). Now, in every log:
+
+      * a refused event (unsigned, wrong signature, wrong hash, not this
+        writer's to write, ...) is left out, named in the findings, and the
+        events after it are judged as usual;
+      * a break in the chain -- an event that is not the next seq after the
+        line before it -- is named, and the event is judged on its own; so
+        admitting the admitted events again (the refused ones gone from the
+        list) gives the same events;
+      * the same event twice in one log counts once.
+
+    The cutover manifest is the one rule left about a log as a whole: a log it
+    names that does not match it is not admitted at all.
+
+    `rejected`: the (chain, seq, hash) the grantor recorded as rejected
+    proposals; such an event stays in the chain with no effect on state.
+
+    `own_grantor_log`: `chain` is a grantor's own log. An event of an UNKNOWN
+    type that holds its place stays in the chain with no effect -- the fold
+    ignores types it does not know (2-datacore, 2026-10-28: a stale library
+    wrote unsigned `task.create` events into winston.jsonl).
+
+    FOREIGN SIGNATURE IN THE GRANTOR'S OWN LOG (owner decision 2026-11-06): a
+    signed event there that holds its place but fails `bad_signature` is HELD:
+    it stays in the returned events, has no effect on state (its hash goes to
+    the fold as `held`), and is appended to `held` as "seq N: bad_signature:
+    ..." rather than to the findings."""
+    kept: list[Event] = []
+    found: list[str] = []
+    n = 0
+    if chain in auth.legacy:
+        try:
+            n = _legacy_prefix(chain, events, auth.legacy[chain], auth.excused())
+        except Refusal as exc:
+            return [], [f"seq {events[0].seq if events else '-'}: {exc.code}: {exc.message}"]
+    kept.extend(events[:n])
+    seen = {e.hash for e in kept}
+    prior = last = events[n - 1] if n else None     # the line before; the last event kept
+    for e in events[n:]:
+        verdict, why = _judge_event(e, chain, prior, last, auth, now_ms, rejected, own_grantor_log)
+        prior = e
+        if verdict == "held":
+            if held is not None:
+                held.append((e, f"seq {e.seq}: {why}"))
+        elif why:
+            found.append(f"seq {e.seq}: {why}")
+        if verdict == "refused":
+            continue
+        if e.hash in seen:
+            found.append(f"seq {e.seq}: duplicate: the same event is in this log twice; it counts once")
+            continue
+        kept.append(e)
+        seen.add(e.hash)
+        last = e
+    return kept, found
 
 
 def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
@@ -424,16 +478,19 @@ def admit(events: list[Event], auth: Authority, *, now_ms: int) -> Admission:
     for chain in sorted(chains, key=lambda c: (c not in auth.grantors, c)):
         ordered = sorted(chains[chain], key=lambda e: e.seq if type(e.seq) is int else -1)
         held: list = []
-        n, why = admit_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected),
-                             own_grantor_log=chain in auth.grantors, held=held)
-        keep.update(id(e) for e in ordered[:n])
+        kept, found = judge_chain(chain, ordered, auth, now_ms=now_ms, rejected=frozenset(rejected),
+                                  own_grantor_log=chain in auth.grantors, held=held)
+        keep.update(id(e) for e in kept)
         if held:
             held_by[chain] = [why_held for _, why_held in held]
             held_hashes.update(e.hash for e, _ in held)
-        if why:
-            refused[chain] = why
+        if found:
+            # The first finding, as before; the count says it is not the only one.
+            refused[chain] = found[0] if len(found) == 1 else (
+                f"{found[0]} -- {len(found)} event(s) of this log are named; every other event is read")
         if chain in auth.grantors:
-            rejected |= rejected_proposals(ordered[:n])
+            mine = {id(e) for e, _ in held}
+            rejected |= rejected_proposals([e for e in kept if id(e) not in mine])
     return Admission([e for e in events if id(e) in keep], refused, held_by, frozenset(held_hashes))
 
 

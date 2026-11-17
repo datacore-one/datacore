@@ -141,7 +141,7 @@ from typing import Callable
 
 from .events import EVENT_TYPES, Event, canonical_bytes, compute_hash, event_body, from_line, to_line
 from .events import OWNER_EVENT_TYPES
-from .hub_admission import (GENESIS, HUB_ONLY_TYPES, PROPOSAL_CODES, PROTOCOL, Authority, Epoch, Refusal, admit, admit_chain,
+from .hub_admission import (GENESIS, HUB_ONLY_TYPES, PROPOSAL_CODES, PROTOCOL, Authority, Epoch, Refusal, admit, judge_chain,
                             check_event, rejected_proposals, signing_domain)
 from .log import HubSigningRequired  # noqa: F401 -- re-exported: the hub's refusal to write unsigned
 
@@ -1088,8 +1088,7 @@ def promote(space_dir, new_grantor: str, *, by: str, reason: str, keys_dir=None,
     now = (clock or _wall_ms)()
     chain = sorted((e for e in read_events(Path(space_dir)) if (getattr(e, "log", None) or e.actor) == old.grantor
                     and type(e.seq) is int), key=lambda e: e.seq)
-    n, _ = admit_chain(old.grantor, chain, auth, now_ms=now)
-    admitted = chain[:n]
+    admitted, _ = judge_chain(old.grantor, chain, auth, now_ms=now)
     fence = next((e for e in admitted if e.type == "hub.fence" and (e.payload or {}).get("epoch") == old.epoch), None)
     if fence is not None:
         mode, last = "grantor", fence
@@ -1632,10 +1631,8 @@ class Hub:
         if event.seq != expected:
             raise HubRefused("gap", f"{chain} expects seq {expected}; replay from there", expected=expected)
         now = self.clock()
-        _, why = admit_chain(chain, existing, auth, now_ms=now, rejected=frozenset(self._rejected()))
-        if why:
-            raise HubRefused("chain_refused", f"{chain} is not admissible from {why}; "
-                             "nothing more is accepted onto it")
+        # An older finding in this log no longer stops a write onto it (owner
+        # decision 2026-11-17): the new event is judged on its own, below.
         prior = existing[-1] if existing else None
         try:
             check_event(event, chain, prior, auth, now_ms=now, current_key=True)
@@ -1739,8 +1736,8 @@ class Hub:
         for g in sorted(auth.grantors):
             chain = sorted(_parse_file(self.log.path.parent / f"{g}.jsonl"),
                            key=lambda e: e.seq if type(e.seq) is int else -1)
-            n, _ = admit_chain(g, chain, auth, now_ms=self.clock())
-            out |= rejected_proposals(chain[:n])
+            kept, _ = judge_chain(g, chain, auth, now_ms=self.clock())
+            out |= rejected_proposals(kept)
         return out
 
     # ── policy versions (owner decision 1, round 8) ────────────────────────
