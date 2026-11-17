@@ -1189,6 +1189,28 @@ jobs:
         arg: "gate ok"
         max_age_hours: 26
 
+  # A task in REVIEW that carries its own pull request (:NIGHTSHIFT_PR:) closes
+  # when that pull request is settled: merged is DONE, closed without merging
+  # is CANCELLED (owner, 2026-11-16). Nothing wrote that verdict back before,
+  # and 43 such tasks stood in review until they were closed by hand; 40 sat in
+  # the queue file, which the weekly GitHub reconciler never reads.
+  # review_verdicts.py rewrites the status file each run with ONE line:
+  # "OK review-verdicts: closed N (done a, cancelled b), still open x,
+  # unverified y, left for the next run z", or "FAIL review-verdicts: <what
+  # could not be done>" (a task file that could not be read, a close that did
+  # not take, no GitHub login). 02:40 UTC: before the triage (03:15/03:30) and
+  # the 06:00 briefing, so the morning's review list is already true.
+  - name: nightshift-review-verdicts
+    machine: nightshift
+    schedule: "systemd nightshift-review-verdicts.timer, daily 02:40 UTC"
+    cmd: "python3 ~/Data/.datacore/lib/review_verdicts.py --data-dir ~/Data"
+    on_fail: telegram
+    artifacts:
+      - path: "~/.datacore/state/review-verdicts.txt"
+        check: regex
+        arg: "^OK review-verdicts: closed "
+        max_age_hours: 26
+
   - name: nightshift-github-triage
     machine: nightshift
     # 03:30, not 04:30: Winston's briefing is generated at 04:00 and reads
