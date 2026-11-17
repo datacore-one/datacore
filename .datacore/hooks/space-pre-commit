@@ -90,9 +90,11 @@ echo "$staged" | while IFS= read -r file; do
   # extraction regex). Exempt test paths from the credential-PATTERN rule
   # only — conflict-marker and *.local.md checks above still apply. Mirrors
   # how gitleaks/trufflehog allowlist test paths; real secrets live in
-  # product code, not fixtures.
+  # product code, not fixtures. A test folder counts at any depth, the
+  # repository root included: a repository that keeps its tests in a
+  # top-level test/ could not commit its secret detector's own tests.
   case "$file" in
-    */tests/*|*/test/*|*/__tests__/*|*/testdata/*|*/fixtures/*)
+    tests/*|test/*|__tests__/*|testdata/*|fixtures/*|*/tests/*|*/test/*|*/__tests__/*|*/testdata/*|*/fixtures/*)
       continue ;;
   esac
   # The credential store (.datacore/secrets, set by the githooks dispatcher)
