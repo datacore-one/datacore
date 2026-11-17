@@ -1,0 +1,2 @@
+[cos-route] task=news provider=local model=example sovereignty=local
+news: ok new items: 7
