@@ -19,13 +19,16 @@ from datetime import datetime
 from pathlib import Path
 
 HOME = Path.home()
-DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", HOME / "Data" / ".datacore"))
+# $DATACORE_ROOT is the INSTALLATION root, as everywhere else. This file alone
+# read it as the `.datacore` folder, so under any scheduled job (they all
+# export the root) it found no agents and its sync would unlink every one.
+DATA_ROOT = Path(os.environ.get("DATACORE_ROOT") or HOME / "Data")
+DATACORE_ROOT = DATA_ROOT / ".datacore"
 CLAUDE_ROOT = HOME / ".claude"
 REGISTRY = CLAUDE_ROOT / ".datacore-link.registry.json"
 STAMP = CLAUDE_ROOT / ".datacore-link.stamp"
 LOG = CLAUDE_ROOT / "datacore-link.log"
 MODULE_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
-DATA_ROOT = HOME / "Data"
 
 
 def _load_registry() -> set[str]:
