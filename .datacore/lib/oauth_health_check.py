@@ -81,33 +81,12 @@ def send_telegram(text: str) -> bool:
     cannot be made or is refused is recorded as undelivered for the morning
     sweep (MSG-10) -- it used to be swallowed by `except: pass`. Never raises.
     """
-    from tg_format import fit, html_safe, keep_full, normalize, record_undelivered
-    bot = os.environ.get('TELEGRAM_BOT_TOKEN')
-    chat = os.environ.get('ALERT_CHAT_ID')
-    if not chat or not bot:
-        why = ('ALERT_CHAT_ID unset: alerts go only to The Firm group, never a 1:1 chat' if not chat
-               else 'no bot token (TELEGRAM_BOT_TOKEN)')
-        print(f'oauth_health_check: alert NOT sent ({why})', file=sys.stderr)
-        record_undelivered('oauth_health_check', why, text)
-        return False
-    body = normalize(text)
-    short = fit(body)
-    if short != body:
-        short = fit(body, more=keep_full(body, 'oauth_health_check') or None)
-    try:
-        data = urllib.parse.urlencode({'chat_id': chat, 'text': html_safe(short), 'parse_mode': 'HTML'}).encode()
-        req = urllib.request.Request(f'https://api.telegram.org/bot{bot}/sendMessage', data=data)
-        status = secret_urlopen(req, timeout=10).status
-        why = '' if status == 200 else f'http {status}'
-    except urllib.error.HTTPError as e:
-        why = f'http {e.code}'
-    except Exception as e:  # noqa: BLE001 -- a sender never crashes the health check
-        why = f'exception: {type(e).__name__}: {e}'
-    if why:
+    from tg_format import deliver
+    ok, why = deliver('oauth_health_check', text, os.environ.get('TELEGRAM_BOT_TOKEN') or '',
+                      os.environ.get('ALERT_CHAT_ID') or '', html=True, timeout=10)
+    if not ok:
         print(f'oauth_health_check: alert NOT delivered ({why})', file=sys.stderr)
-        record_undelivered('oauth_health_check', why, text)
-        return False
-    return True
+    return ok
 
 
 def _claude_row_name() -> str:

@@ -56,19 +56,9 @@ def _broker_get(cred_id: str) -> str:
 @attests("telegram.sent", detail="agent_alert: an agent's alert to The Firm group",
          when=lambda result, *a, **k: result[0] == 200)
 def _post(token: str, chat: str, text: str) -> tuple[int, object]:
-    """One sendMessage; (HTTP status, message id)."""
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
-    try:
-        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data,
-                                    timeout=30) as r:
-            body = r.read()
-            try:
-                mid = (json.loads(body or b"{}").get("result") or {}).get("message_id")
-            except ValueError:
-                mid = None
-            return r.status, mid
-    except urllib.error.HTTPError as e:
-        return e.code, None
+    """One sendMessage, through the one sender (tg_format.post); (HTTP status, message id)."""
+    from tg_format import post
+    return post(token, chat, text)
 
 
 def _undelivered(bot: str, reason: str, text: str) -> int:
