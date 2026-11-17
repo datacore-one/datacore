@@ -43,7 +43,7 @@ mkdir -p "$LOG_DIR" "$PERSONAL/$OUT_REL"
 export PATH="$SKILL/bin:$PATH"      # read-only gh, enforced
 export DATA_DIR
 rc_all=0
-files=()
+committed=0
 for SCOPE in public enterprise; do
   log="$LOG_DIR/$DATE-$SCOPE.log"
   if [ "$SCOPE" = enterprise ] && [ -z "$ENTERPRISE_REPO" ]; then
@@ -61,12 +61,23 @@ for SCOPE in public enterprise; do
   else
     echo "[github-triage] $SCOPE FAILED (claude rc=$rc; board missing or invalid)" | tee -a "$log"; rc_all=1
   fi
+  # Commit this scope NOW, not after the other scope's run. Uncommitted outputs
+  # are "unsaved work" to every other job on the host: on 2026-11-15 the Sunday
+  # full sweep ran past 03:45, the nightshift preflight moved the public report
+  # and board onto a rescue branch while the enterprise run was still going, and
+  # the single commit at the end found nothing to add -- no board was published.
+  files=()
   for f in "$report" "$board"; do [ -f "$f" ] && files+=("$OUT_REL/$(basename "$f")"); done
+  if [ "${#files[@]}" -gt 0 ]; then
+    if git -C "$PERSONAL" add -- "${files[@]}" \
+        && git -C "$PERSONAL" commit -q -m "github-triage: $DATE $MODE ($SCOPE)" -- "${files[@]}"; then
+      committed=1
+    else
+      echo "[github-triage] $SCOPE commit failed" | tee -a "$log"; rc_all=1
+    fi
+  fi
 done
-if [ "${#files[@]}" -gt 0 ]; then
-  git -C "$PERSONAL" add -- "${files[@]}"
-  git -C "$PERSONAL" commit -q -m "github-triage: $DATE $MODE (public + enterprise)" -- "${files[@]}" \
-    || { echo "[github-triage] commit failed"; rc_all=1; }
+if [ "$committed" = 1 ]; then
   if [ -z "${TRIAGE_NO_PUSH:-}" ]; then
     ( cd "$DATA_DIR" && python3 .datacore/lib/ledger_transport.py sync --repo 0-personal ) >> "$LOG_DIR/$DATE-push.log" 2>&1 \
       || { echo "[github-triage] push/converge failed (see $DATE-push.log)"; rc_all=1; }
