@@ -72,7 +72,10 @@ def test_in_flight_writes_and_everything_after_them_are_admitted_once_the_owner_
     inflight = _inflight(env, space, "wa", 2)
     _stamped(env, space, "wa", "after")
     items = _items(env, space)
-    assert "wa-inflight-0" not in items and "after" not in items          # the defect
+    # The in-flight events are refused until the owner extends. Until 2026-11-17
+    # they also hid everything the writer wrote after them (the defect of the
+    # first activation); each event is judged on its own now, so "after" counts.
+    assert "wa-inflight-0" not in items and "after" in items
     rec = hubmod.extend_cutover(space, by=OWNER, reason="writes in flight at activation",
                                 keys_dir=env.keys_dir, registry_path=env.registry)
     assert rec.type == "hub.cutover"

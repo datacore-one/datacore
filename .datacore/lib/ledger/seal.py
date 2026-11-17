@@ -397,6 +397,31 @@ def build_seal_payload(events: list[Event], fold_kwargs: dict | None = None) -> 
     }
 
 
+def whole_prefixes(events: list[Event]) -> list[Event]:
+    """`events` without what lies after the first break in each log.
+
+    Admission judges each event on its own (owner decision 2026-11-17), so the
+    admitted events of a log may have a hole where a refused event was left
+    out. The live state reads all of them. A SEAL covers a log up to a seq, so
+    it covers only the whole run from the start: if the hole is filled later
+    (the owner extends the cutover, a key is registered), nothing under a
+    watermark changes and no earlier seal stops verifying.
+    """
+    from .verify import GENESIS
+    chains: dict = {}
+    for e in events:
+        chains.setdefault(getattr(e, "log", None) or e.actor, []).append(e)
+    keep: set = set()
+    for chain in chains.values():
+        seq, prev = 0, GENESIS
+        for e in sorted(chain, key=lambda e: e.seq if type(e.seq) is int else -1):
+            if e.seq != seq or e.prev != prev:
+                break
+            keep.add(id(e))
+            seq, prev = e.seq + 1, e.hash
+    return [e for e in events if id(e) in keep]
+
+
 def _covered_events(events, seal):
     return [event for event in events if event.type != "ledger.seal" and seal.includes(event)]
 

@@ -330,7 +330,7 @@ _RAW_READ_ALLOWED = {
     # read_events is defined here; its own helpers read what they write.
     "ledger/log.py",
     # The admission machinery: owner records verify their own signatures and
-    # chain; promotion runs admit_chain; the rest feeds `admit`.
+    # chain; promotion runs judge_chain; the rest feeds `admit`.
     "ledger/hub.py",
     "ledger/hub_admission.py",
 }
