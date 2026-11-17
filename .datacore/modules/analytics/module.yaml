@@ -50,3 +50,7 @@ recall:
 exempt:
   - fn: "lib/posthog_daily.py:query_hogql"
     reason: read-only — HogQL analytics query
+  - fn: "lib/distribution_collector.py:_get"
+    reason: read-only — public GETs (npm downloads, dev.to articles, YouTube watch page)
+  - fn: "lib/distribution_collector.py:_gh"
+    reason: read-only — `gh api -X GET` for stars and traffic
