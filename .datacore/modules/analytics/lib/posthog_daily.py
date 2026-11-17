@@ -47,7 +47,13 @@ def get_api_key():
                     return parse_env_value(line.split("=", 1)[1])
     return None
 
-def query_hogql(api_key, project_id, hogql):
+def query_hogql(api_key, project_id, hogql, raise_errors=False):
+    """Run a read-only HogQL query. Returns the result rows.
+
+    By default an API error prints to stderr and returns [] (the /today hook
+    must not break). Callers that must tell "no rows" from "query failed",
+    like distribution_collector.py, pass raise_errors=True.
+    """
     url = f"{API_HOST}/api/projects/{project_id}/query/"
     payload = json.dumps({"query": {"kind": "HogQLQuery", "query": hogql}}).encode()
     req = urllib.request.Request(url, data=payload, headers={
@@ -59,6 +65,8 @@ def query_hogql(api_key, project_id, hogql):
             data = json.loads(resp.read())
             return data.get("results", [])
     except (urllib.error.URLError, json.JSONDecodeError) as e:
+        if raise_errors:
+            raise
         print(f"  Error querying project {project_id}: {e}", file=sys.stderr)
         return []
 

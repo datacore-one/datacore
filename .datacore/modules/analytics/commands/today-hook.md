@@ -32,6 +32,12 @@ recall:
 
 Called by `/today` command when analytics module is installed.
 
+## Workflow
+
+1. Run the daily metrics script (below).
+2. Put its markdown table into the briefing as it comes, under "Web Analytics".
+3. Add one sentence only if a project moved by more than 50% day over day.
+
 ## Section to Generate
 
 ### Web Analytics (PostHog)
@@ -53,3 +59,15 @@ Include the output directly in the briefing. The script outputs a markdown table
 ## Tone
 
 Data-first. Just the numbers, no commentary unless there's a notable spike or drop (>50% change).
+
+## Your Boundaries
+
+- Read-only: query PostHog, never change projects, events or settings.
+- Report the script's numbers; never estimate or fill in a missing figure.
+- Never print the PostHog key; it comes from the broker.
+
+## Error Handling
+
+- Script error or API failure: show `Analytics: unavailable (API error)` and continue with the rest of /today.
+- A project returning no rows: show "n/a" for it, not zero.
+- All projects at zero: say tracking may be broken, rather than reporting no traffic.
