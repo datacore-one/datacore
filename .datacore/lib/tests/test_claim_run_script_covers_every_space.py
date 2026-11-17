@@ -112,3 +112,24 @@ def test_a_missing_dispatcher_is_a_fail_that_says_so(tmp_path):
     r, status, log = _run(tmp_path, root, str(root / "1-alpha"), "tester")
     assert r.returncode == 1
     assert status.startswith("FAIL claim ") and "printed no status" in status, status
+
+
+def test_work_that_could_not_be_published_is_a_fail_that_names_the_space(tmp_path):
+    """A host whose results never leave it is not working. On 2026-11-16 one
+    agent's claim run had ended "converged but not published" on every tick for
+    four days, and the job's contract stayed green."""
+    root = _install(tmp_path, {"1-alpha": []})
+    space = root / "1-alpha"
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+    _git(space, "remote", "add", "origin", str(remote))
+    _git(space, "push", "-q", "-u", "origin", "main")
+    hook = remote / "hooks" / "pre-receive"                     # from now on the remote refuses
+    hook.write_text("#!/bin/sh\necho 'refused by the remote' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    (space / "note.md").write_text("a result\n")
+    _git(space, "add", "note.md")
+    _git(space, "commit", "-qm", "a result to publish")
+    r, status, log = _run(tmp_path, root)
+    assert r.returncode == 1, log
+    assert status.startswith("FAIL claim ") and "1-alpha: not published" in status, status + log

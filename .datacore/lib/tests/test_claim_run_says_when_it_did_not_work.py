@@ -167,3 +167,36 @@ def test_work_left_claimed_for_the_owners_review_is_never_released_as_stale(tmp_
     rc, out, calls = _dispatch(space, capsys, monkeypatch)
     assert not [e for e in read_events(space) if e.type == "item.release"], out
     assert calls == []
+
+
+# ---- the second check belongs to the run, not to one host's schedule ----------
+#
+# 2026-11-16: the versioned run script made the second check, and one of four
+# agents ran that script. The other three called the dispatcher directly from
+# their own schedules, so three of four never second-checked anyone's work.
+
+def test_every_executing_run_also_makes_the_second_check(tmp_path, capsys, monkeypatch):
+    space = _space(tmp_path, [])
+    rc, out, _calls = _dispatch(space, capsys, monkeypatch)
+    assert rc == 0
+    assert "CLAIM-STATUS 2-team OK" in out
+    assert "verified 0, recheck failed 0" in out, out
+
+
+def test_a_second_check_that_cannot_run_is_said_and_does_not_hide_the_claim_result(tmp_path, capsys, monkeypatch):
+    space = _space(tmp_path, [])
+
+    def broken(*a, **k):
+        raise RuntimeError("no checker here")
+    monkeypatch.setattr(ledger_claim, "verify_others", broken)
+    rc, out, _calls = _dispatch(space, capsys, monkeypatch)
+    assert "CLAIM-STATUS 2-team OK" in out
+    assert "second check could not run" in out and "RuntimeError" in out
+    assert rc == 3, "a run that could not second-check is not a clean run"
+
+
+def test_a_plan_only_run_checks_nothing(tmp_path, capsys, monkeypatch):
+    space = _space(tmp_path, [])
+    monkeypatch.setattr(sys, "argv", ["ledger_claim.py"])
+    ledger_claim.main(["--space", str(space), "--actor", "miles"])
+    assert "verified" not in capsys.readouterr().out

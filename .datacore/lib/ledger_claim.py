@@ -1004,6 +1004,27 @@ def verify_others(space: Path, actor: str, state) -> tuple[int, int]:
 
 
 def main(argv=None, *, transport=_FROM_ENV) -> int:
+    """One run: the claim pass, then -- when it executes -- the second check.
+
+    THE SECOND CHECK BELONGS TO THE RUN. It lived in `ledger_claim_run.sh`, and
+    on 2026-11-16 one of four agents ran that script; the other three called
+    this file from their own schedules and never second-checked anyone's work.
+    A second check that cannot run is said and makes the run exit 3: the claim
+    pass's own status line is already printed and is not withdrawn.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    rc = _claim_pass(argv, transport=transport)
+    if "--execute" not in argv or "--verify-others" in argv or rc == 2:
+        return rc
+    try:
+        _claim_pass([a for a in argv if a != "--execute"] + ["--verify-others"], transport=transport)
+    except Exception as exc:  # noqa: BLE001 -- reported; the claim pass has already answered
+        print(f"second check could not run: {type(exc).__name__}: {exc}")
+        return 3
+    return rc
+
+
+def _claim_pass(argv, *, transport=_FROM_ENV) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--space", required=True, type=Path)
     ap.add_argument("--actor", default=None,
