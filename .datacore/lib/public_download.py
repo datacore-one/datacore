@@ -2,6 +2,7 @@
 import http.client
 import ipaddress
 import math
+import os
 import socket
 import threading
 import time
@@ -34,11 +35,76 @@ def parse_public_url(url):
     return parsed
 
 
+def declared_proxy():
+    """(host, port) of this machine's DECLARED egress proxy, or None.
+
+    Only a declaration counts: DATACORE_EGRESS_PROXY, or `proxy:` in this
+    install's untracked `.datacore/config/egress.local.yaml`
+    (http://host:port, no credentials).
+    HTTPS_PROXY and the other ambient variables are never read: anything in a
+    process's environment could set those and redirect every download. A
+    machine whose only way out is a proxy declares it once, on purpose
+    (owner decision 2026-11-17). A malformed declaration is an error, never a
+    silent fall back to a direct connection."""
+    raw = os.environ.get("DATACORE_EGRESS_PROXY", "").strip() or _declared_in_file()
+    if not raw:
+        return None
+    parsed = urlsplit(raw)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if (parsed.scheme != "http" or not parsed.hostname or port is None or parsed.username is not None
+            or parsed.password is not None or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+        raise ValueError("DATACORE_EGRESS_PROXY must be http://host:port, without credentials or a path")
+    return parsed.hostname, port
+
+
+def _declared_in_file() -> str:
+    """`proxy: http://host:port` from this install's own, untracked
+    `.datacore/config/egress.local.yaml` -- for a machine whose scheduled jobs
+    get no environment of their own choosing. One line, no YAML features."""
+    root = os.environ.get("DATACORE_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        with open(os.path.join(root, ".datacore", "config", "egress.local.yaml"), encoding="utf-8") as f:
+            for line in f.read(4096).splitlines():
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "proxy":
+                    return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+def _tunnel(proxy, host: str, port: int, timeout: float):
+    """A socket through `proxy` to host:port (HTTP CONNECT). The proxy only
+    carries bytes: TLS is made with the real host over this socket, so the
+    proxy sees the host name and nothing of the request or the answer."""
+    sock = socket.create_connection(proxy, timeout=timeout)
+    try:
+        sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode("ascii"))
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = sock.recv(1024)
+            if not chunk or len(head) > 8192:
+                raise OSError("egress proxy refused the tunnel: no valid answer")
+            head += chunk
+        status = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+        parts = status.split(" ", 2)
+        if len(parts) < 2 or parts[1] != "200":
+            raise OSError(f"egress proxy refused the tunnel to {host}:{port}: {status[:80]}")
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
 def _fetch(url: str, *, max_bytes=MAX_BYTES, headers=None, metadata_only=False,
            post_data=None, timeout=None):
     """Pin the validated DNS result for each redirect and verify HTTPS normally.
 
-    No ambient proxy or credentials are used. Explicit headers are sent only
+    No ambient proxy or credentials are used; a DECLARED egress proxy
+    (`declared_proxy`) only tunnels HTTPS. Explicit headers are sent only
     to the initial HTTPS origin; redirects cannot forward them elsewhere.
     The original hostname remains the TLS SNI/certificate and Host identity.
     """
@@ -48,6 +114,7 @@ def _fetch(url: str, *, max_bytes=MAX_BYTES, headers=None, metadata_only=False,
     deadline = time.monotonic() + timeout
     active_headers = dict(headers or {})
     origin = None
+    proxy = declared_proxy()
     for _ in range(4):
         parsed = parse_public_url(url)
         if post_data is not None and parsed.scheme != 'https':
@@ -88,6 +155,19 @@ def _fetch(url: str, *, max_bytes=MAX_BYTES, headers=None, metadata_only=False,
             # Connect to already checked numeric addresses; no second DNS
             # lookup can redirect a validated hostname into the local network.
             last_error = None
+            if proxy is not None and parsed.scheme == "https":
+                # The target was checked above (public addresses only); the
+                # declared proxy is this machine's one way out.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("download deadline exceeded")
+                sock = _tunnel(proxy, host, port, min(remaining, timeout))
+                with socket_lock:
+                    if expired.is_set():
+                        sock.close()
+                        raise TimeoutError('download deadline exceeded')
+                    controls.append(sock.dup())
+                return sock
             for family, kind, proto, _, address in addresses:
                 sock = socket.socket(family, kind, proto)
                 try:
