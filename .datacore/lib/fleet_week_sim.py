@@ -2030,7 +2030,11 @@ class Week:
                f" && git push -q origin HEAD:main")
         rc, out, _ = self.fleet.sh(ws, cmd, ts, job="__owner_task__")
         self.outcomes.setdefault(self.night_of(ts), {})["owner_task"] = {
-            "rc": rc, "delivered": rc == 0, "said": _first_line(out) if rc else ""}
+            "rc": rc, "delivered": rc == 0, "said": _first_line(out) if rc else "",
+            # The lines after the first: git names the files that blocked a
+            # pull there, and "delivered: no" without them cannot be acted on
+            # (two runs showed the task undelivered every night, cause unknown).
+            "detail": [l.strip()[:200] for l in (out or "").splitlines() if l.strip()][:12] if rc else []}
 
     def _morning_outcome(self, night: int, ts: dt.datetime) -> None:
         box = self.fleet.machines.get(self.fleet.role_machine("always_on") or "")
