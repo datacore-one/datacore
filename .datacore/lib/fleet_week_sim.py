@@ -2024,10 +2024,18 @@ class Week:
                     "body": f"Write the note to ~/Data/{sp}/0-inbox/fleet-sim-note-{ts:%Y-%m-%d}.md",
                     "created": None, "priority": None}})
         cli = shlex.quote(str(ws.data / ".datacore" / "lib" / "ledger_cli.py"))
-        cmd = (f"cd {shlex.quote(str(ws.data / sp))} && git pull -q --no-rebase --no-edit origin main; "
+        # THE OWNER SYNCS THE WAY THE PRODUCT DOES: converge, never a raw pull.
+        # This step used `git pull` and `git push`. With an uncommitted
+        # org/inbox.org on the workstation the pull aborted ("local changes
+        # would be overwritten by merge") and the push was then rejected, so
+        # the night's task never left the workstation: "task delegated: NO" on
+        # every night of the runs of 2026-10-27 and 2026-11-18, and nothing for
+        # the overnight agent to do. converge saves local changes first.
+        transport = shlex.quote(str(ws.data / ".datacore" / "lib" / "ledger_transport.py"))
+        sync = f"python3 {transport} converge --line --space ."
+        cmd = (f"cd {shlex.quote(str(ws.data / sp))} && {sync}; "
                f"python3 {cli} append --space . --type item.create --payload {shlex.quote(payload)} && "
-               f"git add -A .datacore/events && git commit -qm 'owner: delegate the night task' -- .datacore/events"
-               f" && git push -q origin HEAD:main")
+               f"{sync} | tee /dev/stderr | grep -Eq ': ok|everything else synced'")
         rc, out, _ = self.fleet.sh(ws, cmd, ts, job="__owner_task__")
         self.outcomes.setdefault(self.night_of(ts), {})["owner_task"] = {
             "rc": rc, "delivered": rc == 0, "said": _first_line(out) if rc else "",
