@@ -16,6 +16,7 @@ hosts:
   box: [0, 30]
   nightshift: [10, 40]
   hermes: [20, 50]
-  plur-claw: [25, 55]
+  # Rows are named by role or setup profile, never by a machine of ours (INS-3).
+  openclaw: [25, 55]
   # The owner's workstation: interactive sessions push at once. No slot.
   mac: []

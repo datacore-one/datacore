@@ -27,8 +27,8 @@ import ledger_transport  # noqa: E402
 
 SETUP = LIB / "agent_host_setup.sh"
 MANIFEST = LIB / "jobs" / "manifest.yaml"
-# agent_host_setup.sh profile -> the host it installs (openclaw is plur-claw).
-PROFILE_HOST = {"nightshift": "nightshift", "openclaw": "plur-claw", "hermes": "hermes"}
+# agent_host_setup.sh profile -> its row in the slot table (named by profile).
+PROFILE_HOST = {"nightshift": "nightshift", "openclaw": "openclaw", "hermes": "hermes"}
 
 
 def _setup_minutes() -> dict[str, int]:
@@ -61,7 +61,7 @@ def _manifest_minutes() -> dict[str, int]:
 def _all_minutes() -> dict[str, int]:
     minutes = _setup_minutes()
     manifest = _manifest_minutes()
-    assert set(minutes) == {"nightshift", "plur-claw", "hermes"}, minutes
+    assert set(minutes) == {"nightshift", "openclaw", "hermes"}, minutes
     assert set(manifest) == {"box", "nightshift"}, manifest
     # The contract and the installer must agree on nightshift's minute.
     assert manifest["nightshift"] == minutes["nightshift"], (manifest, minutes)

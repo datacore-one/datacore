@@ -182,7 +182,7 @@ def test_shipped_slot_table_matches_the_plan():
         "box": [0, 30],
         "nightshift": [10, 40],
         "hermes": [20, 50],
-        "plur-claw": [25, 55],
+        "openclaw": [25, 55],
         "mac": [],
     }
 
@@ -217,7 +217,7 @@ def test_overlapping_slot_table_is_refused(tmp_path):
 @pytest.mark.parametrize("now, host, inside", [
     ((9, 0), "box", True), ((9, 4), "box", True), ((9, 5), "box", False),
     ((9, 30), "box", True), ((9, 41), "nightshift", True), ((9, 24), "hermes", True),
-    ((9, 25), "hermes", False), ((9, 25), "plur-claw", True), ((9, 59), "plur-claw", True),
+    ((9, 25), "hermes", False), ((9, 25), "openclaw", True), ((9, 59), "openclaw", True),
 ])
 def test_in_slot(now, host, inside):
     slots = lt.load_slots(SHIPPED_SLOTS)
