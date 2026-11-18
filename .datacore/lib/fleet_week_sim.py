@@ -93,8 +93,13 @@ CONFIG_FILES = {
 }
 
 #: Small tracked files that make a scratch space behave like the real one.
-SPACE_MARKERS = (".gitignore", ".datacore/ledger-phase", ".datacore/ledger-edit-protocol",
-                 ".datacore/ledger-org-header", ".datacore/structure-allow")
+#: `.datacore/config.yaml` is the space's own marker: a space registers itself
+#: by it (SPC-9), and the sync refuses a folder without it ("repository not in
+#: registry"). Without it in the seed, no simulated machine could sync any
+#: space, so nothing delegated ever travelled (runs of 2026-10-27, 2026-11-18).
+SPACE_MARKERS = (".gitignore", ".datacore/config.yaml", ".datacore/ledger-phase",
+                 ".datacore/ledger-edit-protocol", ".datacore/ledger-org-header",
+                 ".datacore/structure-allow")
 
 MODEL_RUNTIMES = ("claude", "hermes", "codex", "openclaw")
 HOST_TOOLS = ("ssh", "rsync", "scp", "gh", "sudo", "systemctl", "crontab", "launchctl", "curl",
