@@ -7,8 +7,9 @@ could fetch nothing there. "Pick whatever is more secure while it gets the job
 done."
 
 Rule:
-  * a proxy is used only when DATACORE_EGRESS_PROXY names it; HTTPS_PROXY and
-    the other ambient variables are still ignored;
+  * a proxy is used only when it is declared: DATACORE_EGRESS_PROXY, or
+    `proxy:` in the install's untracked config/egress.local.yaml; HTTPS_PROXY
+    and the other ambient variables are still ignored;
   * the target is checked first (public addresses only), exactly as before;
   * the proxy only tunnels (CONNECT); TLS is made with the real site through
     the tunnel, so the proxy never sees or alters the content;
@@ -67,6 +68,7 @@ def public(monkeypatch):
     monkeypatch.setattr(pd, "public_addresses", lambda host, port, timeout=None: PUBLIC)
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "DATACORE_EGRESS_PROXY"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DATACORE_ROOT", "/nonexistent-datacore-root")
 
 
 def test_a_declared_proxy_is_asked_for_a_tunnel_to_the_real_host(public, monkeypatch):
@@ -79,6 +81,17 @@ def test_a_declared_proxy_is_asked_for_a_tunnel_to_the_real_host(public, monkeyp
     proxy.close()
     assert proxy.head.startswith(b"CONNECT feeds.example.org:443 HTTP/1.1\r\n"), proxy.head[:80]
     assert b"rss.xml" not in proxy.head, "the proxy must see only the tunnel request, never the path"
+
+
+def test_a_proxy_declared_in_the_installs_own_config_file_is_used(public, monkeypatch, tmp_path):
+    proxy = FakeProxy(b"403 Forbidden")
+    (tmp_path / ".datacore" / "config").mkdir(parents=True)
+    (tmp_path / ".datacore" / "config" / "egress.local.yaml").write_text(f"proxy: http://127.0.0.1:{proxy.port}\n")
+    monkeypatch.setenv("DATACORE_ROOT", str(tmp_path))
+    with pytest.raises(OSError, match="egress proxy refused"):
+        pd.download("https://feeds.example.org/rss.xml")
+    proxy.close()
+    assert proxy.head.startswith(b"CONNECT feeds.example.org:443 ")
 
 
 def test_a_proxy_that_refuses_the_tunnel_is_an_error_that_says_so(public, monkeypatch):

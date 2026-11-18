@@ -38,13 +38,15 @@ def parse_public_url(url):
 def declared_proxy():
     """(host, port) of this machine's DECLARED egress proxy, or None.
 
-    Only DATACORE_EGRESS_PROXY counts (http://host:port, no credentials).
+    Only a declaration counts: DATACORE_EGRESS_PROXY, or `proxy:` in this
+    install's untracked `.datacore/config/egress.local.yaml`
+    (http://host:port, no credentials).
     HTTPS_PROXY and the other ambient variables are never read: anything in a
     process's environment could set those and redirect every download. A
     machine whose only way out is a proxy declares it once, on purpose
     (owner decision 2026-11-17). A malformed declaration is an error, never a
     silent fall back to a direct connection."""
-    raw = os.environ.get("DATACORE_EGRESS_PROXY", "").strip()
+    raw = os.environ.get("DATACORE_EGRESS_PROXY", "").strip() or _declared_in_file()
     if not raw:
         return None
     parsed = urlsplit(raw)
@@ -56,6 +58,22 @@ def declared_proxy():
             or parsed.password is not None or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
         raise ValueError("DATACORE_EGRESS_PROXY must be http://host:port, without credentials or a path")
     return parsed.hostname, port
+
+
+def _declared_in_file() -> str:
+    """`proxy: http://host:port` from this install's own, untracked
+    `.datacore/config/egress.local.yaml` -- for a machine whose scheduled jobs
+    get no environment of their own choosing. One line, no YAML features."""
+    root = os.environ.get("DATACORE_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        with open(os.path.join(root, ".datacore", "config", "egress.local.yaml"), encoding="utf-8") as f:
+            for line in f.read(4096).splitlines():
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "proxy":
+                    return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
 
 
 def _tunnel(proxy, host: str, port: int, timeout: float):
