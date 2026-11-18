@@ -142,7 +142,8 @@ def _with_local_overlay(path: Path, data: dict) -> dict:
     a fresh install names nothing of ours), so they live in the gitignored
     `<stem>.local.yaml` beside it. A local `principals` entry replaces the
     tracked entry of that name and new names are added; a local
-    `arbitration` replaces the tracked order. Nothing else overlays. The
+    `arbitration` replaces the tracked order; a local `approver` (one of the
+    principals) replaces the placeholder. Nothing else overlays. The
     merged mapping then goes through the same validation as one file, so a
     malformed local entry is refused, never skipped -- skipping would switch
     a principal's limits off.
@@ -158,6 +159,21 @@ def _with_local_overlay(path: Path, data: dict) -> dict:
     if not isinstance(extra, dict) or not isinstance(extra.get("principals", {}), dict):
         raise PolicyError(f"approvals policy {local}: 'principals' must be a mapping of name -> limits")
     merged = dict(data)
+    if "approver" in extra:
+        # THE INSTALL'S OWN APPROVER (owner, 2026-11-18). The tracked file can
+        # only carry the placeholder `human`, which names nobody: with nothing
+        # local to replace it, the owner's own machines were not the approver
+        # and could not assign or reassign a task. The local name must be one
+        # of the merged principals -- a name nobody answers to would be the
+        # placeholder again.
+        name = extra["approver"]
+        known = {**(data.get("principals") if isinstance(data.get("principals"), dict) else {}),
+                 **extra.get("principals", {})}
+        if not isinstance(name, str) or not name:
+            raise PolicyError(f"approvals policy {local}: 'approver' must be a non-empty string")
+        if name not in known:
+            raise PolicyError(f"approvals policy {local}: approver {name!r} is not one of the principals")
+        merged["approver"] = name
     if "principals" in extra:
         base = data.get("principals") if isinstance(data.get("principals"), dict) else {}
         merged["principals"] = {**base, **extra["principals"]}

@@ -21,6 +21,16 @@ def _register_test_writers(tmp_path_factory, monkeypatch):
     p = tmp_path_factory.mktemp("reg") / "principals.yaml"
     p.write_text("principals:\n  worker: {kind: agent, writes_as: [worker, w, agent]}\n  human: {kind: human, writes_as: [human, approver, mac, test]}\n")
     monkeypatch.setattr(actor_identity, "PRINCIPALS", p)
+    # The policy too: calls that take the default policy must read the tracked
+    # file, never the real install's local one (whose approver is its owner's).
+    import shutil
+    from pathlib import Path
+    root = tmp_path_factory.mktemp("install")
+    (root / ".datacore" / "config").mkdir(parents=True)
+    shutil.copy(Path(__file__).resolve().parents[2] / "config" / "approvals_policy.yaml",
+                root / ".datacore" / "config" / "approvals_policy.yaml")
+    import ledger.policy as policy_module
+    monkeypatch.setattr(policy_module, "DEFAULT_POLICY_PATH", root / ".datacore" / "config" / "approvals_policy.yaml")
 
 from ledger.events import EVENT_TYPES
 from ledger.log import EventLog, read_events
