@@ -436,6 +436,18 @@ def incoming_losses(repo: Path, ref: str) -> list[str]:
         return []
     deleted = [x for x in git(repo, '-c', 'core.quotepath=off', 'diff', '--no-renames',
                               '--diff-filter=D', '--name-only', base, ref).splitlines() if x]
+    # A MOVED FILE IS NOT A LOST FILE. One machine moved 27 old inbox files into
+    # the space's archive folder and every other machine refused the whole
+    # space for it, 56 commits behind on the hub's machine (2026-11-18). A path
+    # whose EXACT content sits at a new path in `ref` is not counted; a file
+    # changed or emptied on the way still is.
+    moved = set()
+    for row in git(repo, '-c', 'core.quotepath=off', 'diff', '-M100%', '--diff-filter=R',
+                   '--name-status', base, ref).splitlines():
+        parts = row.split('\t')
+        if len(parts) == 3 and parts[0] == 'R100':
+            moved.add(parts[1])
+    deleted = [x for x in deleted if x not in moved]
     out = []
     if len(deleted) >= MASS_DELETION:
         out.append(f"deletes {len(deleted)} tracked files ({', '.join(deleted[:5])}"
