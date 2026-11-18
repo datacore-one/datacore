@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 import subprocess
 
-from knowledge_commit import GitError, commit_to_branch, default_branch
+from knowledge_commit import GitError, commit_to_branch, default_branch, resolve_push
 
 
 class PublicationManifest:
@@ -22,7 +22,10 @@ class PublicationManifest:
         raw = content.encode('utf-8') if isinstance(content, str) else content
         self.paths[path] = hashlib.sha256(raw).digest()
 
-    def publish(self, message, *, push=True):
+    def publish(self, message, *, push=True, actor=None, urgent=False):
+        """Commit the recorded outputs; push now unless the host's push policy
+        defers this writer to its slot (knowledge_commit.resolve_push). With no
+        actor, this host's declared writer decides."""
         if not self.paths:
             return ''
         if self.head is None or self.initial != b'' or self._git('rev-parse', 'HEAD') != self.head:
@@ -34,4 +37,5 @@ class PublicationManifest:
             if hashlib.sha256(path.read_bytes()).digest() != expected:
                 raise GitError('an output changed after this run wrote it; retain both versions for review')
             paths.append(path.relative_to(self.repo).as_posix())
+        push = resolve_push(push, actor, urgent=urgent)
         return commit_to_branch(self.repo, default_branch(self.repo), paths, message, push=push)
