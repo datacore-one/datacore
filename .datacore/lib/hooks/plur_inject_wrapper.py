@@ -42,6 +42,32 @@ def _run_hook(stdin_data, timeout=_TIMEOUT, rehydrate=False):
         return ''
 
 
+def _recall_for(prompt, timeout=20):
+    """What memory holds for THIS prompt, as context text ('' when nothing).
+
+    The CLI's hook answers only the first prompt of a session; every later
+    prompt came back empty, so a later factual question recalled nothing
+    (SPC-6, owner decision 2026-11-17). For those prompts the wrapper asks the
+    CLI for the question itself. Read-only; a failure or a timeout is no
+    context, never an error for the session."""
+    text = ' '.join(str(prompt or '').split())[:2000]
+    if len(text) < 8:
+        return ''
+    try:
+        result = process_run.run(
+            plur_cli.command('--json', 'inject', text), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=timeout,
+        )
+        data = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else {}
+    except (OSError, ValueError, RecursionError, subprocess.TimeoutExpired):
+        return ''
+    if not isinstance(data, dict) or not data.get('count'):
+        return ''
+    parts = [str(data.get(k) or '').strip() for k in ('directives', 'constraints', 'consider')]
+    body = '\n\n'.join(part for part in parts if part)
+    return f"[PLUR Memory — recalled for this question, {data['count']} engrams]\n{body}" if body else ''
+
+
 def _try_lock(session_id):
     """Lock a private hashed path without following links or truncating data.
 
@@ -152,6 +178,8 @@ def main(argv=None):
     existing = output.get('additionalContext') or (nested or {}).get('additionalContext') or ''
     if not isinstance(existing, str):
         existing = ''
+    if not existing and lock is not None and not args.rehydrate:
+        existing = _recall_for(data.get('prompt'))
     if session_id and not _session_marked(session_id) and not os.environ.get('DATACORE_HEADLESS'):
         reminder = 'Call plur_session_start before beginning work to load session memory.'
         existing = f'{reminder}\n\n{existing}' if existing else reminder
