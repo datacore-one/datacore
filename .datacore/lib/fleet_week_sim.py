@@ -2032,9 +2032,13 @@ class Week:
         # every night of the runs of 2026-10-27 and 2026-11-18, and nothing for
         # the overnight agent to do. converge saves local changes first.
         transport = shlex.quote(str(ws.data / ".datacore" / "lib" / "ledger_transport.py"))
-        sync = f"python3 {transport} converge --line --space ."
-        cmd = (f"cd {shlex.quote(str(ws.data / sp))} && {sync}; "
-               f"python3 {cli} append --space . --type item.create --payload {shlex.quote(payload)} && "
+        # The space is named, from the install root: converge looks the space
+        # up in the repository registry by its folder name, and "." matched
+        # nothing there ("repository not in registry").
+        space = shlex.quote(sp)
+        sync = f"python3 {transport} converge --line --space {space}"
+        cmd = (f"cd {shlex.quote(str(ws.data))} && {sync}; "
+               f"python3 {cli} append --space {space} --type item.create --payload {shlex.quote(payload)} && "
                f"{sync} | tee /dev/stderr | grep -Eq ': ok|everything else synced'")
         rc, out, _ = self.fleet.sh(ws, cmd, ts, job="__owner_task__")
         self.outcomes.setdefault(self.night_of(ts), {})["owner_task"] = {
