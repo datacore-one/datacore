@@ -67,6 +67,61 @@ SIMDIR = LIB / "sim"
 IMAGE = "datacore-fleet-sim"
 UTC = dt.timezone.utc
 
+#: THE CLOCK SURVIVES A CLEANED ENVIRONMENT. The job envelope (jobs/run.py)
+#: starts every job with one normalized environment and drops the rest, on
+#: purpose -- which in the sandbox dropped the fake clock too. A duty started
+#: through it (the workstation's job verifier after a join) wrote ledger events
+#: with the REAL date, weeks after the simulated one; the owner's nightly task,
+#: next in that log, inherited the timestamp, and the overnight agent's "I take
+#: this" was older than the task on every run (2026-11-18, 2026-11-19: adopted
+#: hourly, nothing done). So each run leaves the clock settings in the
+#: machine's home (CLOCK_FILE), and a python that starts without them reads
+#: them there and starts again with them (CLOCK_HOOK, installed only inside
+#: the simulator's container). The product's envelope is unchanged.
+CLOCK_FILE = ".fleet-sim-clock"
+CLOCK_KEYS = ("LD_PRELOAD", "FAKETIME", "NO_FAKE_STAT", "FAKETIME_DONT_FAKE_MONOTONIC", "FAKETIME_NO_CACHE")
+CLOCK_HOOK = "fleet_sim_clock"
+CLOCK_HOOK_SOURCE = f"""import os, sys
+
+
+def _go():
+    if "FAKETIME" in os.environ or not os.environ.get("HOME"):
+        return
+    try:
+        lines = open(os.path.join(os.environ["HOME"], "{CLOCK_FILE}")).read().splitlines()
+    except OSError:
+        return
+    found = dict(l.split("=", 1) for l in lines if "=" in l)
+    if "FAKETIME" not in found:
+        return
+    os.environ.update(found)
+    os.execv(sys.executable, list(getattr(sys, "orig_argv", None) or [sys.executable] + sys.argv))
+
+
+_go()
+"""
+
+
+def leave_clock(home: Path, env: dict) -> None:
+    """Write this run's clock settings (and nothing else) into the machine's home."""
+    try:
+        (Path(home) / CLOCK_FILE).write_text(
+            "".join(f"{k}={env[k]}\n" for k in CLOCK_KEYS if env.get(k) is not None))
+    except OSError:
+        pass
+
+
+def install_clock_hook() -> bool:
+    """Make every python in the simulator's container load the hook. Only there:
+    it would change the interpreter of a real machine."""
+    import sysconfig
+    if not Path("/.dockerenv").exists() or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return False
+    site = Path(sysconfig.get_paths()["purelib"])
+    (site / f"{CLOCK_HOOK}.py").write_text(CLOCK_HOOK_SOURCE)
+    (site / f"{CLOCK_HOOK}.pth").write_text(f"import {CLOCK_HOOK}\n")
+    return True
+
 #: What the harness itself is made of: overlaid onto the seed from the working
 #: tree, so an uncommitted harness can run against the committed product.
 HARNESS_FILES = (".datacore/lib/fleet_week_sim.py", ".datacore/lib/sim/stand_in.py",
@@ -603,7 +658,9 @@ class Fleet:
         limit = timeout or self.o.job_timeout_s
         # Its own process group, so a timeout kills everything the job started
         # (a killed bash used to leave its python children polling on).
-        proc = subprocess.Popen(["bash", "-c", cmd], env=self.env(m, ts, job), cwd=str(cwd or m.home),
+        env = self.env(m, ts, job)
+        leave_clock(m.home, env)
+        proc = subprocess.Popen(["bash", "-c", cmd], env=env, cwd=str(cwd or m.home),
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                 text=True, errors="replace", start_new_session=True)
         if kill_after is not None and kill_after < limit:
@@ -708,6 +765,9 @@ class Fleet:
         if (SIMDIR / "py").is_dir():
             shutil.copytree(SIMDIR / "py", self.root / "stubs" / "py", dirs_exist_ok=True)
 
+        if not self.nested and not install_clock_hook():
+            self.notes.append("not in the simulator's container: a job started with a cleaned "
+                              "environment (the job envelope) runs on the real clock here")
         manifest_doc = _load_doc(self.o.manifest) if self.o.manifest else None
         self._signing_keys()
         for m in self.machines.values():
