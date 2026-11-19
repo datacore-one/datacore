@@ -151,3 +151,16 @@ def test_of_two_different_events_at_one_seq_the_first_stands(env, monkeypatch, t
     assert "fork" in res.refused["wa"], res.refused
     state = H.authoritative_state(wa.space_dir)
     assert "first" in state.items and "rival" not in state.items
+
+
+def test_the_stopped_command_does_not_say_the_log_ended(env, monkeypatch, tmp_path):
+    """`ledger_cli.py stopped` kept saying "stops this log ... nothing written
+    after it counts" after the rule changed. It names the refused event and
+    says what is true: that event has no effect, the others are read."""
+    import ledger_cli
+    h, wa = _setup(env, monkeypatch)
+    _foreign_signed_into(env, wa, "item.create", {"id": "forged"}, f"{T._real_ms():013d}.0000.wa", tmp_path)
+    lines = ledger_cli._admission_refusals(wa.space_dir)
+    assert lines and "bad_signature" in lines[0], lines
+    assert "nothing written after it counts" not in lines[0] and "stops this log" not in lines[0]
+    assert "every other event is read" in lines[0]
