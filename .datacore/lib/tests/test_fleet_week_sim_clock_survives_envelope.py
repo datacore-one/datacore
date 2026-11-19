@@ -69,3 +69,10 @@ def test_a_home_without_clock_settings_changes_nothing(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     assert _run(home, _hook(tmp_path)) == "none none"
+
+
+def test_simulated_machines_carry_the_repository_registry():
+    """The registry is install-private (not in git). Without it a simulated
+    machine refuses to sync its own installation root: 'repository not in
+    registry' on every overnight run of 2026-11-18 and 2026-11-19."""
+    assert sim.CONFIG_FILES.get("repositories.yaml") == ".datacore/registry/repositories.yaml"

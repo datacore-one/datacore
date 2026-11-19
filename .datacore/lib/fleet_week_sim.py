@@ -142,6 +142,11 @@ _HOSTONLY_CD = re.compile(r"cd \$\{DATACORE_ROOT:-\$HOME/Data\}/(\S+?) && \.venv
 CONFIG_FILES = {
     "infrastructure.yaml": ".datacore/registry/infrastructure.yaml",
     "principals.yaml": ".datacore/registry/principals.yaml",
+    # Without it no simulated machine could classify its own installation root
+    # ("repository not in registry"), so the root sat out of every overnight
+    # run -- and, until the overnight module's fix of 2026-11-19, took every
+    # space with it.
+    "repositories.yaml": ".datacore/registry/repositories.yaml",
     "approvals_policy.local.yaml": ".datacore/config/approvals_policy.local.yaml",
     "install.yaml": "install.yaml",
     "manifest.local.yaml": ".datacore/lib/jobs/manifest.local.yaml",
