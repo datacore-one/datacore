@@ -14,6 +14,15 @@ LIB = Path(__file__).resolve().parents[1]
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+# ONE UMASK FOR EVERY RUN. A host whose login umask is 002 (each user in a
+# private group) creates the sandbox homes these tests build as group-writable,
+# and the private-state check then refuses them ("private state ancestor
+# permits unrelated writes"): the fresh-install promise (INS-2) was red on such
+# a host and green everywhere else, for a reason no real install has (a real
+# home is not group-writable). The suite says the same thing on every host.
+import os  # noqa: E402
+os.umask(0o022)
+
 
 @pytest.fixture(autouse=True)
 def _executor_registry_restored(monkeypatch):
