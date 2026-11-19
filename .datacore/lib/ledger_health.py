@@ -2,6 +2,9 @@
 """Read-only, content-free ledger verification for installed runtime clients."""
 from __future__ import annotations
 
+import threading
+import signal
+import contextlib
 import argparse
 import fcntl
 import json
@@ -71,6 +74,32 @@ def _verify_file(path, registry):
 DEFAULT_BUDGET_S = float(os.environ.get("DATACORE_LEDGER_HEALTH_BUDGET_S") or 20)
 
 
+class _OutOfTime(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def _stop_after(seconds):
+    """Stop the work inside after `seconds`. Only where a timer can interrupt it
+    (the main thread of a POSIX process); elsewhere the work runs to its end and
+    the budget is looked at between logs, as before."""
+    usable = (seconds is not None and hasattr(signal, 'setitimer')
+              and threading.current_thread() is threading.main_thread())
+    if not usable:
+        yield
+        return
+
+    def _ring(_signum, _frame):
+        raise _OutOfTime()
+    previous = signal.signal(signal.SIGALRM, _ring)
+    signal.setitimer(signal.ITIMER_REAL, max(seconds, 0.05))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def check(root, per_space=None, budget_s=None):
     """Content-free verdict over every space's ledger.
 
@@ -123,7 +152,14 @@ def check(root, per_space=None, budget_s=None):
                     out_of_time = unverified = True
                     break
                 try:
-                    broken |= not _verify_file(path, root / '.datacore/keys/registry.yaml')
+                    left = None if budget_s is None else budget_s - (time.monotonic() - started)
+                    with _stop_after(left):
+                        broken |= not _verify_file(path, root / '.datacore/keys/registry.yaml')
+                except _OutOfTime:
+                    # The budget ended INSIDE this log (one large log can take
+                    # longer than the whole budget): not judged, so unverified.
+                    out_of_time = unverified = True
+                    break
                 except (OSError, ValueError):
                     unverified = True
             if broken:
