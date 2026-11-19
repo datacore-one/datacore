@@ -47,3 +47,12 @@ def test_a_call_that_names_no_output_keeps_the_short_answer(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     assert _ask(home, "Say hello.") == "Done."
+
+
+def test_the_answer_names_the_file_it_wrote(tmp_path):
+    """The product's output gate wants the report to share a word with the task's
+    title or done-condition. A report that names the file it wrote does."""
+    home = tmp_path / "home"
+    home.mkdir()
+    answer = _ask(home, "## Task Body\nWrite the note to ~/Data/2-datacore/0-inbox/fleet-sim-note-2026-10-01.md\n")
+    assert "~/Data/2-datacore/0-inbox/fleet-sim-note-2026-10-01.md" in answer

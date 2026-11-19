@@ -497,6 +497,14 @@ def main() -> int:
                 answer = ("Done. I completed the task and wrote the note, covering the week's "
                           "fleet results, the overnight completions, the morning briefing and "
                           "its audio, the main risks seen, and the next steps to take.")
+                # ...and names the file, as a real report does. The output gate
+                # asks that a report share a word with the task's title or its
+                # done-condition; the sentence above shared none with "Write the
+                # fleet-sim nightly note ... exists in 2-datacore/0-inbox/", so
+                # an honest run was sent to review as off-topic (2026-11-19).
+                home = str(HOME.resolve())
+                answer += " The file is at " + ", ".join(
+                    "~" + str(Path(w).resolve())[len(home):] for w in there[:3]) + "."
             if '"headline"' in prompt and '"observation"' in prompt:
                 # The morning briefing generator asks for strict JSON.
                 answer = json.dumps({
