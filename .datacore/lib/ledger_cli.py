@@ -270,9 +270,9 @@ def cmd_stopped(args: argparse.Namespace) -> None:
         if stop["hwm"] is None or tail < stop["hwm"]:
             stopped.append(f"{_shown(log)}: appends stopped since {stop.get('at', '?')} -- the log "
                            f"ends at seq {tail}, this machine wrote seq {stop['hwm']}")
-    # A log the hub stops admitting is stopped too: nothing written after the
-    # refused event counts. On 2026-10-28 Winston's log stopped at a retired
-    # `task.create` written by a stale library, and this command said nothing.
+    # An event the hub refuses is named here too. On 2026-10-28 Winston's log
+    # held a retired `task.create` written by a stale library, and this command
+    # said nothing. (Then it ended the log; now only that event has no effect.)
     stopped.extend(_admission_refusals(space))
     for line in stopped:
         print(line)
@@ -280,7 +280,7 @@ def cmd_stopped(args: argparse.Namespace) -> None:
 
 
 def _admission_refusals(space: Path) -> list[str]:
-    """One line per log hub admission stops, with the reason; [] without a hub."""
+    """One line per log with an event hub admission refuses, with the reason; [] without a hub."""
     from ledger.log import read_events
     from ledger import hub
     try:
@@ -291,8 +291,11 @@ def _admission_refusals(space: Path) -> list[str]:
         res = hub.admit(events, hub.authority(space, cfg, None), now_ms=hub._wall_ms())
     except Exception as exc:  # noqa: BLE001 -- unreadable admission is not "all clear"
         return [f"{_shown(space)}: hub admission could not be read ({type(exc).__name__}: {exc})"]
-    return ([f"{log}.jsonl: hub admission stops this log at {why} -- nothing written after it counts"
-             for log, why in sorted(res.refused.items())]
+    # Since 2026-11-17 (report, never halt) a refused event stops nothing: it
+    # has no effect and every other event of the log is read. This line said
+    # "stops this log ... nothing written after it counts" for two more days.
+    return ([f"{log}.jsonl: hub admission refuses an event of this log ({why}) -- that event has "
+             "no effect; every other event is read" for log, why in sorted(res.refused.items())]
             + [f"{log}.jsonl: hub admission HOLDS {why} -- in the chain, no effect; the writer's key "
                "did not sign it" for log, whys in sorted(res.held.items()) for why in whys])
 
