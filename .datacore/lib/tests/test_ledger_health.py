@@ -171,3 +171,23 @@ def test_the_budget_also_stops_inside_a_large_space(tmp_path, monkeypatch):
     result = health.check(tmp_path, budget_s=10)
     assert result['spaces_unverified'] == 1 and result['spaces_verified'] == 0
     assert result['ok'] is None and result['reason'] == 'time-budget'
+
+
+def test_one_log_that_takes_longer_than_the_whole_budget_is_cut_short(tmp_path, monkeypatch):
+    """The budget was only looked at BETWEEN logs. On 2026-11-19 one large log
+    took longer than the whole budget, the check ran 28 s against its 20 s, and
+    datacore_status answered 2 s inside its 30 s limit (promise MOD-7 red on a
+    slower day). A log still being verified when the budget ends is stopped:
+    its space is unverified, never ok, and the answer arrives on time."""
+    import time as real_time
+    space(tmp_path, '0-a')
+
+    def stuck(path, registry):
+        real_time.sleep(30)
+        return True
+    monkeypatch.setattr(health, '_verify_file', stuck)
+    began = real_time.monotonic()
+    result = health.check(tmp_path, budget_s=1)
+    assert real_time.monotonic() - began < 5, "the check outran its budget inside one log"
+    assert result['ok'] is None and result['spaces_verified'] == 0 and result['spaces_unverified'] == 1
+    assert result['reason'] == 'time-budget'
