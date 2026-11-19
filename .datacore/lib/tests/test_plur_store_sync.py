@@ -336,6 +336,62 @@ def test_a_writer_that_writes_during_every_merge_is_folded_in_not_dropped(fleet,
     assert len(work) == len(_read(host / "engrams.yaml")), "an id appears twice"
 
 
+def test_a_writer_touching_an_engram_the_remote_also_changed_is_merged_by_field(fleet, tmp_path, monkeypatch):
+    """Every session on every machine bumps the same hot engrams' counters, so
+    a writer during the merge nearly always touches a record the remote changed
+    too. That was refused as "not provably safe" and the whole 3-minute merge
+    restarted into the next writer (nightshift 2026-11-15 00:47-04:47, red three
+    runs). It is the same three-way question the merge already answers."""
+    remote, mac, host = fleet
+    m = _read(mac / "engrams.yaml")
+    m[2]["status"] = "retired"                       # the engram the writer keeps bumping
+    m[2]["activation"] = {"retrieval_strength": 0.9}
+    m[3]["injection_count"] = 7
+    _write(mac, "engrams.yaml", m)
+    _git(mac, "commit", "-am", "mac")
+    _git(mac, "push")
+    todo = [1, 2, 3]
+    real = pss._strip_local
+
+    def writer(*a, **kw):
+        out = real(*a, **kw)
+        if todo:
+            n = todo.pop(0)
+            h = _read(host / "engrams.yaml")
+            h[2]["activation"] = {"retrieval_strength": 0.1 * n}   # both changed: the remote wins
+            h[2]["injection_count"] = n                            # only the writer changed it
+            h[3]["feedback_signals"] = {"positive": n}
+            _write(host, "engrams.yaml", h)
+        return out
+    monkeypatch.setattr(pss, "_strip_local", writer)
+
+    rc, state = _run(host, tmp_path)
+    assert rc == 0, state
+    assert state["retries"] == 0, "a field merge needs no restart"
+    work = {e["id"]: e for e in _read(host / "engrams.yaml")}
+    e3, e4 = work["ENG-2026-09-01-003"], work["ENG-2026-09-01-004"]
+    assert e3["status"] == "retired", "the remote's change was lost"
+    assert e3["activation"] == {"retrieval_strength": 0.9}, "a field both changed takes the remote"
+    assert e3["injection_count"] == 1, "the writer's own field was lost"
+    assert (e4["injection_count"], e4["feedback_signals"]) == (7, {"positive": 1})
+    # The next run publishes the writer's fields; nothing is left diverged.
+    rc, state = _run(host, tmp_path, "second.json")
+    assert rc == 0 and state["in_sync"] is True, state
+    pushed = {e["id"]: e for e in yaml.safe_load(_git(remote, "show", "main:engrams.yaml"))}
+    assert pushed["ENG-2026-09-01-003"] == e3 and pushed["ENG-2026-09-01-004"] == e4
+
+
+def test_a_fold_never_resolves_what_needs_the_collision_check():
+    read = [_eng(1), _eng(2)]
+    merged = [_eng(1), _eng(2, status="retired"), _eng(7, statement="the remote's")]
+    minted = read + [_eng(7, statement="minted here meanwhile")]
+    assert pss.fold_local_change(read, minted, merged) is None
+    # deleted here, changed there: kept. Deleted there, changed here: kept.
+    assert pss.fold_local_change(read, [_eng(1)], merged) == merged
+    gone = [_eng(1)]
+    assert pss.fold_local_change(read, [_eng(1), _eng(2, status="pinned")], gone) == [_eng(1), _eng(2, status="pinned")]
+
+
 @pytest.mark.parametrize("at", ["_strip_local", "find_collisions"])
 def test_a_concurrently_minted_id_the_remote_also_holds_is_renamed_not_blended(fleet, tmp_path, monkeypatch, at):
     remote, mac, host = fleet
