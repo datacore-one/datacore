@@ -469,7 +469,7 @@ def main() -> int:
         elif mode in ROGUE_MALICIOUS or mode in ("garbage_done", "low_quality", "loop"):
             answer = _rogue(mode, spec, prompt, cwd, argv, log)
         else:
-            wrote = []
+            wrote, there = [], []
             for m in _OUT.finditer(prompt):
                 raw = m.group(1).replace("$HOME", str(HOME))
                 p = Path(os.path.expanduser(raw))
@@ -480,6 +480,7 @@ def main() -> int:
                     if not p.exists():
                         p.write_text("# fleet-sim stand-in output\n\nDone.\n")
                         wrote.append(str(p))
+                    there.append(str(p))
                 except OSError:
                     pass
             log["wrote"] = wrote
@@ -487,7 +488,12 @@ def main() -> int:
             # this text (not the file), so an honest run must read as complete
             # or it would be reviewed for being thin -- the same surface a rogue
             # agent's plausible claim rides in on.
-            if wrote:
+            # ...whether this call wrote the file or an earlier call for the same
+            # task did: the overnight run asks more than once, and the second
+            # call answered a bare "Done.", which the output gate rightly called
+            # off-topic -- the delegated task ended "for review" with its note
+            # written (two-night run, 2026-11-19).
+            if there:
                 answer = ("Done. I completed the task and wrote the note, covering the week's "
                           "fleet results, the overnight completions, the morning briefing and "
                           "its audio, the main risks seen, and the next steps to take.")
