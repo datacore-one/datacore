@@ -46,4 +46,22 @@ USAGE
   exit 0
 fi
 
-exec python3 "$SCRIPT" "$@"
+# Pick an interpreter that can import the broker's dependencies. A bare
+# `python3` resolves to whatever is first on PATH, and an activated virtualenv
+# without PyYAML made the broker die on import; inside `X="$(creds get ...)"`
+# that is an EMPTY value, which a registry then reports as bad credentials
+# (2026-11-19: a needless PyPI token rotation mid-release). Datacore's own venv
+# first, then PATH, then the system interpreters.
+if [[ -n "${CREDS_PYTHON_CANDIDATES:-}" ]]; then
+  read -r -a candidates <<< "$CREDS_PYTHON_CANDIDATES"
+else
+  candidates=("$DATACORE_ROOT/.datacore/venv/bin/python3" python3 /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3)
+fi
+for py in "${candidates[@]}"; do
+  if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import yaml' >/dev/null 2>&1; then
+    exec "$py" "$SCRIPT" "$@"
+  fi
+done
+echo "creds: no Python that can import yaml (tried: ${candidates[*]})." >&2
+echo "       Install PyYAML for one of them, e.g. into $DATACORE_ROOT/.datacore/venv." >&2
+exit 127
