@@ -79,3 +79,16 @@ def test_failed_push_is_reported(tmp_path, capsys):
     assert _sync(tmp_path) != 0
     out = capsys.readouterr()
     assert "push" in (out.out + out.err).lower()
+
+
+def test_a_failing_sync_script_is_never_silent(tmp_path, capsys):
+    # 2026-11-19: sync.sh died with exit 128 on a diverged store after printing
+    # only "Pulling from central...", so `creds add` said sync failed and the
+    # owner's retry printed nothing at all. The exit code and what to do now
+    # must reach stderr whatever sync.sh itself managed to say.
+    root, _ = _install(tmp_path, sync_body="echo 'Pulling from central...'\nexit 128\n")
+    rc = CredentialManager(str(tmp_path)).cmd_sync()
+    assert rc == 128
+    err = capsys.readouterr().err
+    assert "sync.sh" in err and "128" in err
+    assert "not served" in err or "stale" in err

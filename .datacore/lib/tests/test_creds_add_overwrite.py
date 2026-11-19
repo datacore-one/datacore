@@ -77,3 +77,55 @@ def test_cli_flag(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.argv", ["creds", "--data-dir", str(tmp_path), "add", "demo-x-access-token", "--overwrite"])
     assert creds.main() in (0, None)
     assert f"DEMO_X_ACCESS_TOKEN={NEW}" in (root / "projects/demo-x.env").read_text()
+
+
+# 2026-11-19: `pypi-tokens` holds two variables (`vars:`, no `var_name`). Overwriting
+# one of them prompted "New value for None" and refused with "invalid credential
+# variable name", so the owner had to hand-edit the store mid-release. `--var`
+# now names which of the entry's variables to replace.
+MULTI = {"id": "demo-pypi-tokens", "name": "Demo PyPI tokens", "type": "auth_token", "tier": "high",
+         "scope": "project", "project": "demo-x", "category": "publishing", "provider": "pypi",
+         "vars": ["DEMO_PYPI_A", "DEMO_PYPI_B"], "description": "synthetic"}
+MULTI_ENV = f"DEMO_PYPI_A={OLD}-a\nDEMO_PYPI_B={OLD}-b\n"
+
+
+def test_multi_var_entry_replaces_the_named_variable(tmp_path, monkeypatch):
+    root, git = _install(tmp_path, rows=(MULTI,), env_text=MULTI_ENV)
+    prompts = []
+    monkeypatch.setattr("getpass.getpass", lambda prompt="", *a, **k: prompts.append(prompt) or NEW)
+    assert CredentialManager(str(tmp_path)).cmd_add("demo-pypi-tokens", var_name="DEMO_PYPI_B", overwrite=True) == 0
+    assert (root / "projects/demo-x.env").read_text() == f"DEMO_PYPI_A={OLD}-a\nDEMO_PYPI_B={NEW}\n"
+    assert prompts and "DEMO_PYPI_B" in prompts[0] and "None" not in prompts[0]
+
+
+def test_multi_var_entry_without_var_is_refused_and_names_the_choices(tmp_path, capsys, monkeypatch):
+    root, _ = _install(tmp_path, rows=(MULTI,), env_text=MULTI_ENV)
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: pytest.fail("must refuse before asking for a value"))
+    assert CredentialManager(str(tmp_path)).cmd_add("demo-pypi-tokens", overwrite=True) == 1
+    err = capsys.readouterr().err
+    assert "--var" in err and "DEMO_PYPI_A" in err and "DEMO_PYPI_B" in err
+    assert (root / "projects/demo-x.env").read_text() == MULTI_ENV
+
+
+def test_var_outside_the_entry_is_refused(tmp_path, monkeypatch):
+    root, _ = _install(tmp_path, rows=(MULTI,), env_text=MULTI_ENV)
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: pytest.fail("must refuse before asking for a value"))
+    assert CredentialManager(str(tmp_path)).cmd_add("demo-pypi-tokens", var_name="DEMO_PYPI_C", overwrite=True) == 1
+    assert (root / "projects/demo-x.env").read_text() == MULTI_ENV
+
+
+def test_var_that_contradicts_a_single_var_entry_is_refused(tmp_path, monkeypatch):
+    root, _ = _install(tmp_path)
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: pytest.fail("must refuse before asking for a value"))
+    assert CredentialManager(str(tmp_path)).cmd_add("demo-x-access-token", var_name="OTHER", overwrite=True) == 1
+    assert (root / "projects/demo-x.env").read_text() == f"OTHER=1\nDEMO_X_ACCESS_TOKEN={OLD}\nAFTER=2\n"
+
+
+def test_cli_flag_multi_var(tmp_path, monkeypatch):
+    import creds
+    root, _ = _install(tmp_path, rows=(MULTI,), env_text=MULTI_ENV)
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: NEW)
+    monkeypatch.setattr("sys.argv", ["creds", "--data-dir", str(tmp_path), "add", "demo-pypi-tokens",
+                                     "--var", "DEMO_PYPI_A", "--overwrite"])
+    assert creds.main() in (0, None)
+    assert (root / "projects/demo-x.env").read_text() == f"DEMO_PYPI_A={NEW}\nDEMO_PYPI_B={OLD}-b\n"

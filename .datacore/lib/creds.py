@@ -1104,6 +1104,11 @@ class CredentialManager:
 
         result = subprocess.run(cmd, cwd=str(secrets_dir))
         if result.returncode != 0:
+            # sync.sh can die without a word (2026-11-19: exit 128 on a diverged
+            # store, after printing only "Pulling from central..."), so say it here.
+            print(f"creds sync: scripts/sync.sh failed (exit {result.returncode}); this host's env was "
+                  f"not reassembled, so new values are not served and old ones may be stale. "
+                  f"Check the secrets repo: git -C {secrets_dir} status", file=sys.stderr)
             return result.returncode
         return self._push_store(secrets_dir, committed)
 
@@ -1255,7 +1260,7 @@ class CredentialManager:
             if existing:
                 print("Refusing: --overwrite writes a new value; --existing writes none.")
                 return 1
-            return self._overwrite(secrets_dir, cred_id, value)
+            return self._overwrite(secrets_dir, cred_id, value, var_name)
 
         # Interactive prompts for missing fields
         if not var_name:
@@ -1376,8 +1381,14 @@ class CredentialManager:
         print("Committed the credential store and index to the secrets repo")
         return self._sync_after_write()
 
-    def _overwrite(self, secrets_dir, cred_id: str, value: str = None) -> int:
-        """Replace an indexed credential's value in its declared store and commit it."""
+    def _overwrite(self, secrets_dir, cred_id: str, value: str = None, var_name: str = None) -> int:
+        """Replace an indexed credential's value in its declared store and commit it.
+
+        An entry names one variable (`var_name`) or several (`vars`). For several,
+        `var_name` (the --var flag) picks the one to replace; without it the
+        overwrite is refused and the choices are named (2026-11-19: `pypi-tokens`
+        prompted "New value for None" and refused, mid-release).
+        """
         from credential_store import overwrite_credential
         index = yaml.safe_load((secrets_dir / "credential-index.yaml").read_text()) or {}
         row = next((r for r in index.get("credentials") or [] if isinstance(r, dict) and r.get("id") == cred_id), None)
@@ -1391,16 +1402,26 @@ class CredentialManager:
         if env_file is None or not env_file.exists():
             print(f"Refusing: {cred_id} has no store file for scope {scope!r}.", file=sys.stderr)
             return 1
+        declared = [row["var_name"]] if row.get("var_name") else [v for v in (row.get("vars") or []) if v]
+        if var_name and var_name not in declared:
+            print(f"Refusing: {cred_id} holds {', '.join(declared) or 'no variable'}, not {var_name}.", file=sys.stderr)
+            return 1
+        if not var_name:
+            if len(declared) != 1:
+                print(f"Refusing: {cred_id} holds {len(declared)} variables ({', '.join(declared)}); "
+                      f"name the one to replace with --var.", file=sys.stderr)
+                return 1
+            var_name = declared[0]
         if not value:
             import getpass
-            value = getpass.getpass(f"New value for {row.get('var_name')}: ")
+            value = getpass.getpass(f"New value for {var_name}: ")
         try:
-            overwrite_credential(secrets_dir, env_file, row.get("var_name"), value)
+            overwrite_credential(secrets_dir, env_file, var_name, value)
         except (OSError, ValueError) as exc:
             print(f"Overwrite refused ({exc}); existing data preserved.", file=sys.stderr)
             return 1
         rel = str(env_file.resolve().relative_to(secrets_dir.resolve()))
-        print(f"Replaced {row.get('var_name')} in {rel}")
+        print(f"Replaced {var_name} in {rel}")
         import subprocess
         try:
             subprocess.run(["git", "commit", "--only", "-m", f"chore: overwrite credential {cred_id}", "--", rel],
