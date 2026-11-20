@@ -806,9 +806,11 @@ class Fleet:
         src = self.o.seed / "config" / "principals.yaml"
         doc = _load_doc(src) if src.exists() else {}
         keys = dict(doc.get("verify_keys") or {})
+        # The workstation too: signing is always on since 2026-10-31, so a
+        # workstation left out signed with a key it made itself while the
+        # sandbox registry still named the real one (week run of 2026-11-20:
+        # every one of its events failed the signature check on every machine).
         for m in self.machines.values():
-            if m.visitor:
-                continue
             d = m.home / ".datacore" / "keys"
             d.mkdir(parents=True, exist_ok=True, mode=0o700)
             k = Ed25519PrivateKey.generate()
