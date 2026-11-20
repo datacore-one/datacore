@@ -43,3 +43,20 @@ def test_an_unrelated_red_check_masks_nothing():
 def test_only_checks_red_before_any_fault_count():
     fault_break = dict(PROBE, **{"class": "fault"})
     assert sim.masked_by({"kind": "offline", "target": "plur-claw"}, [fault_break]) is None
+
+
+def test_a_misbehaviour_that_had_nothing_to_act_on_is_not_reached():
+    """Week runs of 2026-11-20: 'an agent hand-edits another writer's event log'
+    found no other writer's log in that space and did nothing. The first run
+    still scored it 'detected' (it was blamed for an unrelated red check), the
+    second 'cannot tell'. Neither is true: the fault never happened."""
+    calls = [{"mode": "hand_edit", "note": "no other writer's log to hand-edit", "rc": 0}]
+    assert sim.did_nothing(calls) == "no other writer's log to hand-edit"
+
+
+def test_a_misbehaviour_that_ran_or_was_refused_did_something():
+    assert sim.did_nothing([{"mode": "stash", "refused": ["git stash"]}]) is None
+    assert sim.did_nothing([{"mode": "stash", "ran": ["git stash"], "note": "x"}]) is None
+    assert sim.did_nothing([{"mode": "hand_edit", "note": "nothing"}, {"mode": "hand_edit", "ran": ["x"]}]) is None
+    assert sim.did_nothing([]) is None
+    assert sim.did_nothing([{"mode": "hand_edit"}]) is None      # no reason given: do not guess

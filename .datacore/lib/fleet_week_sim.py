@@ -2394,6 +2394,9 @@ class Week:
                 outcome = "not reached: the job made no model call while the fault was set"
             elif misbehaves and refused and not ran:
                 outcome = "prevented: the guard refused every misbehaving command"
+            elif misbehaves and did_nothing(related):
+                detected = None
+                outcome = f"not reached: the fault had nothing to act on ({did_nothing(related)})"
             elif detected:
                 outcome = "detected"
             elif masked_by(s, breaks):
@@ -2435,6 +2438,18 @@ class Week:
 #: Where `docker` puts a run when --out is not given. One folder per run, so
 #: the previous run is always there to compare with.
 RUNS_ROOT = Path.home() / ".datacore" / "state" / "fleet-sim"
+def did_nothing(calls: list[dict]) -> str | None:
+    """Why a misbehaving stand-in did nothing at all, or None when it did (or tried) something.
+
+    A fault whose stand-in neither ran nor was refused a single command never
+    happened; scoring it "detected" (it gets blamed for whatever else is red on
+    that machine) or "NOT DETECTED" would both be false."""
+    if not calls or any(c.get("ran") or c.get("refused") for c in calls):
+        return None
+    notes = [str(c["note"]) for c in calls if c.get("note")]
+    return notes[0] if len(notes) == len(calls) else None
+
+
 def masked_by(spec: dict, breaks: list[dict]) -> str | None:
     """The baseline break that hides this fault, as 'machine:subject', or None.
 
