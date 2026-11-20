@@ -2396,6 +2396,10 @@ class Week:
                 outcome = "prevented: the guard refused every misbehaving command"
             elif detected:
                 outcome = "detected"
+            elif masked_by(s, breaks):
+                detected = None
+                outcome = ("cannot tell: the check that should catch this was already red before any fault "
+                           f"({masked_by(s, breaks)})")
             else:
                 outcome = "NOT DETECTED"
             faults.append({"id": s["id"], "kind": s["kind"], "machine": s["target"], "desc": s["desc"],
@@ -2431,6 +2435,29 @@ class Week:
 #: Where `docker` puts a run when --out is not given. One folder per run, so
 #: the previous run is always there to compare with.
 RUNS_ROOT = Path.home() / ".datacore" / "state" / "fleet-sim"
+def masked_by(spec: dict, breaks: list[dict]) -> str | None:
+    """The baseline break that hides this fault, as 'machine:subject', or None.
+
+    A fault is scored by the NEW red checks it causes. When the check that
+    should catch it was already red before any fault (the sandbox cannot reach
+    a pod host, so the probe calls it DOWN all week; the stand-in never
+    processes an inbox, so the inbox job fails every night), the fault adds
+    nothing and "NOT DETECTED" would be a false statement about the product.
+    """
+    for b in breaks:
+        if b.get("class") != "baseline":
+            continue
+        if spec.get("kind") == "offline":
+            hit = re.search(rf"\b{re.escape(str(spec.get('target')))}\b", str(b.get("first_check") or ""))
+        elif spec.get("job"):
+            hit = b.get("machine") == spec.get("target") and re.search(spec["job"], str(b.get("subject") or ""))
+        else:
+            hit = False
+        if hit:
+            return f"{b['machine']}:{b['subject']}"
+    return None
+
+
 CLASSES = ("fault", "unexplained", "baseline")
 
 
