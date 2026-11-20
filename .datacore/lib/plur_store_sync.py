@@ -308,11 +308,18 @@ def fold_local_change(read_doc, now_doc, merged_doc):
     """This machine's own writes, landed after the sync read a record file,
     carried onto the merged result -- or None when that is not provably safe.
 
-    Only disjoint changes fold: every record the local writer added, edited or
-    deleted since the read must be one the merge left exactly as it was read.
-    A record both sides touched, a newly minted id the remote also holds, a
-    duplicate id or a changed file shape all return None, and the caller starts
-    the whole merge over from the new file. Nothing is ever blended here.
+    A record the writer touched and the merge left as read takes the writer's
+    version. A record BOTH touched is merged by field with the read version as
+    base, under the merge's own rules (a field both changed takes the merge's,
+    i.e. the remote's; deleted on one side and changed on the other is kept):
+    what starting over would compute, without the minutes in which the next
+    writer lands. Every session on every machine bumps the same hot engrams'
+    counters, so refusing this case failed whole runs (2026-11-15).
+
+    A newly minted id the merge also holds returns None: whether that is one
+    engram or two is the collision check's question, so the caller starts over.
+    So do a duplicate id and a changed file shape. Two different engrams are
+    never blended here.
     """
     try:
         (rr, rc), (cr, cc), (mr, mc) = _split(read_doc), _split(now_doc), _split(merged_doc)
@@ -326,14 +333,21 @@ def fold_local_change(read_doc, now_doc, merged_doc):
     if len(ri) != len(rr) or len(ci) != len(cr) or len(mi) != len(mr):
         return None
     changed = {k for k in ci if ri.get(k) != ci[k]} | {k for k in ri if k not in ci}
-    if any(mi.get(k) != ri.get(k) for k in changed):
-        return None
+    both: dict = {}  # touched by the writer AND by the merge -> the record to keep (None: gone)
+    for k in changed:
+        r, c, m = ri.get(k), ci.get(k), mi.get(k)
+        if m == r:
+            continue
+        if r is None:
+            return None
+        both[k] = m if c is None else c if m is None else _merge_fields(r, c, m)
     container = mc
     if rc != cc:
         if mc != rc:
             return None
         container = cc
-    out = [ci[k] if k in changed else v for k, v in mi.items() if k not in changed or k in ci]
+    out = [both.get(k, ci.get(k)) if k in changed else v for k, v in mi.items()
+           if k not in changed or k in ci or both.get(k) is not None]
     out += [ci[k] for k in ci if k in changed and k not in mi]
     return out if container is None else {**container, "engrams": out}
 
