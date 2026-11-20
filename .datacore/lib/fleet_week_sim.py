@@ -194,6 +194,38 @@ NOT_MODELLED = {
                             "night (needs-gated), so it is not run a second time (about 10 min a night)",
 }
 
+#: Jobs the sandbox replaces on every machine, by the script they run, and why.
+#: Unlike NOT_MODELLED (which only keeps the harness from starting a job), these
+#: are also started by ANOTHER job: the workstation's join runs its arrival
+#: duties itself, so the job has to be replaced in the machine's own job list
+#: (the untracked manifest.local.yaml; the tracked list is not touched).
+SLOW_JOBS = {
+    r"audit_trio_run\.sh suites": "runs every module's test suite, about ten minutes: it says nothing about a "
+                                  "fleet week, was cut at the sandbox's job limit every day, and took the "
+                                  "join that starts it down with it (week runs of 2026-11-20)",
+}
+NOT_MODELLED_MARK = "fleet-sim-not-modelled"
+NOT_MODELLED[NOT_MODELLED_MARK] = "replaced in the sandbox's own job list (SLOW_JOBS): " + "; ".join(SLOW_JOBS.values())
+
+
+def without_slow_jobs(tracked: dict | None, local: dict | None) -> dict | None:
+    """`local` (a machine's manifest.local.yaml, or None) with every SLOW_JOBS job
+    replaced by a line that says it is not modelled. Returned unchanged when
+    the machine's effective list holds none."""
+    own = [j for j in ((local or {}).get("jobs") or []) if isinstance(j, dict)]
+    effective = {j.get("name"): j for j in ((tracked or {}).get("jobs") or []) if isinstance(j, dict)}
+    effective.update({j.get("name"): j for j in own})
+    swap = {}
+    for name, j in effective.items():
+        why = next((w for pat, w in SLOW_JOBS.items() if re.search(pat, str(j.get("cmd") or ""))), None)
+        if why:
+            swap[name] = {**j, "cmd": f"echo {shlex.quote(NOT_MODELLED_MARK + ': ' + why)}"}
+    if not swap:
+        return local
+    jobs = [swap.pop(j.get("name"), j) for j in own]
+    return {**(local or {}), "jobs": jobs + list(swap.values())}
+
+
 #: Jobs modelled only when every machine can answer on :22 at its roster names
 #: (Fleet._serve_ports: root in the container, and not a fleet nested in a job).
 NEEDS_PORTS = {
@@ -969,6 +1001,11 @@ class Fleet:
             if src.exists():
                 (dest / rel).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest / rel)
+        own = dest / CONFIG_FILES["manifest.local.yaml"]
+        before = _load_doc(own) if own.exists() else None
+        after = without_slow_jobs(_load_doc(own.with_name("manifest.yaml")), before)
+        if after is not before:
+            own.write_text(yaml.safe_dump(after, sort_keys=False))
 
     def _build_machine(self, m: Machine, mods: list[Path], manifest_doc: dict | None,
                        ts: dt.datetime) -> None:
