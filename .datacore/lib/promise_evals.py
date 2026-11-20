@@ -106,6 +106,9 @@ def _first_line(el) -> str:
 EVAL_ACTOR = "promise-eval"
 
 
+_NO_RUNNER_SAID: list = []
+
+
 def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
     """{file name: all tests in it passed}"""
     import os
@@ -117,9 +120,18 @@ def run_suite(cwd: Path, files: list[Path], env_extra: dict) -> dict[str, bool]:
         env["DATACORE_AGENT_EVALS"] = "1"   # without it an agent eval fails by design (n-a is never a pass)
     result: dict[str, bool] = {f.name: False for f in files}   # a file pytest never reported is not a pass
     try:
-        subprocess.run([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--junitxml={xml}",
-                        *[str(f) for f in files]], cwd=cwd, env=env, capture_output=True, text=True,
-                       timeout=SUITE_TIMEOUT_S)
+        ran = subprocess.run([PY, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--junitxml={xml}",
+                              *[str(f) for f in files]], cwd=cwd, env=env, capture_output=True, text=True,
+                             timeout=SUITE_TIMEOUT_S)
+        if "No module named pytest" in (ran.stderr or ""):
+            # Started with a Python that has no test runner (2026-11-19: the
+            # system python3 instead of the installation's), every promise came
+            # back red and nothing said why.
+            if not _NO_RUNNER_SAID:
+                _NO_RUNNER_SAID.append(True)
+                print(f"NOT RUN: {PY} has no pytest, so no eval ran and every promise counts red. "
+                      "Run this with the installation's Python (.datacore/venv/bin/python).", file=sys.stderr)
+            return result
     except subprocess.TimeoutExpired:
         print(f"TIMEOUT after {SUITE_TIMEOUT_S}s in {cwd}: an eval hangs; every file in this batch counts red",
               file=sys.stderr)
