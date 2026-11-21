@@ -17,7 +17,7 @@ from pathlib import Path
 
 def roadmap_spaces(root):
     """Names of the spaces under `root` that carry a roadmap.yaml."""
-    return frozenset(p.parent.name for p in Path(root).glob("[0-9]-*/roadmap.yaml"))
+    return frozenset(p.parent.name for p in Path(root).glob("[0-9]*-*/roadmap.yaml"))
 
 
 def space_of(path, root):

@@ -247,7 +247,7 @@ def main() -> int:
     a = ap.parse_args()
     days = a.days if a.days is not None else (1 if a.op == "archive" else 7)
 
-    spaces = [s for s in sorted(a.root.glob("[0-9]-*"))
+    spaces = [s for s in sorted(a.root.glob("[0-9]*-*"))
               if (s / ".datacore" / "events").is_dir()
               and (not a.space or s.name == a.space)]
     if not spaces:

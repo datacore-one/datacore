@@ -48,7 +48,7 @@ def find_parent_space(datacore_root: Path) -> dict | None:
     if len(parts) < 2:
         return None
 
-    # First part must be a numbered space directory: [0-9]-*
+    # First part must be a numbered space directory: [0-9]*-*
     space_dir = parts[0]
     if not re.match(r"^\d+-", space_dir):
         return None

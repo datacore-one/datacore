@@ -128,7 +128,7 @@ def _discovered(root: Path) -> list | None:
 def _spaces(root: Path) -> list[Path]:
     found = _discovered(root)
     if found is None:  # fall back to the numbered-directory convention
-        return sorted(p for p in root.glob("[0-9]-*") if p.is_dir())
+        return sorted(p for p in root.glob("[0-9]*-*") if p.is_dir())
     # Personal and team spaces keep a ledger; a client space nested in a
     # team space is recorded by that team's log.
     return [s.path for s in found if getattr(s, "type", None) in LEDGER_TYPES]

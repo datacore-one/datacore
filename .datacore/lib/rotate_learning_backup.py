@@ -116,7 +116,7 @@ def _find_learning_files() -> list[Path]:
     _collect(DATACORE_ROOT / ".datacore" / "learning")
 
     # Spaces: numeric-prefix directories at root level
-    for space_dir in sorted(DATACORE_ROOT.glob("[0-9]-*")):
+    for space_dir in sorted(DATACORE_ROOT.glob("[0-9]*-*")):
         if space_dir.is_dir() and not space_dir.name.endswith("-archive"):
             _collect(space_dir / ".datacore" / "learning")
 
@@ -155,7 +155,7 @@ def rotate_spaces(space_names: list[str]) -> list[Path]:
             # Match by exact dir name or by suffix after the numeric prefix
             dirs = [
                 d / ".datacore" / "learning"
-                for d in DATACORE_ROOT.glob("[0-9]-*")
+                for d in DATACORE_ROOT.glob("[0-9]*-*")
                 if d.is_dir() and (d.name == name or d.name.endswith(f"-{name}") or name in d.name)
             ]
             if not dirs:

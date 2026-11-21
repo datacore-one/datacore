@@ -203,7 +203,7 @@ def main() -> int:
                          "later runs report every id churned since (no noise floor)")
     args = ap.parse_args()
 
-    spaces = sorted(args.root.glob("[0-9]-*"))
+    spaces = sorted(args.root.glob("[0-9]*-*"))
     # SCANNING NOTHING IS NOT A PASS. Pointed at the wrong root — a second
     # checkout, a moved file, a bad --root — this finds zero spaces, finds zero
     # findings in them, and exits 0. Every layer above reads that as healthy.

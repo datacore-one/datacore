@@ -60,7 +60,7 @@ def main() -> int:
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[2]))
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
-    spaces = sorted(p for p in Path(a.root).glob("[0-9]-*") if p.is_dir())
+    spaces = sorted(p for p in Path(a.root).glob("[0-9]*-*") if p.is_dir())
     tasks = []
     for space in spaces:
         if (space / ".datacore" / "events").is_dir():

@@ -76,7 +76,7 @@ def roster(root: Path) -> dict[str, list[str]]:
 def observed(root: Path) -> dict[str, dict]:
     """actor -> {spaces: {space: head_seq}} across every space log on this box."""
     out: dict[str, dict] = {}
-    for space in sorted(root.glob("[0-9]-*")):
+    for space in sorted(root.glob("[0-9]*-*")):
         ev = space / ".datacore" / "events"
         if not ev.is_dir():
             continue
@@ -120,7 +120,7 @@ def actor_history(root: Path) -> dict[str, list[int]]:
     """actor -> every event timestamp (ms) across every space on this box."""
     import json as _json
     out: dict[str, list[int]] = {}
-    for space in sorted(root.glob("[0-9]-*")):
+    for space in sorted(root.glob("[0-9]*-*")):
         ev = space / ".datacore" / "events"
         if not ev.is_dir():
             continue

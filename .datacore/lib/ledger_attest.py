@@ -264,7 +264,7 @@ def _space(space: str | None) -> Path | None:
             if (cand / ".datacore" / "events").is_dir():
                 return cand
     for r in roots:
-        for cand in sorted(r.glob("[0-9]-*")):
+        for cand in sorted(r.glob("[0-9]*-*")):
             if (cand / ".datacore" / "events").is_dir():
                 return cand
     return None

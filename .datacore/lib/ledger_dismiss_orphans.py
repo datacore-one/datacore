@@ -252,7 +252,7 @@ def main() -> int:
     root = Path(a.root).expanduser()
 
     spaces = ([root / a.space] if a.space
-              else sorted(p for p in root.glob("[0-9]-*")
+              else sorted(p for p in root.glob("[0-9]*-*")
                           if (p / ".datacore" / "events").is_dir()))
 
     total = 0

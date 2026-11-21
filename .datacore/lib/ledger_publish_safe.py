@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     import datetime
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
     published = 0
-    for space in sorted(p for p in ROOT.glob("[0-9]-*") if (p / ".git").exists()):
+    for space in sorted(p for p in ROOT.glob("[0-9]*-*") if (p / ".git").exists()):
         try:
             machine, human = split(dirty_tracked(space))
         except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):

@@ -221,7 +221,7 @@ ROGUE_BROKEN = ("stall", "garbage_done", "low_quality", "loop")
 
 
 def _spaces(cwd: Path) -> list[Path]:
-    return sorted(p for p in cwd.glob("[0-9]-*") if p.is_dir())
+    return sorted(p for p in cwd.glob("[0-9]*-*") if p.is_dir())
 
 
 def _other_space(cwd: Path, spec: dict) -> Path | None:

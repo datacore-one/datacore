@@ -54,7 +54,7 @@ def _root() -> Path:
 
 
 def _spaces(root: Path) -> list[Path]:
-    return [s for s in sorted(root.glob("[0-9]-*"))
+    return [s for s in sorted(root.glob("[0-9]*-*"))
             if (s / ".datacore" / "events").is_dir()]
 
 

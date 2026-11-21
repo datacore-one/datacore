@@ -1,7 +1,7 @@
 #!/bin/sh
 # Space-repo pre-commit hook — structural + safety checks.
 #
-# Installed into each [0-9]-*/.git/hooks/pre-commit by
+# Installed into each [0-9]*-*/.git/hooks/pre-commit by
 # .datacore/lib/install_space_hooks.py (idempotent; re-run weekly by
 # nightshift Phase 9.5 so the server's space repos get it too).
 #

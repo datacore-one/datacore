@@ -233,7 +233,7 @@ fi
 # Root-level allowlist: only system files at repo root
 # ========================================================
 # The system repo tracks only .datacore/ (methodology, tooling) and
-# .github/ (CI). All other content belongs in space repos ([0-9]-*/),
+# .github/ (CI). All other content belongs in space repos ([0-9]*-*/),
 # which are private and gitignored. This prevents ad-hoc directories
 # from being committed at root level.
 #
@@ -277,7 +277,7 @@ if [ -n "$ALL_STAGED" ]; then
         echo ""
         echo "Commit blocked: files outside allowed root-level paths."
         echo "The system repo only tracks .datacore/, .github/, and root config files."
-        echo "All other content belongs in a space repo ([0-9]-*/)."
+        echo "All other content belongs in a space repo ([0-9]*-*/)."
         echo ""
         echo "Offending files:"
         echo -e "$ROOT_VIOLATIONS"

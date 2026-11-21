@@ -67,7 +67,7 @@ def trapped_repos(host: str, root: str, data_dir: Path) -> list[dict]:
     whether the host's HEAD is an ancestor of it.
     """
     script = (
-        f'for d in {shlex.quote(root)}/[0-9]-*/; do '
+        f'for d in {shlex.quote(root)}/[0-9]*-*/; do '
         f'  [ -d "$d/.git" ] || continue; '
         f'  echo "$(basename $d) $(git -C "$d" rev-parse HEAD 2>/dev/null) '
         f'$(git -C "$d" remote get-url origin 2>/dev/null) '
@@ -299,7 +299,7 @@ def _local_clone_for(data_dir: Path, host_remote: str) -> Path | None:
     target = _normalise_remote(host_remote)
     if not target:
         return None
-    for candidate in sorted(data_dir.glob('[0-9]-*')):
+    for candidate in sorted(data_dir.glob('[0-9]*-*')):
         if not (candidate / '.git').is_dir():
             continue
         url = _run(['git', '-C', str(candidate), 'remote', 'get-url', 'origin']
@@ -424,7 +424,7 @@ def main() -> int:
     # rather than waiting on winston's twice-daily v2-verify.
     if a.forks:
         total = 0
-        for space in sorted(data_dir.glob('[0-9]-*')):
+        for space in sorted(data_dir.glob('[0-9]*-*')):
             found = ledger_forks(space)
             for line in found:
                 print(f"{space.name}/{line}")

@@ -113,7 +113,7 @@ def reachable(host: str, port: int, timeout: float = 4.0) -> bool:
 def fleet_remotes(root: Path) -> dict[str, int]:
     """host -> port for every distinct git remote the spaces point at."""
     out: dict[str, int] = {}
-    for space in sorted(root.glob("[0-9]-*")):
+    for space in sorted(root.glob("[0-9]*-*")):
         if not (space / ".git").exists():
             continue
         url = _run(["git", "-C", str(space), "remote", "get-url", "origin"]).strip()

@@ -566,7 +566,7 @@ entry costs the inbox processor one archive move.
 
 **Spawn ONE coordinator: `journal-coordinator`** — it discovers spaces and spawns `journal-entry-writer` per space.
 
-> ⚠ **Always delegate to the coordinator. Never call `journal-entry-writer` directly with a hardcoded space name.** It discovers all relevant spaces automatically via `ls -d [0-9]-*/`. Bypassing it causes spaces with actual work (e.g., root system files) to be silently skipped.
+> ⚠ **Always delegate to the coordinator. Never call `journal-entry-writer` directly with a hardcoded space name.** It discovers all relevant spaces automatically via `ls -d [0-9]*-*/`. Bypassing it causes spaces with actual work (e.g., root system files) to be silently skipped.
 
 #### Learning does NOT happen here any more
 
@@ -614,7 +614,7 @@ Session archived: .datacore/state/sessions/archive/YYYY-MM-DD/<id>/ ✓
 
 **How it works:**
 
-1. The coordinator discovers spaces via `ls -d [0-9]-*/`
+1. The coordinator discovers spaces via `ls -d [0-9]*-*/`
 2. It determines which spaces had relevant work
 3. It spawns a `journal-entry-writer` for each relevant space (in parallel)
 4. Those write to space-specific journals

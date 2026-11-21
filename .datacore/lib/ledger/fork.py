@@ -147,5 +147,5 @@ def detect(space: Path, ref: str = "origin/main") -> ForkReport:
 
 
 def detect_all(root: Path, ref: str = "origin/main") -> list[ForkReport]:
-    return [detect(s, ref) for s in sorted(root.glob("[0-9]-*"))
+    return [detect(s, ref) for s in sorted(root.glob("[0-9]*-*"))
             if (s / ".datacore" / "events").is_dir()]

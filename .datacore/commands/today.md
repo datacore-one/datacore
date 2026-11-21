@@ -379,7 +379,7 @@ Show what bots and automated processes committed across all spaces in the past 2
 This gives the user visibility into what changed while they weren't looking.
 
 ```bash
-# For each space directory (root and every [0-9]-* space):
+# For each space directory (root and every [0-9]*-* space):
 git -C [space] log --since="24 hours ago" --oneline --all 2>/dev/null
 ```
 

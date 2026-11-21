@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--root", type=Path, default=Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data")))
     a = ap.parse_args(argv)
     found = 0
-    for space in sorted(p for p in a.root.glob("[0-9]-*") if (p / ".git").exists()):
+    for space in sorted(p for p in a.root.glob("[0-9]*-*") if (p / ".git").exists()):
         items = unpublished_creates(space)
         if items:
             found += len(items)

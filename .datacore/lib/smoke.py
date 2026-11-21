@@ -103,7 +103,7 @@ def check_journal_opened() -> tuple[str, str]:
 
 def check_repos_health() -> tuple[str, str]:
     problems = []
-    for repo in sorted(DATA.glob("[0-9]-*")):
+    for repo in sorted(DATA.glob("[0-9]*-*")):
         if not (repo / ".git").exists():
             continue
         r = subprocess.run(["git", "-C", str(repo), "stash", "list"],

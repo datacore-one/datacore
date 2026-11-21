@@ -323,13 +323,13 @@ def kill_processes(procs: list[dict], dry_run: bool) -> list[dict]:
 
 
 def spaces() -> list[Path]:
-    return sorted(p for p in DATACORE_ROOT.glob("[0-9]-*") if p.is_dir())
+    return sorted(p for p in DATACORE_ROOT.glob("[0-9]*-*") if p.is_dir())
 
 
 def repo_status() -> list[dict]:
     """Every git repo in the installation, and whether it is clean and pushed."""
     repos = [DATACORE_ROOT] + [s for s in spaces() if (s / ".git").exists()]
-    repos += [p.parent for p in DATACORE_ROOT.glob("[0-9]-*/2-projects/*/.git")]
+    repos += [p.parent for p in DATACORE_ROOT.glob("[0-9]*-*/2-projects/*/.git")]
     repos += [p.parent for p in DATACORE_ROOT.glob(".datacore/dips/.git")]
     seen, out = set(), []
     for r in repos:
@@ -621,7 +621,7 @@ def finalize_session_scope(dry_run: bool, allow_journal_shrink: bool = False) ->
 
     # Bucket the session's files by the repo that owns them.
     repos = [DATACORE_ROOT] + [s for s in spaces() if (s / ".git").exists()]
-    project_repos = [p.parent for p in DATACORE_ROOT.glob("[0-9]-*/2-projects/*/.git")]
+    project_repos = [p.parent for p in DATACORE_ROOT.glob("[0-9]*-*/2-projects/*/.git")]
     by_repo: dict[Path, list[str]] = {}
     in_project: list[str] = []
     unversioned: list[str] = []
@@ -892,7 +892,7 @@ def session_scope_rows(mine: list[str], repos: list[dict]) -> tuple[dict, str]:
     inside one is reported, not scored. Repos this session did not touch
     are described in the second value and never fail the audit."""
     status = {r["repo"]: r for r in repos}
-    project_repos = [p.parent for p in DATACORE_ROOT.glob("[0-9]-*/2-projects/*/.git")]
+    project_repos = [p.parent for p in DATACORE_ROOT.glob("[0-9]*-*/2-projects/*/.git")]
     owners = [DATACORE_ROOT] + [s for s in spaces() if (s / ".git").exists()]
     by_repo: dict[str, set[str]] = {}
     in_project: list[str] = []

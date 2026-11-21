@@ -181,7 +181,7 @@ def discover(root: Path) -> tuple[list[tuple[Path, list]], list[str]]:
     from org_space import validate_org_write_path
     from org_transaction import digest, watch_file
     found, skipped = [], []
-    for f in sorted(root.glob("[0-9]-*/org/*.org")):
+    for f in sorted(root.glob("[0-9]*-*/org/*.org")):
         if "archive" in f.name.lower():
             continue
         try:

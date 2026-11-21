@@ -41,7 +41,7 @@ ROOT_DB_PATH = DATA_ROOT / ".datacore" / "knowledge.db"
 
 # Space configurations - dynamically discovered from filesystem
 def _discover_spaces(data_root=None):
-    """Discover spaces from [0-9]-* directories under data_root (default: DATA_ROOT)."""
+    """Discover spaces from [0-9]*-* directories under data_root (default: DATA_ROOT)."""
     if data_root is None:
         data_root = DATA_ROOT
     spaces = {}

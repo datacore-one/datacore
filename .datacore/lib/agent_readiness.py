@@ -43,7 +43,7 @@ ADAPTER = REPO / ".datacore/lib/org_workspace_adapter.py"
 # the same mistake: measure the set the executor actually selects.
 def _org_files() -> list[str]:
     out = []
-    for space in sorted(REPO.glob("[0-9]-*")):
+    for space in sorted(REPO.glob("[0-9]*-*")):
         d = space / "org"
         if d.is_dir():
             out += [str(p.relative_to(REPO)) for p in sorted(d.glob("*.org"))]
@@ -62,7 +62,7 @@ OPEN_STATES = {"NEXT", "TODO", "WAITING", "REVIEW"}
 # ROADMAP property there reported 357 findings for a file that does not exist.
 # SURFACE and DONE_WHEN are required everywhere — an agent always needs to know
 # where the work lands and how it will know it finished, roadmap or no roadmap.
-HAS_ROADMAP = {p.parent.name for p in REPO.glob("[0-9]-*/roadmap.yaml")}
+HAS_ROADMAP = {p.parent.name for p in REPO.glob("[0-9]*-*/roadmap.yaml")}
 
 
 def _space_of(node) -> str:

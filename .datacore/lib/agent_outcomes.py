@@ -27,7 +27,7 @@ def outcomes(root: Path = ROOT, days: int = 90, now: float | None = None) -> lis
     now = now or dt.datetime.now(dt.timezone.utc).timestamp()
     cutoff = now - days * 86400
     acc: dict[tuple, dict] = defaultdict(lambda: {"n": 0, "scored": 0, "score_sum": 0.0, "proposals": 0, "last": 0.0, "spaces": set()})
-    for f in glob.glob(str(root / "[0-9]-*" / ".datacore" / "events" / "*.jsonl")):
+    for f in glob.glob(str(root / "[0-9]*-*" / ".datacore" / "events" / "*.jsonl")):
         space = Path(f).parts[-4]
         for line in Path(f).read_text(errors="replace").splitlines():
             if '"item.complete"' not in line:

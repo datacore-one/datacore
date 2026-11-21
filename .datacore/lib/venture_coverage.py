@@ -45,7 +45,7 @@ STALE_DAYS = 30
 
 
 def _spaces() -> list[Path]:
-    return sorted(p for p in REPO.glob("[0-9]-*") if p.is_dir())
+    return sorted(p for p in REPO.glob("[0-9]*-*") if p.is_dir())
 
 
 def _mode(space: Path) -> str:

@@ -111,9 +111,11 @@ If intent is clear (e.g., "create a new team space for Acme"), proceed directly.
 
 1. **Find next available number**
    ```bash
-   ls -d ~/Data/[0-9]-*/ | tail -1
+   ls -d ~/Data/[0-9]*-*/ | xargs -n1 basename | cut -d- -f1 | grep -E '^[0-9]+$' | sort -n | tail -1
    ```
-   Extract the highest number and increment.
+   This prints the highest space number, compared as a number (so `10` comes
+   after `9`; a plain `ls | tail -1` sorts by text and would return `9`).
+   Increment it: after `9-*` the next space is `10-[name]`.
 
 2. **Try cloning from GitHub template**
    ```bash

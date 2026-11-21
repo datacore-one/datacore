@@ -540,7 +540,7 @@ class HookExecutor:
                 pass
 
         # Discover spaces
-        pattern = config.get("pattern", "[0-9]-*/")
+        pattern = config.get("pattern", "[0-9]*-*/")
         exclude = config.get("exclude", [])
         filter_by_activity = config.get("filter_by_git_activity", False)
         activity_window = config.get("activity_window", "24h")

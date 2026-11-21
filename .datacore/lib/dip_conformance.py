@@ -191,7 +191,7 @@ def _classify(p: str) -> str:
             # `datacore-app/daemon/...` (relative to 2-projects/) and DIP-0048
             # names `packages/core/...` (relative to the project itself).
             # Replacing one with the other regressed the first.
-            for pattern in ("[0-9]-*/2-projects", "[0-9]-*/2-projects/*"):
+            for pattern in ("[0-9]*-*/2-projects", "[0-9]*-*/2-projects/*"):
                 for proj in ROOT.glob(pattern):
                     if (proj / rel).exists():
                         return "exists"
@@ -228,7 +228,7 @@ def _basename_index() -> set[str]:
     if _BASENAMES is not None:
         return _BASENAMES
     names: set[str] = set()
-    roots = [ROOT / ".datacore"] + [d for d in ROOT.glob("[0-9]-*") if d.is_dir()]
+    roots = [ROOT / ".datacore"] + [d for d in ROOT.glob("[0-9]*-*") if d.is_dir()]
     skip = {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}
     for r in roots:
         for dirpath, dirnames, filenames in __import__("os").walk(r):

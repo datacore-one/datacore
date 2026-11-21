@@ -749,7 +749,7 @@ class _Spent(RuntimeError):
 
 # ── what one slice reads ────────────────────────────────────────────────────
 _IMPORT = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))", re.M)
-_PATHLIT = re.compile(r"""["']((?:\.datacore|\d-[\w-]+|lib|tests|daemon|datacored)/[\w./-]+\.(?:py|sh|yaml|yml|md))["']""")
+_PATHLIT = re.compile(r"""["']((?:\.datacore|\d+-[\w-]+|lib|tests|daemon|datacored)/[\w./-]+\.(?:py|sh|yaml|yml|md))["']""")
 
 
 def _module_candidates(repo: Path, name: str, near: Path) -> list[Path]:

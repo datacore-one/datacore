@@ -44,7 +44,7 @@ def repos() -> dict[str, Path]:
     # Findings cite commits from the project repos too -- the MCP server and
     # org-workspace are where several source fixes actually landed. A commit
     # looks "not in the release" only because nobody looked in its repository.
-    for space in sorted(ROOT.glob('[0-9]-*/2-projects/*/.git')):
+    for space in sorted(ROOT.glob('[0-9]*-*/2-projects/*/.git')):
         found['project:' + space.parent.name] = space.parent
     return {k: v for k, v in found.items() if (v / '.git').exists()}
 

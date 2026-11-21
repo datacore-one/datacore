@@ -118,7 +118,7 @@ def _load_routing_overrides() -> None:
     except ImportError:
         return
     root = Path(os.environ.get('DATACORE_ROOT', Path.home() / 'Data'))
-    for candidate in root.glob('[0-9]-*/.datacore/research-routing.yaml'):
+    for candidate in root.glob('[0-9]*-*/.datacore/research-routing.yaml'):
         try:
             cfg = yaml.safe_load(candidate.read_text()) or {}
         except Exception:

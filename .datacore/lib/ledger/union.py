@@ -21,8 +21,8 @@ from pathlib import Path
 
 
 def ledger_spaces(root) -> list[Path]:
-    """`[0-9]-*` folders under `root` that keep a ledger (an events log)."""
-    return [p for p in sorted(Path(root).glob("[0-9]-*"))
+    """`[0-9]*-*` folders under `root` that keep a ledger (an events log)."""
+    return [p for p in sorted(Path(root).glob("[0-9]*-*"))
             if p.is_dir() and any((p / ".datacore" / "events").glob("*.jsonl"))]
 
 

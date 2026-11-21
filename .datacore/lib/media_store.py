@@ -100,7 +100,7 @@ def backup(root: Path, dest: str, *, host: str | None = None,
     host = host or _host()
     remote, _, base = dest.rpartition(":") if ":" in dest else ("", "", dest)
     failures = copied = 0
-    for space in sorted(Path(root).glob("[0-9]-*")):
+    for space in sorted(Path(root).glob("[0-9]*-*")):
         media = space / "media"
         if not media.is_dir() or space.name.endswith("-archive"):
             continue
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 bad += 1
         return 1 if bad else 0
     if a.cmd == "ignore":
-        for space in sorted(DATA.glob("[0-9]-*")):
+        for space in sorted(DATA.glob("[0-9]*-*")):
             if (space / ".git").exists() and not space.name.endswith("-archive"):
                 print(f"[media] {space.name}: {'added' if ensure_ignored(space) else 'already ignored'}")
         return 0

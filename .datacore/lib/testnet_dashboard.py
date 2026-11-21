@@ -181,7 +181,7 @@ def forbidden_terms() -> list[str]:
         for m in re.finditer(r"^\s{2}([a-z][\w-]*):\s*$", text, re.M):
             terms.add(m.group(1))
 
-    for space in ROOT.glob("[0-9]-*"):
+    for space in ROOT.glob("[0-9]*-*"):
         if space.is_dir() and space.name != FIRM:
             terms.add(space.name)
             terms.add(space.name.split("-", 1)[1])

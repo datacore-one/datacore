@@ -240,7 +240,7 @@ has_hook() {  # has_hook DIR
   local hp; hp=$(git -C "$1" config core.hooksPath 2>/dev/null)
   { [ -n "$hp" ] && (cd "$1" && [ -x "$hp/pre-commit" ]); } || [ -e "$1/.git/hooks/pre-commit" ]
 }
-for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
+for _d in "$HOME/Data" "$HOME"/Data/[0-9]*-*; do
   [ -e "$_d/.git" ] || continue
   has_hook "$_d" && continue
   if [ "$VERIFY_ONLY" = 0 ] && [ -x "$GITHOOKS/pre-commit" ]; then
@@ -314,7 +314,7 @@ if [ ! -f "$GUARD_SRC" ]; then
 else
   cmp -s "$GUARD_SRC" "$GUARD_DST" && log "OK  update guard in place ($GUARD_DST)" || { log "FAIL update guard missing or stale: $GUARD_DST"; fail=1; }
 fi
-for _d in "$HOME/Data" "$HOME"/Data/[0-9]-*; do
+for _d in "$HOME/Data" "$HOME"/Data/[0-9]*-*; do
   [ -e "$_d/.git" ] || continue
   has_hook "$_d" && log "OK  safety hooks: $(basename "$_d")" || { log "FAIL no pre-commit hook in $_d"; fail=1; }
 done
