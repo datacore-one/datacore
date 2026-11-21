@@ -80,12 +80,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config_plane import ConfigError, doctor  # noqa: E402
 from jobs.checks import check_repo_sync, run_check  # noqa: E402
 from jobs.manifest import Job, ManifestError, load_manifest  # noqa: E402
-from ledger.log import EventLog  # noqa: E402
+from ledger.log import EventLog, StaleLogError  # noqa: E402
 
 DATACORE_ROOT = Path(os.environ.get("DATACORE_ROOT", Path.home() / "Data"))
 WINSTON_SEND = (
     DATACORE_ROOT / ".datacore" / "modules" / "chief-of-staff" / "server" / "lib" / "winston_send.py"
 )
+
+
+#: Set when this run could not record its verdicts: the run still checks every
+#: job and ends non-zero, so the checker's own job goes red and says why.
+_ledger_stopped: list[str] = []
+
+
+def _attest(log, job_name: str, ok: bool, failures: list):
+    """Record one verdict in the ledger; returns the log to keep using, or None.
+
+    A stopped event log (StaleLogError; only the owner repairs it) stops the
+    APPENDS, as the ledger demands, and nothing else: the checks go on. On the
+    chief of staff's machine every hourly run died here on its first job from
+    2026-11-07 to 2026-11-21, so no job was checked for two weeks.
+    """
+    if log is None:
+        return None
+    try:
+        log.append("metric.attest",
+                   {"metric": "job.verify", "job": job_name, "ok": ok, "failures": failures})
+        return log
+    except StaleLogError as exc:
+        _ledger_stopped.append(str(exc))
+        print("job.verify: verdicts are NOT being recorded in the ledger, and nothing more is "
+              f"appended this run: {str(exc).splitlines()[0]}\n"
+              "  Every job is still checked below. Only the owner repairs a stopped log: "
+              ".datacore/docs/recovery.md#stale-log-stalelogerror-the-log-was-rewound",
+              file=sys.stderr)
+        return None
 
 
 def _default_actor() -> str:
@@ -938,11 +967,7 @@ def main(argv: list[str] | None = None) -> None:
         total_artifacts += len(job.artifacts)
         ok = not failures
 
-        if log is not None:
-            log.append(
-                "metric.attest",
-                {"metric": "job.verify", "job": job.name, "ok": ok, "failures": failures},
-            )
+        log = _attest(log, job.name, ok, failures)
 
         if not ok:
             any_failed = True
@@ -981,6 +1006,10 @@ def main(argv: list[str] | None = None) -> None:
     _pending_escalations = None
 
     if any_failed:
+        sys.exit(1)
+    if _ledger_stopped:
+        print(f"checked {len(machine_jobs)} jobs, none failed, but the verdicts were not recorded "
+              "(stopped event log, see above)", file=sys.stderr)
         sys.exit(1)
 
     print(f"OK {len(machine_jobs)} jobs {total_artifacts} artifacts")
