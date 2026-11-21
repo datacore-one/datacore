@@ -654,7 +654,7 @@ def cmd_listen(a: argparse.Namespace) -> None:
         _show(line, remote_root)
     cur_file.write_text(str(cursor))
     tail = subprocess.Popen(SSH + [f"mkdir -p {QUEUES} && touch {queue} && tail -n +{cursor + 1} -F {queue}"],
-                            stdout=subprocess.PIPE, text=True)
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
 
     # The ssh child outlives a stopped listener unless closed here: observed
     # 2026-10-28, a terminated listener left `ssh … tail -F` running on both
@@ -694,7 +694,7 @@ def cmd_ds(a: argparse.Namespace) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a") as lf:
         listener = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "listen", group],
-                                    stdout=lf, stderr=lf, start_new_session=True)
+                                    stdin=subprocess.DEVNULL, stdout=lf, stderr=lf, start_new_session=True)
 
     def _cleanup(*_):
         try:
