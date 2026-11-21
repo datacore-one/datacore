@@ -122,7 +122,7 @@ def measure(*, fetch: bool, now_ms: float | None = None, sleep_log: str | None =
     ahead = behind = gap = 0
     blocked: list[str] = []
     errors: list[str] = []
-    for space in sorted(ROOT.glob("[0-9]-*")):
+    for space in sorted(ROOT.glob("[0-9]*-*")):
         if not (space / ".datacore" / "events").is_dir() or not (space / ".git").exists():
             continue
         for row in seq_gap.scan_space(space, fetch=fetch, now_ms=now_ms, sleep_log=sleep_log):

@@ -124,7 +124,7 @@ def main() -> int:
     args = ap.parse_args()
 
     total = 0
-    for sp in sorted(args.root.glob("[0-9]-*")):
+    for sp in sorted(args.root.glob("[0-9]*-*")):
         if args.space and sp.name != args.space:
             continue
         r = restore_space(sp, args.apply)

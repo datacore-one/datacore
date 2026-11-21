@@ -208,7 +208,7 @@ def _looks_like_space(path: Path) -> bool:
 
 
 def _legacy_dirs(root: Path) -> list[Path]:
-    """Directories the old ``[0-9]-*/`` glob would have matched.
+    """Numbered directories matching ``LEGACY_GLOB`` (``[0-9]*-*/``).
 
     Two filters narrow the raw glob to directories that are plausibly spaces:
 
@@ -271,7 +271,7 @@ def discover_spaces(
         root: install root. Defaults to :func:`data_root`.
         types: keep only these ``space.type`` values. Legacy directories have
             no declared type, so a ``types`` filter necessarily excludes them.
-        include_legacy: also return ``[0-9]-*/`` directories that carry no
+        include_legacy: also return ``[0-9]*-*/`` directories that carry no
             marker. Defaults to True: completing migration in one installation
             cannot establish that every supported installation has migrated.
             Identity-sensitive callers may explicitly require marked spaces;

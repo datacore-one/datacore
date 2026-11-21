@@ -52,7 +52,7 @@ trap 'rm -rf "$LOCK" ${VIEW:+"$VIEW"}' EXIT
 echo "=== $(date '+%F %T') ledger ingest (hourly) ==="
 ROOT_ARGS=()   # none: the sweep reads DATACORE_ROOT, as it always has
 skipped=""
-for d in "$DATACORE_ROOT"/[0-9]-*; do
+for d in "$DATACORE_ROOT"/[0-9]*-*; do
   name="$(basename "$d")"
   [ -f "$STATE/phase1-converge-$name.failed" ] || continue
   [ "$(cat "$d/.datacore/ledger-phase" 2>/dev/null | tr -d '[:space:]')" = "1" ] || continue
@@ -62,7 +62,7 @@ done
 if [ -n "$skipped" ]; then
   # The sweep takes a root, not a list: give it one without the skipped spaces.
   VIEW="$(mktemp -d "$STATE/ledger-ingest-root.XXXXXX")" || exit 2
-  for d in "$DATACORE_ROOT"/[0-9]-*; do
+  for d in "$DATACORE_ROOT"/[0-9]*-*; do
     [ -d "$d" ] || continue
     case "$skipped" in *" $(basename "$d") "*) continue;; esac
     ln -s "$d" "$VIEW/$(basename "$d")"

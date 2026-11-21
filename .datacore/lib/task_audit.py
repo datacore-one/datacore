@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """task_audit.py — whole-system task analysis: duplicates and inefficiencies.
 
-Loads every [0-9]-*/org/*.org via org_workspace (one workspace per file, so
+Loads every [0-9]*-*/org/*.org via org_workspace (one workspace per file, so
 dedup_ids never crosses file boundaries) and reports:
 
   1. counts by space x state, live vs archive
@@ -85,7 +85,7 @@ def tokens_of(norm):
 
 def load_tasks():
     tasks, failures = [], []
-    for f in sorted(glob.glob('[0-9]-*/org/*.org')):
+    for f in sorted(glob.glob('[0-9]*-*/org/*.org')):
         space = f.split('/')[0]
         is_archive = 'archive' in Path(f).name
         try:

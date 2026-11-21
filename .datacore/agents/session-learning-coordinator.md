@@ -2,7 +2,7 @@
 name: session-learning-coordinator
 description: |
   Orchestrate learning extraction across all spaces in a Datacore installation.
-  Analyzes session context, discovers spaces via [0-9]-*/ pattern, classifies
+  Analyzes session context, discovers spaces via [0-9]*-*/ pattern, classifies
   learnings by space relevance, and spawns session-learning for each.
 
   Use this agent at end of /wrap-up, /gtd-daily-end, or /tomorrow commands.
@@ -42,7 +42,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 | Question | Answer |
 |----------|--------|
-| How to discover spaces? | `ls -d [0-9]-*/` |
+| How to discover spaces? | `ls -d [0-9]*-*/` |
 | Where do learnings go? | `[space]/.datacore/learning/` |
 | Who writes learnings? | `session-learning` subagents |
 | When to skip a space? | No learnings relevant to that space |
@@ -83,7 +83,7 @@ Spaces are discovered dynamically, NOT hardcoded.
 
 **Discovery method:**
 ```bash
-ls -d [0-9]-*/  # Returns all space directories
+ls -d [0-9]*-*/  # Returns all space directories
 ```
 
 **Expected pattern:** `[0-9]-[name]/` (e.g., `0-personal/`, `1-teamspace/`, `2-projectspace/`)
@@ -135,7 +135,7 @@ git status --short .datacore/
 
 ```bash
 # 1. Discover spaces
-ls -d [0-9]-*/
+ls -d [0-9]*-*/
 
 # 2. Check uncommitted changes per space
 git status --short 0-personal/

@@ -29,7 +29,7 @@ def main() -> int:
     HOOK_SOURCE.chmod(0o755)
 
     installed, skipped, foreign = [], [], []
-    for space in sorted(DATA_DIR.glob('[0-9]-*')):
+    for space in sorted(DATA_DIR.glob('[0-9]*-*')):
         hooks_dir = space / '.git' / 'hooks'
         if not hooks_dir.is_dir():
             continue  # not a git repo (or worktree-style) — skip

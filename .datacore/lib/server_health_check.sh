@@ -41,7 +41,7 @@ EOF
 
 # Check sizes of key directories
 # Every space this install has (N-name), not a list of ours (INS-3).
-for dir in "$DATACORE_ROOT" "$DATACORE_ROOT"/[0-9]-* "$DATACORE_ROOT/.datacore"; do
+for dir in "$DATACORE_ROOT" "$DATACORE_ROOT"/[0-9]*-* "$DATACORE_ROOT/.datacore"; do
     if [ -d "$dir" ]; then
         size=$(du -sh "$dir" 2>/dev/null | cut -f1)
         echo "| $dir | $size | |" >> "$REPORT_FILE"
@@ -100,7 +100,7 @@ cat >> "$REPORT_FILE" << 'EOF'
 EOF
 
 # Check each space repository
-for space in "$DATACORE_ROOT"/[0-9]-*; do
+for space in "$DATACORE_ROOT"/[0-9]*-*; do
     if [ -d "$space" ] && [ -d "$space/.git" ]; then
         space_name=$(basename "$space")
         echo "#### $space_name" >> "$REPORT_FILE"
@@ -252,7 +252,7 @@ echo "- **Disk Usage:** ${usage}%" >> "$REPORT_FILE"
 
 repos_clean=0
 repos_dirty=0
-for space in "$DATACORE_ROOT"/[0-9]-*; do
+for space in "$DATACORE_ROOT"/[0-9]*-*; do
     if [ -d "$space/.git" ]; then
         cd "$space"
         if [ -z "$(git status -s)" ]; then

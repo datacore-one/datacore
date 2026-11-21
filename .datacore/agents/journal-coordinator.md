@@ -2,7 +2,7 @@
 name: journal-coordinator
 description: |
   Orchestrate journal entries across all spaces in a Datacore installation.
-  Analyzes session context, discovers spaces via [0-9]-*/ pattern, determines
+  Analyzes session context, discovers spaces via [0-9]*-*/ pattern, determines
   which spaces had work done, and spawns journal-entry-writer for each.
 
   Use this agent at end of /wrap-up, /gtd-daily-end, or /tomorrow commands.
@@ -42,7 +42,7 @@ Engrams encode learned behavioral patterns that improve task quality.
 
 | Question | Answer |
 |----------|--------|
-| How to discover spaces? | `ls -d [0-9]-*/` |
+| How to discover spaces? | `ls -d [0-9]*-*/` |
 | Personal journal path? | `0-personal/journal/YYYY-MM-DD.md` |
 | Team journal path? | `[N]-[name]/journal/YYYY-MM-DD.md` |
 | Always include? | `0-personal` (even if just summary) |
@@ -83,7 +83,7 @@ Spaces are discovered dynamically, NOT hardcoded.
 
 **Discovery method:**
 ```bash
-ls -d [0-9]-*/  # Returns all space directories
+ls -d [0-9]*-*/  # Returns all space directories
 ```
 
 **Expected pattern:** `[0-9]-[name]/` (e.g., `0-personal/`, `1-teamspace/`, `2-projectspace/`, `3-partnerspace/`)
@@ -94,7 +94,7 @@ ls -d [0-9]-*/  # Returns all space directories
 
 If the prompt includes focus mode context (space, project, contributor), skip space discovery:
 
-1. **Do NOT run `ls -d [0-9]-*/`** — the space is already known
+1. **Do NOT run `ls -d [0-9]*-*/`** — the space is already known
 2. Use the provided space directory, project name, and contributor
 3. Pass these directly to `journal-entry-writer`
 4. Personal journal (`0-personal`) still gets an entry (use git status to determine if there's content)
@@ -153,7 +153,7 @@ Use conversation for **qualitative details**, not for detecting which spaces:
 
 ```bash
 # 1. Discover spaces
-ls -d [0-9]-*/
+ls -d [0-9]*-*/
 
 # 2. Check uncommitted changes per space
 git status --short 0-personal/

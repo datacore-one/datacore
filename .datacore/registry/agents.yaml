@@ -104,7 +104,7 @@ profiles:
       - inherit: defaults
       - type: discover-spaces
         config:
-          pattern: '[0-9]-*/'
+          pattern: '[0-9]*-*/'
           filter_by_git_activity: true
           activity_window: 24h
           exclude:
@@ -193,7 +193,7 @@ profiles:
       - inherit: defaults
       - type: discover-spaces
         config:
-          pattern: '[0-9]-*/'
+          pattern: '[0-9]*-*/'
           filter_by_git_activity: true
       - type: context-inject
         config:

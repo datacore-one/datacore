@@ -103,7 +103,7 @@ def probe() -> list[dict]:
 
     # -- data root ------------------------------------------------------
     root = Path(os.environ.get("DATACORE_ROOT", str(Path.home() / "Data")))
-    spaces = sorted(p.name for p in root.glob("[0-9]-*") if (p / ".datacore" / "events").is_dir())
+    spaces = sorted(p.name for p in root.glob("[0-9]*-*") if (p / ".datacore" / "events").is_dir())
     row("data-root", root, bool(spaces),
         f"{len(spaces)} space(s) with an event log" if spaces
         else "no space with an event log under this root")

@@ -73,8 +73,8 @@ Scan learning files across all spaces for entries newer than the cursor:
 **Files to scan:**
 - `.datacore/learning/patterns.md` (root)
 - `.datacore/learning/corrections.md` (root)
-- `[0-9]-*/.datacore/learning/patterns.md` (per-space)
-- `[0-9]-*/.datacore/learning/corrections.md` (per-space)
+- `[0-9]*-*/.datacore/learning/patterns.md` (per-space)
+- `[0-9]*-*/.datacore/learning/corrections.md` (per-space)
 
 **Entry detection:** Learning files use one of two formats depending on the file type:
 - `corrections.md` and `patterns.md`: `## YYYY-MM-DD: Title` sections (level-2 heading with date in title, full prose body, separated by `---`)

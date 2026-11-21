@@ -223,7 +223,7 @@ def run_all_spaces(root: Path, apply: bool) -> int:
     failure is reported and does not stop the others; the exit code is
     non-zero only if a space failed."""
     failed = 0
-    for space in sorted(p for p in root.glob("[0-9]-*") if (p / "org" / "inbox.org").is_file()):
+    for space in sorted(p for p in root.glob("[0-9]*-*") if (p / "org" / "inbox.org").is_file()):
         try:
             r = dedup_space(space, apply)
         except Exception as e:  # report, keep going

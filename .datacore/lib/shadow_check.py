@@ -44,7 +44,7 @@ PHASE1_CLEAN_DAYS = int(os.environ.get("DATACORE_PHASE1_DAYS", "5"))
 def main() -> int:
     spaces, clean = {}, 0
     flipped = []
-    for space in sorted(ROOT.glob("[0-9]-*")):
+    for space in sorted(ROOT.glob("[0-9]*-*")):
         if not (space / "org" / "next_actions.org").exists():
             continue
         # A space already in Phase 1 has passed this gate. Its org file is now

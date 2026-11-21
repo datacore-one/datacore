@@ -483,7 +483,7 @@ def prepare(src: Path, seed: Path) -> Path:
     from spaces import space_for
     system = space_for("system", src)
     spaces = []
-    for d in sorted(src.glob("[0-9]-*")):
+    for d in sorted(src.glob("[0-9]*-*")):
         if not (d / ".git").exists():
             continue
         files = {}

@@ -262,7 +262,7 @@ def ledger() -> dict:
     space whose chain broke, would leave every condition green.
     """
     spaces, total_events, total_writers, failed = [], 0, 0, []
-    for space in sorted(ROOT.glob("[0-9]-*")):
+    for space in sorted(ROOT.glob("[0-9]*-*")):
         events_dir = space / ".datacore" / "events"
         if not events_dir.is_dir():
             continue

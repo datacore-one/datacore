@@ -331,7 +331,7 @@ def _existing_task_ids(root: Path) -> set[str] | None:
     not proof that every task is gone, and pruning on it would empty the queue.
     """
     ids: set[str] = set()
-    for org in sorted(Path(root).glob("[0-9]-*/org")):
+    for org in sorted(Path(root).glob("[0-9]*-*/org")):
         for f in org.rglob("*.org"):
             if f.name == "nightshift.org" or any(p.startswith(".") for p in f.relative_to(org).parts):
                 continue

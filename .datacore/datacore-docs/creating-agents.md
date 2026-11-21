@@ -390,7 +390,7 @@ Break workflows into discrete steps. Easier to debug and maintain.
 For multi-space operations, use the coordinator pattern:
 
 ```
-command → coordinator → [discover spaces via [0-9]-*/]
+command → coordinator → [discover spaces via [0-9]*-*/]
                      → subagent (space: 0-personal)
                      → subagent (space: 1-[name])
                      → subagent (space: 2-[name])

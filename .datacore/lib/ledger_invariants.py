@@ -63,7 +63,7 @@ class Finding:
 
 
 def _spaces(root: Path) -> list[Path]:
-    return [p for p in sorted(root.glob("[0-9]-*"))
+    return [p for p in sorted(root.glob("[0-9]*-*"))
             if (p / ".datacore" / "events").is_dir()]
 
 

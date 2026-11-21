@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", type=Path, help="one repository instead of the whole root")
     ap.add_argument("--apply", action="store_true", help="reclaim (default: report only)")
     args = ap.parse_args(argv)
-    repos = [args.repo] if args.repo else [p for p in [args.root, *sorted(args.root.glob("[0-9]-*"))]
+    repos = [args.repo] if args.repo else [p for p in [args.root, *sorted(args.root.glob("[0-9]*-*"))]
                                            if (p / ".git").exists()]
     total = freed = 0
     for repo in repos:

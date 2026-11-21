@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--apply", action="store_true", help="clear on proof (default: dry run)")
     args = ap.parse_args(argv)
     repos = [args.repo] if args.repo else sorted(
-        p for p in [args.root, *args.root.glob("[0-9]-*")] if (p / ".git").exists())
+        p for p in [args.root, *args.root.glob("[0-9]*-*")] if (p / ".git").exists())
     rc = 0
     for repo in repos:
         repo = repo.resolve()

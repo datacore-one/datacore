@@ -61,7 +61,7 @@ def sunset_reviews(root: Path, today: date | None = None) -> tuple[list[tuple[st
     import yaml
     today = today or date.today()
     past, undated = [], []
-    for vy in sorted(root.glob("[0-9]-*/venture.yaml")):
+    for vy in sorted(root.glob("[0-9]*-*/venture.yaml")):
         try:
             v = yaml.safe_load(vy.read_text()) or {}
         except Exception:  # noqa: BLE001
@@ -334,7 +334,7 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
         paused = {str(x) for x in (_control(root).get("paused") or [])}
     except Exception:  # noqa: BLE001 -- no control file: nothing is paused here to report
         paused = set()
-    for space in sorted(root.glob("[0-9]-*")):
+    for space in sorted(root.glob("[0-9]*-*")):
         vy = space / "venture.yaml"
         if not vy.is_file():
             vy = space / ".datacore" / "venture.yaml"
@@ -413,7 +413,7 @@ def duty_owner(root: Path, venture: str, role: str, freq: str, name: str) -> str
     import yaml
     from cadence_engine import all_assignments
     name = str(name).split(" [", 1)[0]
-    for space in sorted(Path(root).glob("[0-9]-*")):
+    for space in sorted(Path(root).glob("[0-9]*-*")):
         for vy in (space / "venture.yaml", space / ".datacore" / "venture.yaml"):
             if not vy.is_file():
                 continue

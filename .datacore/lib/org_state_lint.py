@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DIP-0009 v2.0 state-loop lint.
 
-Checks live org files ([0-9]-*/org/*.org, archives excluded) for:
+Checks live org files ([0-9]*-*/org/*.org, archives excluded) for:
   1. header drift — every #+SEQ_TODO must equal the canon exactly
   2. retired state keywords on headings (QUEUED WORKING FAILED PAUSED ASSIGN
      PROJECT ACTIVE COMPLETED EXECUTING)
@@ -26,7 +26,7 @@ _HEAD = re.compile(r'^(\*+)\s+([A-Z]+)\s')
 
 
 def _live_org_files(root: Path):
-    for fp in sorted(root.glob('[0-9]-*/org/*.org')):
+    for fp in sorted(root.glob('[0-9]*-*/org/*.org')):
         if 'archive' in fp.name.lower():
             continue
         yield fp

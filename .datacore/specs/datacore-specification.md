@@ -1159,7 +1159,7 @@ Local Machine                     Personal Server (e.g., nightshift)
 1. Initialize 0-personal as separate git repo locally
 2. Create working repo on server with `receive.denyCurrentBranch updateInstead`
 3. Add server as origin: `git remote add origin user@server:Data/0-personal`
-4. Sync script handles it automatically (uses `[0-9]-*/` pattern)
+4. Sync script handles it automatically (uses `[0-9]*-*/` pattern)
 
 ### Privacy & Data Classification
 
@@ -1180,7 +1180,7 @@ install.yaml
 CLAUDE.md
 
 # All spaces (separate repos - including 0-personal if self-hosted)
-/[0-9]-*/
+/[0-9]*-*/
 
 # Modules (cloned on install)
 .datacore/modules/

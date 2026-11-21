@@ -37,7 +37,7 @@ HEADING_TAGS = re.compile(r"^(\*+\s+.*?)(\s+)(:(?:[^\s:]+:)+)\s*$")
 
 def find_org_files() -> list[Path]:
     out: list[Path] = []
-    for space in sorted(ROOT.glob("[0-9]-*")):
+    for space in sorted(ROOT.glob("[0-9]*-*")):
         for sub in ("org",):
             d = space / sub
             if d.is_dir():

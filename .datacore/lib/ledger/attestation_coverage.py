@@ -41,7 +41,7 @@ SIGN_FLAG = "DATACORE_LEDGER_SIGN"
 
 def _ledgers() -> list[pathlib.Path]:
     out = list((ROOT / ".datacore" / "events").glob("*.jsonl"))
-    for space in ROOT.glob("[0-9]-*"):
+    for space in ROOT.glob("[0-9]*-*"):
         out += list((space / ".datacore" / "events").glob("*.jsonl"))
     return sorted(out)
 

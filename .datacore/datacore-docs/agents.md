@@ -30,7 +30,7 @@ All available agents in Datacore.
 | `session-learning` | Extract learnings for single space | Subagent |
 | `session-learning-coordinator` | Orchestrate learning extraction across spaces | Coordinator |
 
-**Coordinator Pattern:** Coordinators discover spaces dynamically via `[0-9]-*/` and spawn subagents in parallel.
+**Coordinator Pattern:** Coordinators discover spaces dynamically via `[0-9]*-*/` and spawn subagents in parallel.
 
 ### Knowledge Processing
 
@@ -72,7 +72,7 @@ See [Creating Agents](creating-agents.md) for the agent file format and best pra
 For operations that need to run across multiple spaces:
 
 ```
-command → coordinator → [discover spaces via [0-9]-*/]
+command → coordinator → [discover spaces via [0-9]*-*/]
                      → subagent (space: 0-personal)
                      → subagent (space: 1-[name])
                      → subagent (space: 2-[name])

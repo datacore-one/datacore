@@ -83,7 +83,7 @@ def _generated(f):
 def scan():
     """One read pass over every org file → task dicts (audit-compatible)."""
     tasks = []
-    for f in sorted(glob.glob('[0-9]-*/org/*.org')):
+    for f in sorted(glob.glob('[0-9]*-*/org/*.org')):
         generated = _generated(f)
         try:
             ws = OrgWorkspace()

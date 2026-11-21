@@ -361,7 +361,7 @@ def main() -> int:
                     help="an unpublished event younger than this is pending, not a gap (publish is hourly)")
     args = ap.parse_args()
 
-    spaces = [d for d in sorted(args.root.glob("[0-9]-*"))
+    spaces = [d for d in sorted(args.root.glob("[0-9]*-*"))
               if (d / ".git").exists() and (not args.space or d.name == args.space)]
 
     # SCANNING NOTHING IS NOT A PASS — this detector already shipped that bug

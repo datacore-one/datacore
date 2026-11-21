@@ -144,7 +144,7 @@ def check_ledger(rep: Report, quick: bool) -> None:
     # seq 82 is correct and expected, like two Ethereum accounts at nonce 82.
     import collections
     dup = gap = 0
-    for f in ROOT.glob("[0-9]-*/.datacore/events/*.jsonl"):
+    for f in ROOT.glob("[0-9]*-*/.datacore/events/*.jsonl"):
         seqs = []
         for line in f.read_text(errors="replace").splitlines():
             if line.strip():
@@ -404,7 +404,7 @@ def check_writer_authorship(rep: Report) -> None:
         return
     reviewed = _reviewed_commits()
     foreign, unbound, seen = [], set(), 0
-    for f in sorted(ROOT.glob("[0-9]-*/.datacore/events/*.jsonl")):
+    for f in sorted(ROOT.glob("[0-9]*-*/.datacore/events/*.jsonl")):
         space, writer = f.parts[-4], f.stem
         allowed = allowed_emails(writer)
         if not allowed:
@@ -473,7 +473,7 @@ def check_signed_events(rep: Report) -> None:
         return
     actor = this_actor()
     checked = bad = 0
-    for f in ROOT.glob(f"[0-9]-*/.datacore/events/{actor}.jsonl"):
+    for f in ROOT.glob(f"[0-9]*-*/.datacore/events/{actor}.jsonl"):
         lines = [l for l in f.read_text(errors="replace").splitlines() if l.strip()][-20:]
         for line in lines:
             try:
@@ -534,7 +534,7 @@ def check_stores(rep: Report) -> None:
     (datacore-lens#1); a ceiling here is what notices that before the disk does.
     """
     tracked, unread = [], []
-    for space in sorted(ROOT.glob("[0-9]-*")):
+    for space in sorted(ROOT.glob("[0-9]*-*")):
         if not (space / ".git").exists():
             continue
         rc, out = run(["git", "-C", str(space), "ls-files", "--",
@@ -753,7 +753,7 @@ def roadmap_trust_violations(root: Path | None = None) -> list[str]:
     import yaml
     root = root or ROOT
     bad = []
-    for rm in sorted(root.glob("[0-9]-*/roadmap.yaml")):
+    for rm in sorted(root.glob("[0-9]*-*/roadmap.yaml")):
         try:
             data = yaml.safe_load(rm.read_text()) or {}
         except Exception as exc:  # noqa: BLE001 — an unreadable roadmap is itself a violation
@@ -782,7 +782,7 @@ def check_trust_labels(rep: Report) -> None:
     where "done" is most often written by hand.
     """
     bad = roadmap_trust_violations()
-    roadmaps = list(ROOT.glob("[0-9]-*/roadmap.yaml"))
+    roadmaps = list(ROOT.glob("[0-9]*-*/roadmap.yaml"))
     if not roadmaps:
         rep.add("0035", "done names its check", None, "no roadmap.yaml on this host", skipped=True)
         return

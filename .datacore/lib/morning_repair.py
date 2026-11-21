@@ -298,7 +298,7 @@ def venture_heartbeats() -> list[dict]:
     """Ventures whose heartbeat refuses their own data (W2). The scoreboard printed a
     heartbeat parse error for ten days and nothing alerted: printed is not reported."""
     out = []
-    for p in sorted(ROOT.glob("[0-9]-*/.datacore/state/heartbeat.json")):
+    for p in sorted(ROOT.glob("[0-9]*-*/.datacore/state/heartbeat.json")):
         try:
             hb = json.loads(p.read_text())
         except (OSError, ValueError):

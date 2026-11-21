@@ -221,14 +221,14 @@ def format_report(issues: List[LintIssue]) -> str:
 
 
 def _spaces(root: Path) -> List[Path]:
-    return [p for p in sorted(root.glob('[0-9]-*')) if (p / '3-knowledge').is_dir()]
+    return [p for p in sorted(root.glob('[0-9]*-*')) if (p / '3-knowledge').is_dir()]
 
 
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Lint knowledge bases: broken links, orphans, gaps.")
     ap.add_argument('--space', action='append', type=Path, default=[],
                     help='a space folder (holding 3-knowledge/); repeatable')
-    ap.add_argument('--all-spaces', action='store_true', help='every <root>/[0-9]-* space')
+    ap.add_argument('--all-spaces', action='store_true', help='every <root>/[0-9]*-* space')
     ap.add_argument('--root', type=Path, default=Path(os.environ.get('DATACORE_ROOT', '~/Data')).expanduser())
     ap.add_argument('--max-listed', type=int, default=40, help='findings listed per space and check')
     ap.add_argument('--state', type=Path, default=None,

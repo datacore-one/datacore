@@ -16,7 +16,7 @@ What this does
 --------------
 One journal per SPACE that had work, plus the agent's personal journal. Not two
 tiers — a session can touch several spaces and each gets its own professional
-entry, which is the pattern journal-coordinator already uses (discover [0-9]-*/,
+entry, which is the pattern journal-coordinator already uses (discover [0-9]*-*/,
 write per space that had work).
 
   personal   verbose: reasoning, dead ends, what I got wrong, what I learned

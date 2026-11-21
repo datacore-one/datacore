@@ -147,7 +147,7 @@ def test_dip_0002_composed_context_is_generated_and_untracked():
 def test_dip_0002_base_layer_exists_for_every_composed_context():
     """A composed file with no base layer cannot be regenerated — the source of
     truth would be the output."""
-    for composed in [ROOT / "CLAUDE.md"] + list(ROOT.glob("[0-9]-*/CLAUDE.md")):
+    for composed in [ROOT / "CLAUDE.md"] + list(ROOT.glob("[0-9]*-*/CLAUDE.md")):
         if not composed.exists():
             continue
         # Only files that ARE composed need a base layer. A hand-written
@@ -225,7 +225,7 @@ LEARNING_FILES = ("patterns.md", "corrections.md", "preferences.md")
 # A space is a numbered directory with its OWN context file. `0-inbox` is a
 # numbered drop directory that also happens to carry a .datacore/, and treating
 # it as a space demanded learning files from a folder that holds one transcript.
-SPACES = sorted(d for d in ROOT.glob("[0-9]-*")
+SPACES = sorted(d for d in ROOT.glob("[0-9]*-*")
                 if d.is_dir() and (d / ".datacore").is_dir()
                 and (d / "CLAUDE.md").is_file())
 

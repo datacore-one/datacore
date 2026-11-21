@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DIP-0009 v2.0 one-time rollout: canonical header + state migration.
 
-For every live org file ([0-9]-*/org/*.org, archives excluded):
+For every live org file ([0-9]*-*/org/*.org, archives excluded):
   - replace any #+SEQ_TODO line with the v2.0 canon (insert at top if absent)
   - migrate heading state keywords:
       QUEUED->NEXT  WORKING->NEXT  FAILED->REVIEW  PAUSED->WAITING
@@ -160,7 +160,7 @@ def main() -> int:
 
     if a.ledger:
         total = 0
-        for space_dir in sorted(root.glob('[0-9]-*')):
+        for space_dir in sorted(root.glob('[0-9]*-*')):
             if not (space_dir / '.datacore' / 'events').is_dir():
                 continue
             res = migrate_ledger(space_dir, execute)
@@ -177,7 +177,7 @@ def main() -> int:
         return 0
 
     by_space: dict = {}
-    for fp in sorted(root.glob('[0-9]-*/org/*.org')):
+    for fp in sorted(root.glob('[0-9]*-*/org/*.org')):
         if 'archive' in fp.name.lower():
             continue
         by_space.setdefault(fp.parts[len(root.parts)], []).append(fp)

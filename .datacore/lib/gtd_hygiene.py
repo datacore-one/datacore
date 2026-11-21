@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """GTD hygiene runner — the maintenance loop the adapter never had.
 
-Runs per space ([0-9]-*/org/next_actions.org):
+Runs per space ([0-9]*-*/org/next_actions.org):
   - archive-done   (DONE/CANCELLED older than --min-age days; daily)
   - ensure-ids     (add :ID: to tasks missing them; idempotent; daily)
   - deadlines      (overdue report, surfaced in summary; daily)

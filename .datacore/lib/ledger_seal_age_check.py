@@ -84,7 +84,7 @@ def check_space(space_dir, *, now_ms: int | None = None, max_age_s: int | None =
 
 def hub_spaces(root: Path) -> list[Path]:
     out = []
-    for p in sorted(Path(root).glob("[0-9]-*")):
+    for p in sorted(Path(root).glob("[0-9]*-*")):
         try:
             if p.is_dir() and hubmod.load_config(p) is not None:
                 out.append(p)
