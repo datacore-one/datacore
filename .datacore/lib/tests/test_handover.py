@@ -306,3 +306,22 @@ def test_a_left_repo_is_not_asked_of_dayshift():
     assert [r["path"] for r in kept] == ["2-datacore"]
     assert left == ["1-datafund/2-projects/website"]
     assert drop_left_repos(repos, []) == (repos, [])
+
+
+def test_background_processes_never_read_the_terminal():
+    """`ds` runs a preview listener (and its `ssh … tail -F`) beside the interactive
+    `ssh -t … tmux attach`. A background child that inherits stdin reads the same
+    keyboard, so keystrokes vanish into it and the owner cannot type in the session
+    (owner, 2026-11-21: "when I do ds I can't type; ssh + tmux works"). Every Popen
+    in handover is a background process, so each must take stdin from /dev/null."""
+    import ast
+    import handover
+
+    tree = ast.parse(Path(handover.__file__).read_text())
+    popens = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "Popen"]
+    assert popens, "expected the listener Popen calls"
+    for call in popens:
+        stdin = {k.arg: k.value for k in call.keywords}.get("stdin")
+        assert stdin is not None and ast.unparse(stdin) == "subprocess.DEVNULL", \
+            f"Popen at line {call.lineno} inherits the terminal's stdin"
