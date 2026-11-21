@@ -59,6 +59,15 @@ def plur_env(tmp_path):
     work = tmp_path / "Data"
     work.mkdir()
     (work / ".plur.yaml").write_text("scope: project:fixture\n")
+    # The memory tool uses a folder's .plur.yaml only once the user has allowed
+    # that folder, and takes that decision only from a person at a terminal.
+    # The eval's "user" owns the throwaway store: it records there that this
+    # throwaway folder is allowed (owner decision 2026-11-21, as for SPC-6).
+    decisions = store / "folders.yaml"
+    decisions.parent.mkdir(parents=True, exist_ok=True)
+    decisions.write_text("version: 1\nfolders:\n"
+                         f"  - path: {json.dumps(str(work.resolve()))}\n"
+                         "    plur: 'on'\n    scope: project:fixture\n    trusted: true\n")
     return env, work, shim
 
 

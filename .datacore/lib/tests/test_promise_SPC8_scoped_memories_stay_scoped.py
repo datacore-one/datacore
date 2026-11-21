@@ -56,6 +56,15 @@ def world(tmp_path):
         d.mkdir(parents=True)
         (d / ".plur.yaml").write_text(f"scope: project:{name}\n")
         spaces[name] = d
+    # The memory tool uses a folder's .plur.yaml only once the user has allowed
+    # that folder, and takes that decision only from a person at a terminal.
+    # The eval's "user" owns the throwaway store: it records there that these
+    # two throwaway folders are allowed (owner decision 2026-11-21, as for SPC-6).
+    decisions = store / "folders.yaml"
+    decisions.parent.mkdir(parents=True, exist_ok=True)
+    decisions.write_text("version: 1\nfolders:\n" + "".join(
+        f"  - path: {json.dumps(str(d.resolve()))}\n"
+        f"    plur: 'on'\n    scope: project:{name}\n    trusted: true\n" for name, d in spaces.items()))
     for statement, scope in (("Meridian trades settle in USDC on Solana at T+0", "project:6-meridian"),
                              ("Commit messages use the imperative mood", None)):
         args = [str(shim), "--json", "--quiet", "learn", statement] + (["--scope", scope] if scope else [])
