@@ -536,8 +536,8 @@ tests:
     why: reads the Mac's ~/.claude/projects and its mirror in 0-personal/traces
   - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
     only: [test_loaded_memory_holds_no_forbidden_detail]
-    needs: [machine:mac]
-    why: reads the auto-memory index of the Mac's project folder for ~/Data (under ~/.claude/projects)
+    needs: [workstation]
+    why: reads the auto-memory index of this machine's project folder for the installation (under ~/.claude/projects); only a machine where the owner works has one
   - test: .datacore/lib/tests/test_promise_MEM_19_memory_holds_no_names_or_secrets.py
     only: [test_writing_a_forbidden_index_line_is_not_silently_allowed]
     needs: [workstation]
