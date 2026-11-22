@@ -108,6 +108,7 @@ def _verify_elsewhere(target: Path, fname: str, kind: str):
     probe = (
         "import importlib.util,sys,json;"
         f"p=r'{target}';"
+        f"sys.path.insert(0,r'{LIB}');"
         "sys.path.insert(0,str(__import__('pathlib').Path(p).parent));"
         "sys.path.insert(0,str(__import__('pathlib').Path(p).parent.parent));"
         "s=importlib.util.spec_from_file_location('probe_m',p);"

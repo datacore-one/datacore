@@ -20,13 +20,24 @@ set -uo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
 datacore_runtime_init || exit $?
 OUT="$STATE/v2-verify.log"
+TMP="$(mktemp "$(dirname -- "$OUT")/.$(basename -- "$OUT").XXXXXX")" || exit 2
 
 {
   echo "=== $(date -u '+%F %T') UTC — v2 verify on $(hostname -s) ==="
-  "$PY" "$LIB/v2_verify.py"
+  # PYTHONUNBUFFERED: belt-and-suspenders with the in-code reconfigure
+  # — the code does it too, but a wrapper env costs nothing and survives
+  # an import-time crash before reconfigure() runs.
+  PYTHONUNBUFFERED=1 \
+    timeout 1800 "$PY" "$LIB/v2_verify.py"
   rc=$?
-  echo "v2-verify: exit $rc"
-} > "$OUT" 2>&1
+  if [ "$rc" = 124 ]; then
+    echo "v2-verify: TIMED OUT after 30 min (timeout 1800)"
+  else
+    echo "v2-verify: exit $rc"
+  fi
+} > "$TMP" 2>&1
+
+mv -f "$TMP" "$OUT" || { rm -f "$TMP"; exit 2; }
 # Keep the process status directly; log text is never an exit-status source.
 
 # Alert only on a real failure. The checklist prints "0 FAIL" when healthy, and
