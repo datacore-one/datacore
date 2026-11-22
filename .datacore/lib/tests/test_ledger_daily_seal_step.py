@@ -73,6 +73,9 @@ SEAL_STUB = '''import os, sys
 from pathlib import Path
 Path(os.environ["AUDIT_DIR"], "seal-args").write_text(" ".join(sys.argv[1:]))
 mode = os.environ.get("AUDIT_SEAL", "ok")
+if mode == "hang":
+    import time
+    time.sleep(60)
 if mode == "fail":
     print("  FAIL 2-datacore     the newest seal does not verify: state root mismatch")
     print("FAIL 1 of 1 hub space(s) not freshly sealed by their grantor: 2-datacore")
@@ -101,6 +104,8 @@ def _daily(tmp_path, seal="ok", with_checker=True):
         (scripts / "ledger_seal_age_check.py").write_text(SEAL_STUB)
     env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
                DATACORE_PYTHON=sys.executable, AUDIT_DIR=str(audit), AUDIT_SEAL=seal)
+    if seal == "hang":
+        env["LEDGER_SEAL_TIMEOUT_S"] = "2"      # only the hang test shortens the limit
     proc = subprocess.run(["bash", str(scripts / "ledger_daily.sh")], env=env,
                           capture_output=True, text=True, timeout=60)
     return proc, state, audit
@@ -136,3 +141,15 @@ def test_the_seal_log_is_read_by_the_daily_contract():
     assert "ledger-seal.log" in arts, arts
     assert arts["ledger-seal.log"]["check"] == "last_line_regex"
     assert arts["ledger-seal.log"]["arg"].startswith("^OK ")
+
+
+def test_a_seal_check_that_hangs_is_cut_off_and_written_as_not_checked(tmp_path):
+    """The hub down, the check waits on it for ever: the daily run stalled, the
+    scheduler killed it and the seal log was never written (the chief of
+    staff's machine, 2026-11-03). Cut off, it says so and is not a pass."""
+    started = time.time()
+    proc, state, _ = _daily(tmp_path, seal="hang")
+    assert time.time() - started < 40, "the hung seal check was not cut off"
+    log = (state / "ledger-seal.log").read_text().splitlines()
+    assert log[-1].startswith("NOT CHECKED") and "timed out" in log[-1], log
+    assert not any(l.startswith("OK ") for l in log), log
