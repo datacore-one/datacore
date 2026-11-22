@@ -201,6 +201,15 @@ def ensure_keypair(
             raise _retired(actor, key_path, verify_key_hex, current, _iso(history[-1][0]))
         if registered is not None and registered != verify_key_hex and verify_key_hex != current:
             raise _mismatch(actor, key_path, verify_key_hex, registry_path, str(current or registered))
+        # When the local registry is silent (empty scratch DATACORE_KEYS_DIR),
+        # the fleet registry (principals.yaml) is the final word. A key that
+        # does not match it would produce signatures the fleet verifier rejects,
+        # and the local registry's silence is no licence to sign with a wrong
+        # key (box-ledger-verify failure, 2026-11-01).
+        if registered is None:
+            pk = principals_verify_key(actor)
+            if pk is not None and verify_key_hex != pk and verify_key_hex != current:
+                raise _mismatch(actor, key_path, verify_key_hex, registry_path, pk)
         if not exists:
             atomic_write_text(key_path, private_key.private_bytes_raw().hex())
         registry["actors"][actor] = verify_key_hex
