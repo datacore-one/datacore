@@ -20,8 +20,26 @@ if str(LIB) not in sys.path:
 from ledger import keys  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _as_in_production(monkeypatch):
+    """The rule is off under the test fence (no real write can happen there);
+    these tests judge it as a real run sees it. They write only to tmp_path."""
+    monkeypatch.delenv("DATACORE_LEDGER_WRITE_FENCE", raising=False)
+
+
 def _dirs(tmp_path):
     return tmp_path / "keys", tmp_path / "registry.json"
+
+
+def test_under_the_test_fence_a_scratch_key_for_a_registered_writer_is_allowed(tmp_path, monkeypatch):
+    """A process a test starts signs into a scratch space with a scratch key under
+    the host's own writer name; the fence already refuses every real write."""
+    keys_dir, registry = _dirs(tmp_path)
+    monkeypatch.setenv("DATACORE_LEDGER_WRITE_FENCE", str(tmp_path / "real"))
+    monkeypatch.setattr(keys, "principals_verify_key", lambda actor: "ab" * 32)
+    monkeypatch.setattr(keys, "key_history", lambda actor: [])
+    keys.ensure_keypair("writer-f", keys_dir=keys_dir, registry_path=registry)
+    assert (keys_dir / "writer-f.key").exists()
 
 
 def test_a_fresh_key_is_refused_when_the_fleet_registry_names_another(tmp_path, monkeypatch):
