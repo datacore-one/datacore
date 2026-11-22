@@ -103,8 +103,9 @@ def _daily(tmp_path, seal="ok", with_checker=True):
     if with_checker:
         (scripts / "ledger_seal_age_check.py").write_text(SEAL_STUB)
     env = dict(os.environ, DATACORE_ROOT=str(root), DATACORE_STATE=str(state),
-               DATACORE_PYTHON=sys.executable, AUDIT_DIR=str(audit), AUDIT_SEAL=seal,
-               LEDGER_SEAL_TIMEOUT_S="2")
+               DATACORE_PYTHON=sys.executable, AUDIT_DIR=str(audit), AUDIT_SEAL=seal)
+    if seal == "hang":
+        env["LEDGER_SEAL_TIMEOUT_S"] = "2"      # only the hang test shortens the limit
     proc = subprocess.run(["bash", str(scripts / "ledger_daily.sh")], env=env,
                           capture_output=True, text=True, timeout=60)
     return proc, state, audit
