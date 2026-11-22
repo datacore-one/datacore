@@ -1499,7 +1499,7 @@ jobs:
     artifacts:
       - path: "~/.datacore/state/v2-verify.log"
         check: regex
-        arg: '0 FAIL'
+        arg: '\b0 FAIL'
         max_age_hours: 26
 
   # box-weekly-plan (cos_weekly_plan.sh, Sunday 07:00) was retired 2026-09-30 by the
