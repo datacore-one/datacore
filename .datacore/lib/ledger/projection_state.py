@@ -267,7 +267,16 @@ def sync_generated(space, state, actor, dry_run=False, current_text=None):
             raise ProjectionConflict('CREATED edit requires explicit ledger provenance reconciliation')
         item = state.items[identity]
         if item.status == 'dismissed':
-            raise ProjectionConflict('edit to a terminal item requires explicit reconciliation')
+            # A dismissed item reopened or edited in org: the file wants a
+            # change the ledger refuses because the item is terminal (DIP-0034).
+            # One such item must not block the entire space's ingest every hour
+            # (0-personal, 2026-11-22). Skip it; the human who reopened it
+            # must reconcile it in the ledger explicitly.
+            import sys
+            print(f'  skipping dismissed item {identity}: would change '
+                  f'{sorted(changed.keys())}; reconcile explicitly in the ledger',
+                  file=sys.stderr)
+            continue
         terminal = changed.get('state') in ('DONE', 'CANCELLED')
         if terminal:
             kind = 'done' if changed.pop('state') == 'DONE' else 'dropped'
@@ -284,8 +293,21 @@ def sync_generated(space, state, actor, dry_run=False, current_text=None):
             # this same call had just made: nightshift 2026-09-17 20:40Z, where
             # the retained conflict stopped 5-plur projecting at all.
             dismissals.append((identity, kind))
-    if set(live['items']) - set(merged['items']):
-        raise ProjectionConflict('removed heading needs explicit archive/deletion evidence')
+    removed = set(live['items']) - set(merged['items'])
+    if removed:
+        # Items in the projection but not in the merged result: the file
+        # deleted them without archival evidence. Warn per item instead of
+        # crashing the whole space (0-personal, 2026-11-22). Active items
+        # moved to another org file (e.g. inbox.org) need GTD processing,
+        # not a blocked ingest.
+        import sys
+        for identity in sorted(removed):
+            item = state.items.get(identity)
+            title = (item.payload or {}).get('title', '?') if item else '?'
+            status = item.status if item else 'unknown'
+            print(f'  removed heading {identity} ({status}): {title[:100]}; '
+                  f'missing from file, still in ledger',
+                  file=sys.stderr)
     if not dry_run:
         log = EventLog(space, actor)
         appended = []
