@@ -28,10 +28,16 @@ def test_a_fresh_key_is_refused_when_the_fleet_registry_names_another(tmp_path, 
     keys_dir, registry = _dirs(tmp_path)
     monkeypatch.setattr(keys, "principals_verify_key", lambda actor: "ab" * 32)
     monkeypatch.setattr(keys, "key_history", lambda actor: [])
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(keys.KeyMismatch) as exc:
         keys.ensure_keypair("writer-x", keys_dir=keys_dir, registry_path=registry)
-    assert "writer-x" in str(exc.value)
-    assert not (keys_dir / "writer-x.key").exists(), "the refused key must not be kept"
+    assert "writer-x" in str(exc.value) and "principals.yaml" in str(exc.value)
+    # The fresh key stays on disk, unregistered: the owner's rotation reads it
+    # from there. It is refused again on every later attempt, never signed with.
+    kept = (keys_dir / "writer-x.key").read_text()
+    with pytest.raises(keys.KeyMismatch):
+        keys.ensure_keypair("writer-x", keys_dir=keys_dir, registry_path=registry)
+    assert (keys_dir / "writer-x.key").read_text() == kept, "a second attempt minted another key"
+    assert not registry.exists() or "writer-x" not in registry.read_text(), "the refused key was registered"
 
 
 def test_a_writer_the_fleet_registry_does_not_know_still_gets_a_key(tmp_path, monkeypatch):

@@ -209,7 +209,14 @@ def ensure_keypair(
         if registered is None:
             pk = principals_verify_key(actor)
             if pk is not None and verify_key_hex != pk and verify_key_hex != current:
-                raise _mismatch(actor, key_path, verify_key_hex, registry_path, pk)
+                # KEEP the fresh key on disk, unregistered and unused: a rebuilt
+                # host needs it to exist for the owner's rotation, which reads the
+                # key file here (ledger_keys_collect --rotate). Discarding it made
+                # every attempt mint a different throwaway and the documented
+                # recovery impossible (review, 2026-11-22). Nothing is signed.
+                if not exists:
+                    atomic_write_text(key_path, private_key.private_bytes_raw().hex())
+                raise _mismatch(actor, key_path, verify_key_hex, principals_path(), pk)
         if not exists:
             atomic_write_text(key_path, private_key.private_bytes_raw().hex())
         registry["actors"][actor] = verify_key_hex
