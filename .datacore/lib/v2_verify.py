@@ -137,7 +137,7 @@ def check_ledger(rep: Report, quick: bool) -> None:
         # Leave a progress breadcrumb after each space so that an OOM kill
         # mid-verification at least records which spaces were checked.
         if not _STDOUT_IS_TTY:
-            print(f"  DIP-0034 ledger verify: {i}/{len(sp)} ({s.name})", flush=True)
+            print(f"  DIP-0034 ledger verify: {i}/{len(sp)} ({s.name})", file=sys.stderr, flush=True)
     ok = len(sp) - len(bad) - len(slow)
     detail = f"{ok}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else "") \
         + (f"; not checked (timeout/crash/no key here): {', '.join(slow)}" if slow else "")
@@ -1551,7 +1551,8 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
 
     rep = Report()
-    _print = lambda: _print_report(rep)
+    # --json prints one JSON document and nothing else: no rows as it goes.
+    _print = (lambda: None) if a.json else (lambda: _print_report(rep))
 
     # Run every check group and print what we have so far after each one.
     # A process that never reaches the summary line (OOM, cron timeout,

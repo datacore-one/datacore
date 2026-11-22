@@ -38,3 +38,22 @@ def test_each_row_is_printed_once_and_the_summary_comes_last(capsys):
     last = [l for l in out.splitlines() if l.strip()][-1]
     assert "v2 REGRESSED" in last and "jobs declared" in last, last
     assert "3 check(s): 2 ok, 1 FAIL" in out, out
+
+
+def test_json_output_is_one_json_document(capsys, monkeypatch):
+    """`--json` is read by machines: no rows before the document (review, 2026-11-22)."""
+    import json
+    V._printed.update(n=0, dip=None)
+    for name in [n for n in dir(V) if n.startswith("check_")]:
+        monkeypatch.setattr(V, name, lambda rep, *a, _n=name: rep.add("0000", _n, True, "{stubbed}"))
+    monkeypatch.setattr(sys, "argv", ["v2_verify.py", "--json"])
+    V.main()
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["checks"] and all(c["ok"] is True for c in doc["checks"])
+
+
+def test_the_wrapper_writes_the_log_in_place():
+    """Renaming a finished log into place left the PREVIOUS run's log, a pass and
+    still fresh, whenever the wrapper itself was killed (review, 2026-11-22)."""
+    sh = (LIB / "v2_verify_run.sh").read_text()
+    assert '} > "$OUT" 2>&1' in sh and "mktemp" not in sh and "mv -f" not in sh

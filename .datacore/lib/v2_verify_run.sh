@@ -20,7 +20,6 @@ set -uo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime_shell.sh" || exit 2
 datacore_runtime_init || exit $?
 OUT="$STATE/v2-verify.log"
-TMP="$(mktemp "$(dirname -- "$OUT")/.$(basename -- "$OUT").XXXXXX")" || exit 2
 
 {
   echo "=== $(date -u '+%F %T') UTC — v2 verify on $(hostname -s) ==="
@@ -35,9 +34,12 @@ TMP="$(mktemp "$(dirname -- "$OUT")/.$(basename -- "$OUT").XXXXXX")" || exit 2
   else
     echo "v2-verify: exit $rc"
   fi
-} > "$TMP" 2>&1
-
-mv -f "$TMP" "$OUT" || { rm -f "$TMP"; exit 2; }
+} > "$OUT" 2>&1
+# WRITTEN IN PLACE, on purpose. The check prints each group as it finishes, so a
+# run killed here leaves this run's header and the rows it reached -- which never
+# match the job's "0 FAIL" contract. Writing beside the log and renaming would
+# leave the PREVIOUS run's log (possibly a pass, still fresh) when the wrapper
+# is killed (review of 2026-11-22).
 # Keep the process status directly; log text is never an exit-status source.
 
 # Alert only on a real failure. The checklist prints "0 FAIL" when healthy, and
