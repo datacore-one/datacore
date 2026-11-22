@@ -19,7 +19,7 @@ RUN curl -fsSLo /tmp/node.tar.xz https://nodejs.org/dist/v${NODE_VERSION}/node-v
     && rm /tmp/node.tar.xz \
     && /opt/node/bin/npm install -g --prefix /opt/node \
          openclaw@${OPENCLAW_VERSION} \
-         @datacore-one/cli@2.6.1 @datacore-one/mcp@2.3.0 @plur-ai/cli@0.22.1 @plur-ai/mcp@0.22.1 \
+         @datacore-one/cli@2.7.0 @datacore-one/mcp@2.3.0 @plur-ai/cli@0.22.1 @plur-ai/mcp@0.22.1 \
     && /opt/node/bin/npm cache clean --force
 
 RUN /opt/node/bin/openclaw --version | grep -q "OpenClaw ${OPENCLAW_VERSION}"
