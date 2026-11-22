@@ -448,6 +448,16 @@ def incoming_losses(repo: Path, ref: str) -> list[str]:
         if len(parts) == 3 and parts[0] == 'R100':
             moved.add(parts[1])
     deleted = [x for x in deleted if x not in moved]
+    # ALSO-DELETED-HERE IS NOT LOST. A file deleted on both sides of the merge
+    # (base..HEAD and base..ref) resolves to a deletion in the three-way merge
+    # without conflict — nothing is lost. Without this filter an independent
+    # cleanup on two machines that both removed the same cache tree (5-plur
+    # 2026-11-22: 538 cache files) blocks the whole space until a person merges
+    # by hand, though git would have done it silently.
+    also_deleted_here = set(git(repo, '-c', 'core.quotepath=off', 'diff',
+                                '--no-renames', '--diff-filter=D', '--name-only',
+                                base, 'HEAD').splitlines())
+    deleted = [x for x in deleted if x not in also_deleted_here]
     out = []
     if len(deleted) >= MASS_DELETION:
         out.append(f"deletes {len(deleted)} tracked files ({', '.join(deleted[:5])}"

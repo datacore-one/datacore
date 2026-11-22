@@ -1094,6 +1094,23 @@ def _converge_locked(space: Path, *, publish: bool = True) -> Result:
         # not list it until the merge brings origin's.
         for path in untracked_like_origin:
             _git(space, "rm", "-q", "--cached", "--", path)
+        # ALSO-DELETED-ON-ORIGIN IS STALE, NOT WORK. `add -A` re-stages files
+        # that exist on disk but are not tracked in HEAD — cache trees cleaned up
+        # on another host and pushed. Origin deleted them since the merge base
+        # and this host's HEAD does not track them; they are leftovers, not new
+        # work to resurrect. Unstage them and keep them in the working tree.
+        rc, mb, _ = _git(space, "merge-base", "HEAD", f"origin/{db}")
+        if rc == 0 and mb.strip():
+            deleted_by_origin = set(_git(space, "-c", "core.quotepath=off", "diff",
+                                         "--no-renames", "--diff-filter=D", "--name-only",
+                                         mb.strip(), f"origin/{db}")[1].splitlines())
+            if deleted_by_origin:
+                _, here, _ = _git(space, "-c", "core.quotepath=off", "ls-files", "--cached",
+                                  "--", *deleted_by_origin)
+                tracked_here = set(here.splitlines())
+                for path in deleted_by_origin:
+                    if path not in tracked_here:
+                        _git(space, "restore", "--staged", "--", path)
         # NEVER autosave a submodule pointer. `add -A` stages a changed
         # gitlink, so an unattended converge would silently move `.datacore/dips`
         # to whatever commit happens to be checked out locally — publishing a
