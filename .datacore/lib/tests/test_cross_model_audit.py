@@ -427,6 +427,29 @@ def _openclaw_answer(text="findings: []", ok=True):
     return json.dumps(doc, indent=2)
 
 
+def test_a_claude_turn_asks_for_low_effort_and_names_a_budget_stop(monkeypatch):
+    """2026-11-23: the turn cost $3.06 against a $2.00 cap and the log said only
+    'claude reported an error: None'."""
+    _models(monkeypatch, {"claude": {"transport": "claude-cli", "model": ""}})
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/claude")
+    seen = {}
+
+    def fake_run(argv, **k):
+        seen.update(argv=argv)
+        return subprocess.CompletedProcess(argv, 1, json.dumps({
+            "is_error": True, "subtype": "error_max_budget_usd", "result": None,
+            "errors": ["Reached maximum budget ($2.00)"], "total_cost_usd": 3.059866}), "")
+    monkeypatch.setattr(cma.subprocess, "run", fake_run)
+    with pytest.raises(cma._Spent, match=r"Reached maximum budget \(\$2\.00\) \(spent \$3\.06\)") as exc:
+        cma.call_model("claude", "PROMPT", max_usd=2.0)
+    assert exc.value.usd == pytest.approx(3.059866)
+    assert seen["argv"][seen["argv"].index("--effort") + 1] == "low"
+    _models(monkeypatch, {"claude": {"transport": "claude-cli", "model": "", "effort": ""}})
+    with pytest.raises(cma._Spent):
+        cma.call_model("claude", "PROMPT", max_usd=2.0)
+    assert "--effort" not in seen["argv"], "an install can ask for no effort flag"
+
+
 def test_the_openclaw_subscription_runs_one_toolless_turn_locally(monkeypatch):
     _models(monkeypatch, {"gpt": {"transport": "openclaw-cli", "model": "openai/gpt-test"}})
     monkeypatch.setattr(cma, "_secret", lambda name: pytest.fail("a subscription needs no API key"))

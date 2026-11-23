@@ -105,7 +105,7 @@ AGENTS = _ROSTER[0]
 #: runtime config into principals.yaml `cross_model_audit.models` (see family_config()),
 #: and can be overridden per host with AUDIT_MODEL_<FAMILY>.
 FAMILIES = {
-    "claude": {"transport": "claude-cli", "model": "", "in": 5.0, "out": 25.0,
+    "claude": {"transport": "claude-cli", "model": "", "in": 5.0, "out": 25.0, "effort": "low",
                "max_input_chars": 400_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 0},
     "deepseek": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.4,
                  "max_input_chars": 240_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 56_000},
@@ -124,6 +124,13 @@ FAMILIES = {
 #: whole 24000 ceiling even at low effort. The OpenRouter families get 56000 of
 #: reasoning on top of the 8000 answer (billing is per token produced; a worst
 #: case still starts under the smallest nightly cap).
+
+#: 2026-11-23: the same holds for Claude. The subscription default moved to a
+#: dearer model that thinks as much as it likes; the same ~400k-char slice cost
+#: $1.90 on 11-16 and $3.06 on 11-23, past miles' $2.00 cap, and Claude Code
+#: threw the paid-for answer away ("Reached maximum budget"). So that route is
+#: asked for low effort too (`effort`, overridable per install in
+#: cross_model_audit.models.claude.effort; "" asks for none).
 
 #: Every way a family can be reached: a subscription login through its CLI
 #: (claude-cli: Claude Code; openclaw-cli: OpenClaw's `infer model run`, e.g. a
@@ -152,7 +159,7 @@ def family_config(name: str) -> dict:
     cfg = ((roster.section("cross_model_audit").get("models") or {}).get(name)) or {}
     if isinstance(cfg, str):
         cfg = {"model": cfg}
-    for k in ("transport", "model", "base_url", "host"):
+    for k in ("transport", "model", "base_url", "host", "effort"):
         if cfg.get(k) is not None:
             f[k] = str(cfg[k])
     if f["transport"] == "openclaw-cli":
@@ -657,6 +664,8 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
                "--settings", settings_json(), "--max-budget-usd", f"{max_usd:.2f}"]
         if model:
             cmd += ["--model", model]
+        if f.get("effort"):
+            cmd += ["--effort", f["effort"]]
         r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout_s, env=env,
                            cwd=str(Path.home()))
         try:
@@ -665,7 +674,9 @@ def call_model(family: str, prompt: str, *, max_usd: float, timeout_s: int = 150
             raise RuntimeError(f"claude exited {r.returncode}: {r.stderr.strip()[-200:]}") from None
         usd = float(env_out.get("total_cost_usd") or 0.0)
         if env_out.get("is_error"):
-            raise _Spent(f"claude reported an error: {str(env_out.get('result'))[:200]}", usd)
+            # A budget stop carries no `result`: the reason is in subtype/errors.
+            why = env_out.get("result") or "; ".join(map(str, env_out.get("errors") or [])) or env_out.get("subtype")
+            raise _Spent(f"claude reported an error: {str(why)[:200]} (spent ${usd:.2f})", usd)
         return {"text": str(env_out.get("result") or ""), "usd": usd,
                 "model": ",".join(sorted(env_out.get("modelUsage") or {})) or model or "claude"}
     limit = f["max_output_tokens"] + f["max_reasoning_tokens"]
