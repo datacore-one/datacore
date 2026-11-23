@@ -397,7 +397,11 @@ def collect_states(root: Path, grace: int, today: date | None = None) -> tuple[l
                 if st is None:
                     grey.append((0, venture, role, freq, f"{name} [pending-rollout: {owner}]"))
                 elif st[0] == "red":
-                    rows.append((st[1], venture, role, freq, f"{name} [{st[2]}]"))
+                    if st[1] >= 0 and st[1] <= grace:
+                        grey.append((0, venture, role, freq,
+                                     f"{name} [within {grace}d grace: would be: {st[2]}]"))
+                    else:
+                        rows.append((st[1], venture, role, freq, f"{name} [{st[2]}]"))
                 elif st[0] == "amber":
                     grey.append((0, venture, role, freq, f"{name} [{st[2]}]"))
     rows.sort(reverse=True)
