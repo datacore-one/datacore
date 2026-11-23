@@ -181,7 +181,11 @@ def _repair_stale_base(space, base, current, remote, strict):
       - in file and ledger, not in base, copies differ: the file's copy becomes
         the ancestor, so the ledger's newer rendering is taken;
       - in base and ledger, not in file, ledger changed it since the base: it
-        leaves the ancestor, so it comes back as the ledger has it.
+        leaves the ancestor, so it comes back as the ledger has it;
+      - in base and file, not in the ledger's projection: the ledger dismissed
+        or archived it, so the projection no longer renders it. The base is
+        aligned with the file, so the merge accepts the removal instead of
+        raising EditConflict("concurrent removal") on every cycle.
     A capture (not in the ledger) stays a local addition and waits for ingest;
     a deletion of an item the ledger did not change keeps its refusal. Adopting
     the whole file as the base (Winston's pod fix 6fc982f8) erased captures and
@@ -198,6 +202,16 @@ def _repair_stale_base(space, base, current, remote, strict):
         if not _same(items[identity], remote['items'][identity], strict):
             del items[identity]
             repaired.append((identity, 'file lacked it; ledger copy restored'))
+    # Case 3: in base and file, not in projection — the projection removed it
+    # (e.g. the item was dismissed or archived in the ledger).  The merge sees
+    # base≠current and remote=absent and raises EditConflict("concurrent
+    # removal"), crashing the whole space's ingest every cycle (0-personal,
+    # 578 failures 2026-10-02..26 and again 2026-11-23).  Align the base with
+    # the file so merge_values sees base==current and accepts the removal.
+    for identity in items.keys() & current['items'].keys() - remote['items'].keys():
+        if not _same(items[identity], current['items'][identity], strict):
+            items[identity] = current['items'][identity]
+            repaired.append((identity, 'in base and file, not in projection; projection removal taken'))
     if not repaired:
         return base
     try:
