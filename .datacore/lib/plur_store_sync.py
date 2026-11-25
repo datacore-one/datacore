@@ -365,11 +365,25 @@ def _holder_alive(token: str):
     try:
         pid = int(parts[1])
         os.kill(pid, 0)
-        return True
     except PermissionError:
         return True
     except (ValueError, ProcessLookupError, OSError):
         return False
+    # A zombie (defunct) process passes os.kill(pid, 0) but is not a live writer.
+    # PID 2346480 on winston was a node zombie for 36+ hours (Nov 2026),
+    # holding engrams.yaml.lock forever because _holder_alive kept returning True.
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        # stat fields are space-separated; the 3rd is the process state.
+        # The 2nd field (comm) is parenthesised and may contain spaces, so we
+        # find the closing ')' and read the character after it + the space.
+        close = stat.rindex(")")
+        state = stat[close + 2]
+        if state in ("Z", "X"):
+            return False
+    except (FileNotFoundError, IndexError, ValueError):
+        pass  # no /proc (non-Linux): fall through to the pid check result
+    return True
 
 
 class PlurLock:
