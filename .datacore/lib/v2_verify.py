@@ -126,7 +126,7 @@ def check_ledger(rep: Report, quick: bool) -> None:
     # chain that verified OK as broken -- a false FAIL the morning sweep then
     # handed to Miles as a repair.
     bad, slow = [], []
-    for s in sp:
+    for i, s in enumerate(sp, 1):
         rc, out = run([PY, str(LIB / "ledger_cli.py"), "verify", "--space", str(s)], 600)
         # Exit 3: verify ran, but this machine cannot judge every event (a
         # writer whose verify key it lacks) -- could not check, not broken (V5).
@@ -134,6 +134,10 @@ def check_ledger(rep: Report, quick: bool) -> None:
             slow.append(s.name)
         elif rc != 0:
             bad.append(s.name)
+        # Leave a progress breadcrumb after each space so that an OOM kill
+        # mid-verification at least records which spaces were checked.
+        if not _STDOUT_IS_TTY:
+            print(f"  DIP-0034 ledger verify: {i}/{len(sp)} ({s.name})", file=sys.stderr, flush=True)
     ok = len(sp) - len(bad) - len(slow)
     detail = f"{ok}/{len(sp)} verify" + (f"; broken: {', '.join(bad)}" if bad else "") \
         + (f"; not checked (timeout/crash/no key here): {', '.join(slow)}" if slow else "")
@@ -1493,39 +1497,92 @@ def check_migration_leftovers(rep: Report) -> None:
             else "no service process outside a systemd unit")
 
 
+#: When stdout is a pipe or file (the unattended cron case), Python uses
+#: block buffering.  A process killed mid-checklist loses every print() that
+#: hasn’t filled a buffer — the log carries only the shell’s echo header,
+#: and the bridge sees a silent absence indistinguishable from a dead job.
+#: Reconfiguring here avoids depending on PYTHONUNBUFFERED in the wrapper.
+_STDOUT_IS_TTY = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+_MARK = {True: "\033[32mok  \033[0m", False: "\033[31mFAIL\033[0m", None: "\033[33mn-a \033[0m"}
+_SKIP = "\033[2mskip\033[0m"
+
+
+#: How many of the report's checks are already printed, and under which heading.
+_printed = {"n": 0, "dip": None}
+
+
+def _print_report(rep: Report, *, final: bool = False) -> None:
+    """Print the checks the report has collected since the last call.
+
+    Called after each check group so a process killed mid-run still leaves a
+    partial but honest log behind; each row is printed once.  `final=True` adds
+    the summary footer and the REGRESSED line the job contract's regex reads.
+    """
+    for c in rep.checks[_printed["n"]:]:
+        if c.dip != _printed["dip"]:
+            print(f"\n  \033[1mDIP-{c.dip}\033[0m")
+            _printed["dip"] = c.dip
+        print(f"    {_SKIP if c.skipped else _MARK[c.ok]} {c.name:<32} {c.detail}")
+    _printed["n"] = len(rep.checks)
+    if not _STDOUT_IS_TTY:
+        sys.stdout.flush()
+    if final:
+        print(f"\n  {len(rep.checks)} check(s): "
+              f"{sum(1 for c in rep.checks if c.ok is True)} ok, "
+              f"{len(rep.failed)} FAIL, {len(rep.unknown)} could-not-run"
+              + (f", {len(rep.skipped)} not applicable here" if rep.skipped else ""))
+        if rep.failed:
+            print("  \033[31mv2 REGRESSED\033[0m — " + "; ".join(c.name for c in rep.failed))
+        if not _STDOUT_IS_TTY:
+            sys.stdout.flush()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="v2 verification checklist")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--quick", action="store_true", help="skip slow per-space folds")
     a = ap.parse_args()
 
+    if not _STDOUT_IS_TTY:
+        # Reconfigure stdout for line-buffering so every print() lands in
+        # the artifact immediately — the shell’s echo header is not the
+        # only line a killed run leaves behind.
+        sys.stdout.reconfigure(line_buffering=True)
+
     rep = Report()
-    check_ledger(rep, a.quick)
-    check_jobs(rep)
-    check_config(rep)
-    check_briefing(rep)
-    check_registry(rep)
-    check_executors(rep)
+    # --json prints one JSON document and nothing else: no rows as it goes.
+    _print = (lambda: None) if a.json else (lambda: _print_report(rep))
+
+    # Run every check group and print what we have so far after each one.
+    # A process that never reaches the summary line (OOM, cron timeout,
+    # ledger hang) at least leaves the rows it completed.
+    check_ledger(rep, a.quick);               _print()
+    check_jobs(rep);                          _print()
+    check_config(rep);                        _print()
+    check_briefing(rep);                      _print()
+    check_registry(rep);                      _print()
+    check_executors(rep);                     _print()
     if not a.quick:
-        check_projection(rep)
-    check_identity(rep)
-    check_install_current(rep)
-    check_transport(rep)
-    check_stores(rep)
-    check_topology(rep)
-    check_versions(rep)
-    check_trust_labels(rep)
-    check_hooks(rep)
-    check_migration_leftovers(rep)
-    check_finality(rep)
-    check_app(rep)
-    check_declared_identity(rep)
-    check_writer_authorship(rep)
-    check_principals(rep)
-    check_signed_events(rep)
-    check_egress(rep)
+        check_projection(rep);                _print()
+    check_identity(rep);                      _print()
+    check_install_current(rep);               _print()
+    check_transport(rep);                     _print()
+    check_stores(rep);                        _print()
+    check_topology(rep);                      _print()
+    check_versions(rep);                      _print()
+    check_trust_labels(rep);                  _print()
+    check_hooks(rep);                         _print()
+    check_migration_leftovers(rep);           _print()
+    check_finality(rep);                      _print()
+    check_app(rep);                           _print()
+    check_declared_identity(rep);             _print()
+    check_writer_authorship(rep);             _print()
+    check_principals(rep);                    _print()
+    check_signed_events(rep);                 _print()
+    check_egress(rep);                        _print()
     if not a.quick:
-        check_fleet(rep)
+        check_fleet(rep);                     _print()
 
     if a.json:
         print(json.dumps({"checks": [c.__dict__ for c in rep.checks],
@@ -1534,21 +1591,7 @@ def main() -> int:
                           "skipped": len(rep.skipped)}, indent=2))
         return 1 if rep.failed else 0
 
-    mark = {True: "\033[32mok  \033[0m", False: "\033[31mFAIL\033[0m", None: "\033[33mn-a \033[0m"}
-    skip = "\033[2mskip\033[0m"
-    last_dip = None
-    for c in rep.checks:
-        if c.dip != last_dip:
-            print(f"\n  \033[1mDIP-{c.dip}\033[0m")
-            last_dip = c.dip
-        print(f"    {skip if c.skipped else mark[c.ok]} {c.name:<32} {c.detail}")
-
-    print(f"\n  {len(rep.checks)} check(s): "
-          f"{sum(1 for c in rep.checks if c.ok is True)} ok, "
-          f"{len(rep.failed)} FAIL, {len(rep.unknown)} could-not-run"
-          + (f", {len(rep.skipped)} not applicable here" if rep.skipped else ""))
-    if rep.failed:
-        print("  \033[31mv2 REGRESSED\033[0m — " + "; ".join(c.name for c in rep.failed))
+    _print_report(rep, final=True)
     return 1 if rep.failed else 0
 
 

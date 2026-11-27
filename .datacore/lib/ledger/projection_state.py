@@ -181,7 +181,11 @@ def _repair_stale_base(space, base, current, remote, strict):
       - in file and ledger, not in base, copies differ: the file's copy becomes
         the ancestor, so the ledger's newer rendering is taken;
       - in base and ledger, not in file, ledger changed it since the base: it
-        leaves the ancestor, so it comes back as the ledger has it.
+        leaves the ancestor, so it comes back as the ledger has it;
+      - in base and file, not in the ledger's projection: the ledger dismissed
+        or archived it, so the projection no longer renders it. The base is
+        aligned with the file, so the merge accepts the removal instead of
+        raising EditConflict("concurrent removal") on every cycle.
     A capture (not in the ledger) stays a local addition and waits for ingest;
     a deletion of an item the ledger did not change keeps its refusal. Adopting
     the whole file as the base (Winston's pod fix 6fc982f8) erased captures and
@@ -198,6 +202,16 @@ def _repair_stale_base(space, base, current, remote, strict):
         if not _same(items[identity], remote['items'][identity], strict):
             del items[identity]
             repaired.append((identity, 'file lacked it; ledger copy restored'))
+    # Case 3: in base and file, not in projection — the projection removed it
+    # (e.g. the item was dismissed or archived in the ledger).  The merge sees
+    # base≠current and remote=absent and raises EditConflict("concurrent
+    # removal"), crashing the whole space's ingest every cycle (0-personal,
+    # 578 failures 2026-10-02..26 and again 2026-11-23).  Align the base with
+    # the file so merge_values sees base==current and accepts the removal.
+    for identity in items.keys() & current['items'].keys() - remote['items'].keys():
+        if not _same(items[identity], current['items'][identity], strict):
+            items[identity] = current['items'][identity]
+            repaired.append((identity, 'in base and file, not in projection; projection removal taken'))
     if not repaired:
         return base
     try:
@@ -267,7 +281,16 @@ def sync_generated(space, state, actor, dry_run=False, current_text=None):
             raise ProjectionConflict('CREATED edit requires explicit ledger provenance reconciliation')
         item = state.items[identity]
         if item.status == 'dismissed':
-            raise ProjectionConflict('edit to a terminal item requires explicit reconciliation')
+            # A dismissed item reopened or edited in org: the file wants a
+            # change the ledger refuses because the item is terminal (DIP-0034).
+            # One such item must not block the entire space's ingest every hour
+            # (0-personal, 2026-11-22). Skip it; the human who reopened it
+            # must reconcile it in the ledger explicitly.
+            import sys
+            print(f'  skipping dismissed item {identity}: would change '
+                  f'{sorted(changed.keys())}; reconcile explicitly in the ledger',
+                  file=sys.stderr)
+            continue
         terminal = changed.get('state') in ('DONE', 'CANCELLED')
         if terminal:
             kind = 'done' if changed.pop('state') == 'DONE' else 'dropped'
@@ -284,8 +307,21 @@ def sync_generated(space, state, actor, dry_run=False, current_text=None):
             # this same call had just made: nightshift 2026-09-17 20:40Z, where
             # the retained conflict stopped 5-plur projecting at all.
             dismissals.append((identity, kind))
-    if set(live['items']) - set(merged['items']):
-        raise ProjectionConflict('removed heading needs explicit archive/deletion evidence')
+    removed = set(live['items']) - set(merged['items'])
+    if removed:
+        # Items in the projection but not in the merged result: the file
+        # deleted them without archival evidence. Warn per item instead of
+        # crashing the whole space (0-personal, 2026-11-22). Active items
+        # moved to another org file (e.g. inbox.org) need GTD processing,
+        # not a blocked ingest.
+        import sys
+        for identity in sorted(removed):
+            item = state.items.get(identity)
+            title = (item.payload or {}).get('title', '?') if item else '?'
+            status = item.status if item else 'unknown'
+            print(f'  removed heading {identity} ({status}): {title[:100]}; '
+                  f'missing from file, still in ledger',
+                  file=sys.stderr)
     if not dry_run:
         log = EventLog(space, actor)
         appended = []

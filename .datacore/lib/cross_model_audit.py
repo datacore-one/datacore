@@ -108,7 +108,7 @@ FAMILIES = {
     "claude": {"transport": "claude-cli", "model": "", "in": 5.0, "out": 25.0,
                "max_input_chars": 400_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 0},
     "deepseek": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.4,
-                 "max_input_chars": 240_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 56_000},
+                 "max_input_chars": 240_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 16_000},
     "glm": {"transport": "openrouter", "model": "", "in": 0.6, "out": 2.2,
             "max_input_chars": 300_000, "max_output_tokens": 8_000, "max_reasoning_tokens": 56_000},
     "gpt": {"transport": "openai", "model": "", "in": 1.25, "out": 10.0,
@@ -1021,10 +1021,17 @@ def _turn(agent: str, family: str, prompt: str, what: str) -> dict:
     try:
         turn = call_model(family, prompt, max_usd=remaining)
     except _Spent as exc:
-        record_spend(agent, exc.usd, what + " (failed)")
-        raise SystemExit(f"cross_model_audit: {family} turn failed: {exc}") from None
+        record_spend(agent, exc.usd, what + " (failed: no answer text)")
+        print(f"cross_model_audit: {family} produced no answer text (${exc.usd:.4f}); writing empty findings file "
+              f"so the audit does not go stale", file=sys.stderr)
+        return {"text": "", "usd": exc.usd,
+                "model": family_config(family).get("model", ""), "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 -- a failed night is reported, never a traceback
-        raise SystemExit(f"cross_model_audit: {family} turn failed: {type(exc).__name__}: {exc}") from None
+        print(f"cross_model_audit: {family} turn failed: {type(exc).__name__}: {exc}; writing empty findings file "
+              f"so the audit does not go stale", file=sys.stderr)
+        return {"text": "", "usd": 0.0,
+                "model": family_config(family).get("model", ""),
+                "error": f"{type(exc).__name__}: {exc}"}
     record_spend(agent, turn["usd"], what)
     return turn
 

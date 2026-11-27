@@ -201,6 +201,27 @@ def ensure_keypair(
             raise _retired(actor, key_path, verify_key_hex, current, _iso(history[-1][0]))
         if registered is not None and registered != verify_key_hex and verify_key_hex != current:
             raise _mismatch(actor, key_path, verify_key_hex, registry_path, str(current or registered))
+        # When the local registry is silent (empty scratch DATACORE_KEYS_DIR),
+        # the fleet registry (principals.yaml) is the final word. A key that
+        # does not match it would produce signatures the fleet verifier rejects,
+        # and the local registry's silence is no licence to sign with a wrong
+        # key (box-ledger-verify failure, 2026-11-01).
+        # Not under the test fence (DATACORE_LEDGER_WRITE_FENCE): there every
+        # write into this installation's ledger is refused anyway, and a process
+        # a test starts signs into a scratch space with a scratch key under the
+        # host's own writer name. Without this, 17 such tests failed on any
+        # install that has a principals registry (2026-11-22).
+        if registered is None and not os.environ.get("DATACORE_LEDGER_WRITE_FENCE"):
+            pk = principals_verify_key(actor)
+            if pk is not None and verify_key_hex != pk and verify_key_hex != current:
+                # KEEP the fresh key on disk, unregistered and unused: a rebuilt
+                # host needs it to exist for the owner's rotation, which reads the
+                # key file here (ledger_keys_collect --rotate). Discarding it made
+                # every attempt mint a different throwaway and the documented
+                # recovery impossible (review, 2026-11-22). Nothing is signed.
+                if not exists:
+                    atomic_write_text(key_path, private_key.private_bytes_raw().hex())
+                raise _mismatch(actor, key_path, verify_key_hex, principals_path(), pk)
         if not exists:
             atomic_write_text(key_path, private_key.private_bytes_raw().hex())
         registry["actors"][actor] = verify_key_hex

@@ -104,10 +104,22 @@ cat "$verify_out"
 # could not run (rc 2) is written down and left to that contract, which never
 # reads it as a pass; it does not fail the history verify.
 seal_out="$STATE/ledger-seal.log"
+# Pre-seed the file with a NOT CHECKED message so the artifact ALWAYS exists
+# on disk, even when cron kills this script during the seal check (the manifest
+# contract fails on "does not exist" — a missing file is silent where a real
+# signal like "NOT CHECKED" tells the operator what happened). The check below
+# replaces this with its real output atomically.
+echo "NOT CHECKED the seal check has not yet completed" > "$seal_out"
 seal_tmp="$(mktemp "$seal_out.XXXXXX")" || exit 2
-"$PY" "$LIB/ledger_seal_age_check.py" --root "$DATACORE_ROOT" --no-age > "$seal_tmp" 2>&1
+# 120s: the check talks to the hub over HTTP. When the hub is down the
+# connection hangs; without a timeout this step stalls the entire daily
+# run, cron kills it, and the seal log is never written -- the manifest
+# contract then fails with "does not exist" instead of a real signal.
+timeout "${LEDGER_SEAL_TIMEOUT_S:-120}" "$PY" "$LIB/ledger_seal_age_check.py" --root "$DATACORE_ROOT" --no-age > "$seal_tmp" 2>&1
 seal_rc=$?
-if [ "$seal_rc" -ne 0 ] && [ "$seal_rc" -ne 1 ] && ! tail -1 "$seal_tmp" | grep -q '^NONE '; then
+if [ "$seal_rc" -eq 124 ]; then
+  echo "NOT CHECKED the seal check timed out after ${LEDGER_SEAL_TIMEOUT_S:-120}s (hub unreachable?)" >> "$seal_tmp"
+elif [ "$seal_rc" -ne 0 ] && [ "$seal_rc" -ne 1 ] && ! tail -1 "$seal_tmp" | grep -q '^NONE '; then
   echo "NOT CHECKED the seal check could not run (rc=$seal_rc)" >> "$seal_tmp"
 fi
 mv -f "$seal_tmp" "$seal_out" || exit 2

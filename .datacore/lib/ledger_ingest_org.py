@@ -43,6 +43,7 @@ from ledger.fold import fold  # noqa: E402
 from ledger.genesis import assignee_of, import_space, scan  # noqa: E402
 from ledger.log import EventLog, read_events  # noqa: E402
 from ledger_dismiss_orphans import confirm_and_dismiss  # noqa: E402
+from file_utils import file_lock  # noqa: E402
 from org_transaction import SafeOrgWorkspace, serialized  # noqa: E402
 
 ACTIVE = ("TODO", "NEXT", "WAITING", "DEFERRED", "QUEUED", "WORKING", "REVIEW", "FAILED")
@@ -480,6 +481,46 @@ def ensure_ids(space: Path, adapter: Path | None = None) -> str:
     return " ".join(touched) + (f' ({len(projected)} projected)' if projected else '') or "no org files"
 
 
+def _ensure_ids_for_all(spaces, dry_run=False):
+    """Acquire the org-transaction lock once and prepare IDs for all spaces.
+
+    Each space gets its own isolated sub-transaction so that a failure in
+    one does not roll back changes already committed for an earlier space.
+    The file lock is held across all spaces, eliminating the per-space
+    contention that caused spurious ``TimeoutError`` failures since
+    2026-11-25 when a concurrent process (e.g. a ``gtd_hygiene.py``
+    subprocess) acquired the lock between spaces.
+
+    Returns a dict mapping failed spaces to their exception.
+    """
+    from org_transaction import _current, Transaction, journal_path, recover as _recover
+    path = journal_path()
+    failures = {}
+    with file_lock(path, timeout=120):
+        _recover(path)
+        for space in spaces:
+            if dry_run:
+                continue
+            # Each space runs inside its own sub-transaction so that a
+            # failure in one does not strand a half-written journal for
+            # the next, and does not roll back earlier successes.
+            inner = Transaction(path)
+            token = _current.set(inner)
+            try:
+                ensure_ids(space)  # @serialized short-circuits: _current is set
+                inner.commit()
+            except Exception as exc:
+                failures[space] = exc
+                if inner.started:
+                    try:
+                        _recover(path)
+                    except Exception:
+                        pass
+            finally:
+                _current.reset(token)
+    return failures
+
+
 def _projected_duplicates(space: Path, files: list[Path]) -> set[str]:
     """Ids the GENERATED file reproduces from the ledger while inbox.org still holds them.
 
@@ -619,21 +660,22 @@ def main() -> int:
 
     total_new = 0
     failures = 0
+    id_failures = {}
+    if not args.dry_run:
+        id_failures = _ensure_ids_for_all(spaces)
     for space in spaces:
         try:
             import org_readonly
             if org_readonly.enabled(space):
-                # Phase F: hand edits to the read-only list are not imported
-                # hourly; the editor hook turns them into adapter commands.
-                if not args.dry_run:
-                    ensure_ids(space)
+                if space in id_failures:
+                    raise id_failures[space]
                 pending = org_readonly.hook(space, quiet=True, out=lambda _line: None)
                 print(f"{space.name:14} read-only lists (phase F): "
                       + ("no hand edit" if pending == 0 else
                          f"hand edit waiting for `org_readonly.py hook --space {space} --apply`"))
                 continue
-            if not args.dry_run:
-                ensure_ids(space)
+            if space in id_failures:
+                raise id_failures[space]
             before = scan(space)
             new = len(before.importable)
             if new and not args.dry_run:

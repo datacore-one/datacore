@@ -1,8 +1,8 @@
 """MEM-19: Memory that loads into every session never holds customer names, amounts, people's
 names, credentials or machine details.
 
-Kind: production contract (the real auto-memory index ~/.claude/projects/-Users-gregor-Data/
-memory/MEMORY.md and the `description:` frontmatter of every file it links -- both load into
+Kind: production contract (the real auto-memory index of this machine's installation,
+~/.claude/projects/<the install path with / as ->/memory/MEMORY.md and the `description:` frontmatter of every file it links -- both load into
 every session's system prompt) + production contract on the write path (the PreToolUse hooks
 really wired in ~/.claude/settings.json, probed with a Write of a forbidden index line).
 
@@ -28,8 +28,13 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import settings_hooks  # noqa: E402
 
+# The auto-memory folder of THIS machine's installation: Claude Code names a
+# project folder after the project's path with every "/" turned into "-"
+# (the Mac: -Users-<owner>-Data; the dayshift workstation: -home-<owner>-Data).
+# Owner decision 2026-11-22: the eval reads the index of the machine it runs on.
+_ROOT = Path(__file__).resolve().parents[3]
 MEMORY_DIR = Path(os.environ.get(
-    "CLAUDE_MEMORY_DIR", Path.home() / ".claude" / "projects" / "-Users-gregor-Data" / "memory"))
+    "CLAUDE_MEMORY_DIR", Path.home() / ".claude" / "projects" / str(_ROOT).replace("/", "-") / "memory"))
 MEMORY = MEMORY_DIR / "MEMORY.md"
 DENYLIST = Path.home() / ".datacore" / "private" / "customer-denylist.yaml"
 

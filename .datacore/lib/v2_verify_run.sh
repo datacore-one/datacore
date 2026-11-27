@@ -23,10 +23,23 @@ OUT="$STATE/v2-verify.log"
 
 {
   echo "=== $(date -u '+%F %T') UTC — v2 verify on $(hostname -s) ==="
-  "$PY" "$LIB/v2_verify.py"
+  # PYTHONUNBUFFERED: belt-and-suspenders with the in-code reconfigure
+  # — the code does it too, but a wrapper env costs nothing and survives
+  # an import-time crash before reconfigure() runs.
+  PYTHONUNBUFFERED=1 \
+    timeout 1800 "$PY" "$LIB/v2_verify.py"
   rc=$?
-  echo "v2-verify: exit $rc"
+  if [ "$rc" = 124 ]; then
+    echo "v2-verify: TIMED OUT after 30 min (timeout 1800)"
+  else
+    echo "v2-verify: exit $rc"
+  fi
 } > "$OUT" 2>&1
+# WRITTEN IN PLACE, on purpose. The check prints each group as it finishes, so a
+# run killed here leaves this run's header and the rows it reached -- which never
+# match the job's "0 FAIL" contract. Writing beside the log and renaming would
+# leave the PREVIOUS run's log (possibly a pass, still fresh) when the wrapper
+# is killed (review of 2026-11-22).
 # Keep the process status directly; log text is never an exit-status source.
 
 # Alert only on a real failure. The checklist prints "0 FAIL" when healthy, and
