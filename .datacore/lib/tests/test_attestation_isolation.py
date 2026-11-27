@@ -79,6 +79,81 @@ def test_a_corrupt_chain_that_does_carry_evidence_still_raises(fleet):
         latest_jobs(fleet, time.time())
 
 
+def _tamper_attestation(space: Path, actor: str):
+    """An evidence-carrying chain whose attestation no longer matches its hash."""
+    _attest(space, actor, f"{actor}-daily")
+    log = space / ".datacore" / "telemetry" / f"{actor}.jsonl"
+    log.write_text(log.read_text().replace(f'"job": "{actor}-daily"', '"job": "tampered"')
+                   .replace(f'"job":"{actor}-daily"', '"job":"tampered"'))
+
+
+def test_asking_about_one_principal_reads_only_its_own_evidence(fleet):
+    # 2026-11-26: winston's and miles's evidence-carrying chains failed signature
+    # checks after unregistered key rotations, and that made `absent("data")`
+    # true -- every item delegated to Data was stamped `assignee_absent` while
+    # Data's own chains verified. Whether Data has been heard from is a question
+    # about Data's evidence only.
+    space = fleet / "1-work"
+    _attest(space, "worker", "worker-daily")
+    _tamper_attestation(space, "bystander")
+
+    jobs = latest_jobs(fleet, time.time(), principal="worker")
+
+    assert set(jobs) == {"worker"}
+    assert jobs["worker"]["worker-daily"].ok is True
+
+
+def test_asking_about_the_principal_whose_evidence_is_broken_still_raises(fleet):
+    # The guarantee, per principal: its own evidence from a chain that does not
+    # verify is not evidence, and the reader is told.
+    space = fleet / "1-work"
+    _attest(space, "worker", "worker-daily")
+    _tamper_attestation(space, "bystander")
+
+    with pytest.raises(CorruptLogError):
+        latest_jobs(fleet, time.time(), principal="bystander")
+
+
+def test_absent_is_not_decided_by_another_principals_broken_chain(fleet, monkeypatch):
+    import claim_gate
+    space = fleet / "1-work"
+    _attest(space, "worker", "worker-daily")
+    _tamper_attestation(space, "bystander")
+
+    is_absent, why = claim_gate.absent("worker", root=fleet)
+    assert is_absent is False, why
+    is_absent, why = claim_gate.absent("bystander", root=fleet)
+    assert is_absent is True and "unreadable or invalid" in why
+
+
+def test_a_void_already_in_the_history_is_honoured(fleet):
+    # 2026-11-27: 6-meridian miles.jsonl seq 21140-21141 and 5-plur tris seq 5
+    # were cancelled by owner voids in September, and `verify` accepts them.
+    # `latest_jobs` verified chains without the space's voids, so those
+    # long-settled events still read as "invalid verification event chain".
+    from tests._legacy_void import append_legacy_void
+    from ledger import voids
+    from ledger.log import read_events
+
+    registry = fleet / ".datacore/registry/principals.yaml"
+    registry.write_text(registry.read_text() + "  owner: {kind: human, writes_as: [owner]}\n")
+    space = fleet / "1-work"
+    _attest(space, "worker", "first")
+    _attest(space, "worker", "second")
+    log = space / ".datacore" / "telemetry" / "worker.jsonl"
+    log.write_text(log.read_text().replace('"job": "first"', '"job": "tampered"')
+                   .replace('"job":"first"', '"job":"tampered"'))
+    bad = next(e for e in read_events(space) if e.payload.get("job") == "tampered")
+    append_legacy_void(EventLog(space, "owner", sign=False), {
+        "log": bad.log, "seq": bad.seq, "hash": bad.hash,
+        "reason": "test: hash never matched", "body_sha256": voids.body_hash(bad)})
+
+    jobs = latest_jobs(fleet, time.time(), principal="worker")
+
+    assert jobs["worker"]["second"].ok is True
+    assert "tampered" not in jobs["worker"], "a voided attestation is not evidence"
+
+
 def test_an_intact_fleet_still_reports_every_principal(fleet):
     space = fleet / "1-work"
     _attest(space, "worker", "worker-daily")

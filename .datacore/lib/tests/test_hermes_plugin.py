@@ -1059,3 +1059,31 @@ def test_other_ledger_events_in_an_owner_turn_still_go_through(as_winston):
 def test_outside_an_owner_turn_the_ledger_tool_is_not_redirected(as_winston):
     assert hp.pre_tool_call("datacore_ledger_append", {"type": "item.create", "payload": {"title": "x"}},
                             session_id="cron-1", turn_id="t9") is None
+
+
+# 2026-11-28: Winston's datacore_delegate and datacore_ledger_append calls
+# arrived with every field empty ("the MCP bridge drops parameters"). The
+# adapter accepted the arguments only as a ready-made dict; a JSON string or
+# keyword arguments were silently replaced with nothing.
+@pytest.mark.parametrize("call", [
+    lambda c: c({"space": "s", "title": "t"}),
+    lambda c: c('{"space": "s", "title": "t"}'),
+    lambda c: c(space="s", title="t"),
+    lambda c: c(args={"space": "s", "title": "t"}, task_id="x"),
+])
+def test_from_hermes_keeps_the_arguments_however_they_arrive(call):
+    seen = {}
+    def handler(space="", title="", **_kw):
+        seen.update(space=space, title=title)
+        return "ok"
+    assert call(hp._from_hermes(handler)) == "ok"
+    assert seen == {"space": "s", "title": "t"}
+
+
+def test_from_hermes_does_not_pass_runtime_context_as_arguments():
+    seen = {}
+    def handler(**kw):
+        seen.update(kw)
+        return "ok"
+    hp._from_hermes(handler)({"space": "s"}, task_id="t-1", session_id="x")
+    assert seen == {"space": "s"}

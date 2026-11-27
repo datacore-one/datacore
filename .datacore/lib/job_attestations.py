@@ -21,13 +21,29 @@ class Attestation:
     ok: bool
 
 
-def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict[str, dict[str, Attestation]]:
+def latest_jobs(root: Path, now: float, *, registry: Path | None = None,
+                principal: str | None = None) -> dict[str, dict[str, Attestation]]:
     """Latest eligible attestation per principal/contract across all chains.
 
     Future stamps cannot extend freshness. HLC counter orders same-millisecond
     observations; simultaneous contradictory observations conservatively fail.
     A malformed complete record raises, preserving the reader's unknown state.
+
+    `principal` narrows the question to one principal: only that principal's
+    chains are verified and only its attestations read. Asked about Data, a
+    broken winston chain is not Data's evidence and must not answer for it
+    (2026-11-26: two unregistered key rotations made every delegated item read
+    `assignee_absent`). Its own broken evidence still raises.
     """
+    def _owner(writer: str) -> str | None:
+        try:
+            return principal_of(writer, path=registry)[0]
+        except ValueError:
+            return None
+
+    def _ours(writer: str) -> bool:
+        return principal is None or _owner(writer) == principal
+
     latest: dict[str, dict[str, Attestation]] = {}
     root = Path(root)
     spaces = [root, *sorted(p for p in root.glob('[0-9]*-*') if p.is_dir())]  # 10-… too (SPC-9)
@@ -46,6 +62,12 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
         chains: dict[str, list] = {}
         for event in events:
             chains.setdefault(event.log, []).append(event)
+        # The voids already in the history are part of how a chain verifies
+        # (ledger.finality, the rule `verify` and `chain_problems` use). Without
+        # them, events the owner cancelled in September -- 6-meridian miles seq
+        # 21140-21141, 5-plur tris seq 5 -- read as a broken chain for ever.
+        from ledger.finality import resolve as resolve_voids
+        space_voids = resolve_voids(events).voids
         # ONLY CHAINS THAT CARRY EVIDENCE ARE VERIFIED. An attestation is only
         # trustworthy if its own chain verifies -- that is the guarantee, and it
         # is kept exactly. A chain carrying NO attestation contributes nothing
@@ -65,15 +87,19 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None) -> dict
         for log_name, chain in chains.items():
             if not any(event.type == 'metric.attest' for event in chain):
                 continue
+            if not _ours(base_writer(log_name.removesuffix(TELEMETRY_SUFFIX))):
+                continue
             # read_events sorts by HLC. Recover physical chain order by seq;
             # malformed types and missing/duplicate links are not evidence.
             if any(type(event.seq) is not int for event in chain):
                 raise CorruptLogError('invalid event sequence')
             chain.sort(key=lambda event: event.seq)
-            if verify_events(list(enumerate(chain, 1))):
+            if verify_events(list(enumerate(chain, 1)), voids=space_voids, log=log_name):
                 raise CorruptLogError('invalid verification event chain')
         for event in evidence:
             if event.type != 'metric.attest':
+                continue
+            if not _ours(event.actor):
                 continue
             payload = event.payload
             if not isinstance(payload, dict):

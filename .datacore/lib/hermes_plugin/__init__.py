@@ -1094,11 +1094,29 @@ def install_press_forwarder(tx=None) -> bool:
     return True
 
 
+#: What Hermes passes beside a tool's arguments; never a tool argument itself.
+_HERMES_RUNTIME_KEYS = frozenset({"task_id", "session_id", "turn_id", "platform", "user_task",
+                                  "parent_agent", "tool_call_id", "context"})
+
+
 def _from_hermes(handler):
     """Hermes calls a tool as handler(args_dict, **kwargs) (tools/registry.py
-    dispatch); the handlers here take the tool's arguments as keywords."""
-    def call(args=None, **_runtime):
-        return handler(**(args if isinstance(args, dict) else {}))
+    dispatch); the handlers here take the tool's arguments as keywords.
+
+    2026-11-28: Winston's datacore_delegate and datacore_ledger_append calls
+    arrived with every field empty. Only a ready-made dict was accepted; a JSON
+    string, or the arguments as keywords, became {} without a word. Accept all
+    three, and keep Hermes's own runtime keys out of the arguments."""
+    def call(args=None, **runtime):
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args.strip() else {}
+            except ValueError:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        extra = {k: v for k, v in runtime.items() if k not in _HERMES_RUNTIME_KEYS}
+        return handler(**{**extra, **args})
     call.__wrapped__ = handler
     return call
 

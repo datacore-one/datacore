@@ -280,7 +280,7 @@ def absent(principal: str, root: Path | None = None, now: float | None = None) -
     if name is None:
         return True, f"unregistered principal {principal!r}"
     try:
-        jobs = latest_jobs(root, now).get(name, {})
+        jobs = latest_jobs(root, now, principal=name).get(name, {})
     except (OSError, CorruptLogError):
         return True, f"{name}: verification evidence unreadable or invalid"
     if not jobs:
