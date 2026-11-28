@@ -384,7 +384,8 @@ class Drill:
         FINAL line can only be an interrupted write, so `append` truncates it
         and `read_events` skips it; the same damage anywhere else cannot be
         explained that way and must never be dropped silently (since LED-7 the
-        reader warns and withholds that log's tail; the writer still refuses).
+        reader warns, skips the damaged line and reads the rest of that log;
+        the writer still refuses).
         The drill asserts both halves, because a reader that swallowed a
         mid-file corruption would lose data with no error at all.
         """
@@ -408,9 +409,12 @@ class Drill:
 
         # Damage in the MIDDLE. Since LED-7 (afd3e84) a reader no longer raises
         # here -- one damaged writer log used to stop fold, projection and
-        # policy for the whole space. It reads the events before the damage and
-        # withholds the rest. That is only safe if the withholding is NEVER
-        # silent, so the drill asserts every way it must be seen: a warning
+        # policy for the whole space. It first read the events before the damage
+        # and withheld the rest; since the owner's decision of 2026-11-17
+        # (3d617c1b, "report, never halt": one bad record never hides others)
+        # it skips ONLY the damaged line and reads the events after it too.
+        # That is only safe if the skip is NEVER silent and takes exactly one
+        # event, so the drill asserts every way it must be seen: a warning
         # naming the file and line, a chain that verifies as incomplete (so
         # attestation readers fail closed), and a writer that refuses to append
         # past the damage rather than "repairing" it away.
@@ -433,8 +437,8 @@ class Drill:
         if notes:
             self.check("the warning names the file and the line",
                        "drill.jsonl" in notes[0] and "line 3" in notes[0], notes[0])
-            self.check("only the events before the damage are read",
-                       [e.payload.get("id") for e in got] == ["p0", "p1"],
+            self.check("only the damaged line is skipped; the events after it are read",
+                       [e.payload.get("id") for e in got] == ["p0", "p1", "p3", "p4"],
                        str([e.payload.get("id") for e in got]))
             errors = verify_events(list(enumerate(got, 1)))
             self.check("the chain verifies as INCOMPLETE, so evidence readers fail closed",
