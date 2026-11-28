@@ -53,6 +53,10 @@ no new terminal window, no subprocess that does it for you.
 4. **Checkpoint:**
    `python3 ~/Data/.datacore/lib/handover.py checkpoint --topic "<3-6 words>" --mode <mode> --inflight <json file>`
 
+   The topic's **first word becomes the tmux session name** the owner types
+   (`ds jimo`), so start with the one word that names this work — "jimo
+   learning loop", never "the jimo loop" or "work on jimo".
+
    It commits and pushes the session's files with `/wrap-up`'s rules
    (session files only, default branch only, others' changes reported and
    left alone). If it prints `handover stopped:`, show the owner each line in

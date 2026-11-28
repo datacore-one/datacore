@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from handover import (
+    attach_target,
     blocking_issues,
     split_left,
     drop_left_repos,
@@ -135,10 +136,32 @@ def test_remote_copy_action(args, expected):
     assert remote_copy_action(*args) == expected
 
 
-def test_tmux_name():
-    assert tmux_name("Evals: promise run #3") == "evals-promise-run-3"
+def test_tmux_name_is_the_first_word():
+    # owner, 2026-11-17: "not jimo-learning-loop-and-trading but just jimo"
+    assert tmux_name("Jimo learning loop and trading") == "jimo"
+    assert tmux_name("Evals: promise run #3") == "evals"
     assert tmux_name("!!!") == "handover"
-    assert len(tmux_name("x" * 80)) <= 30
+    assert len(tmux_name("x" * 80)) <= 16
+
+
+def test_attach_target_picks_an_existing_session_of_the_group():
+    # owner, 2026-11-17: with clones present `tmux attach -t datacore_audit` is
+    # ambiguous, fails, and ds then made an empty session beside the real one.
+    out = ("datacore_audit-35 datacore_audit\ndatacore_audit-37 datacore_audit\n"
+           "nowva-8 nowva\njimo \nrouting \nrouting-24 routing\n")
+    assert attach_target(out, "datacore_audit") == ("datacore_audit-35", [])
+    assert attach_target(out, "datacore_audit-37") == ("datacore_audit-37", [])
+    assert attach_target(out, "jimo") == ("jimo", [])
+    assert attach_target(out, "routing") == ("routing", [])       # an exact name wins over the group
+    assert attach_target(out, "nowva") == ("nowva-8", [])
+    assert attach_target(out, "now") == ("nowva-8", [])           # one prefix match: unambiguous
+
+
+def test_attach_target_none_means_create_and_ambiguous_names_the_candidates():
+    out = "plur-a \nplur-b \n"
+    assert attach_target(out, "zzz") == (None, [])                 # nothing like it: ds creates it
+    assert attach_target(out, "plur") == (None, ["plur-a", "plur-b"])   # never a new session beside them
+    assert attach_target("", "dev") == (None, [])
 
 
 def test_blocking_issues_from_finalize_report(tmp_path):

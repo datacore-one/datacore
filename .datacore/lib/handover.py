@@ -163,8 +163,9 @@ def remote_copy_action(live_there: bool, remote_hash: str | None, local_hash: st
 
 
 def tmux_name(topic: str) -> str:
-    name = re.sub(r"[^a-z0-9]+", "-", topic.lower()).strip("-")[:30].strip("-")
-    return name or "handover"
+    """The topic's first word: the owner types this name to attach, so it stays short."""
+    words = re.sub(r"[^a-z0-9]+", " ", topic.lower()).split()
+    return words[0][:16] if words else "handover"
 
 
 def blocking_issues(report: dict, data_root: Path) -> list[str]:
@@ -312,6 +313,30 @@ def group_of(list_sessions_output: str, name: str) -> str | None:
             if match(sess):
                 return group or sess
     return None
+
+
+def attach_target(list_sessions_output: str, name: str) -> tuple[str | None, list[str]]:
+    """Which existing session `ds name` attaches to: (session, ambiguous candidates).
+
+    tmux refuses `attach -t name` when several sessions start with it — the case
+    for a group's clones (name-35, name-37) — and falling through to `tmux new`
+    then leaves an empty session beside the real one. So the session is chosen
+    here and attached by its exact name: the session called `name`, else one of
+    group `name`, else the only one starting with it. (None, []) means create;
+    (None, [a, b]) means the name fits several unrelated sessions.
+    """
+    rows = [line.split(" ", 1) for line in list_sessions_output.splitlines() if line.strip()]
+    rows = [(r[0], r[1].strip() if len(r) > 1 else "") for r in rows]
+    for sess, _ in rows:
+        if sess == name:
+            return sess, []
+    for sess, group in rows:
+        if group == name:
+            return sess, []
+    starts = [sess for sess, _ in rows if sess.startswith(name)]
+    if len(starts) == 1:
+        return starts[0], []
+    return None, starts
 
 
 def title_sequence(name: str | None) -> str:
@@ -687,7 +712,10 @@ def cmd_ds(a: argparse.Namespace) -> None:
     if not safe_group(a.name):
         _die([f"use letters, digits, '.', '_' or '-' for the session name: {a.name!r}"])
     sessions = _remote("tmux list-sessions -F '#{session_name} #{session_group}' 2>/dev/null").stdout
-    group = group_of(sessions, a.name) or a.name
+    target, ambiguous = attach_target(sessions, a.name)
+    if ambiguous:
+        _die([f"several sessions start with {a.name!r}: {', '.join(ambiguous)} — name one of them"])
+    group = group_of(sessions, target or a.name) or a.name
     if not safe_group(group):
         group = a.name
     log = CURSORS / f"{group}.listener.log"
@@ -709,8 +737,9 @@ def cmd_ds(a: argparse.Namespace) -> None:
     sys.stdout.write(title_sequence(group))
     sys.stdout.flush()
     try:
-        q = shlex.quote(a.name)
-        subprocess.run(["ssh", "-t", HOST, f"tmux attach -t {q} 2>/dev/null || tmux new -s {q} -c ~/Data"])
+        remote = (f"tmux attach -t {shlex.quote('=' + target)}" if target
+                  else f"tmux new -s {shlex.quote(a.name)} -c ~/Data")
+        subprocess.run(["ssh", "-t", HOST, remote])
     finally:
         _cleanup()
 
