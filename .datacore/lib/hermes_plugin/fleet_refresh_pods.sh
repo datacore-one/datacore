@@ -23,15 +23,45 @@ for A in tris data; do
       || echo "  v2-runner: NOT fast-forwardable (local commits: $(git rev-list --count origin/main..HEAD)); left as is"'
 done
 
-T=$(pod tris)
-if [ -n "$T" ]; then
-  echo "== tris plugin copy"
-  $K exec "$T" -c gateway -- sh -c '
-    S=~/.datacore/v2-runner/.datacore/lib/hermes_plugin; D=~/.hermes/plugins/datacore
-    cp "$S/plugin.yaml" "$S/__init__.py" "$S/verify_loaded.py" "$D/" && rm -rf "$D/__pycache__" \
-      && echo "  copied: $(grep -c _HERMES_RUNTIME_KEYS "$D/__init__.py") marker line(s)"
-    pkill -f "^/opt/hermes-agent/venv/bin/python -m hermes_cli.main gateway run" && echo "  gateway stopped for restart"'
-  sleep 30
-  $K get pod "$T" --no-headers | awk '{print "  pod:", $2, $3, "restarts:", $4, $5, $6}'
-  $K exec "$T" -c gateway -- sh -c '/opt/hermes-agent/venv/bin/python ~/.hermes/plugins/datacore/verify_loaded.py' | sed 's/^/  /'
+# Winston runs from ~/Data, which carries the pod's own commits: merge, never
+# force; a conflict is aborted and reported.
+W=$(pod winston)
+if [ -n "$W" ]; then
+  echo "== winston ($W)"
+  $K exec "$W" -c gateway -- sh -c '
+    cd ~/Data && git fetch -q origin \
+      && { git pull --no-rebase --no-edit -q origin main \
+           && echo "  ~/Data: $(git log -1 --format="%h") behind: $(git rev-list --count HEAD..origin/main)" \
+           || { git merge --abort 2>/dev/null; echo "  ~/Data: merge conflict, aborted; left as is"; }; }'
 fi
+
+# Hermes agents load a COPY of the plugin: refresh it, restart the gateway,
+# check what loads and that the filing tools declare their fields.
+for A in winston:Data tris:.datacore/v2-runner; do
+  N=${A%%:*}; SRC=${A#*:}; P=$(pod "$N")
+  [ -n "$P" ] || continue
+  echo "== $N plugin copy"
+  $K exec "$P" -c gateway -- sh -c "
+    S=\$HOME/$SRC/.datacore/lib/hermes_plugin; D=\$HOME/.hermes/plugins/datacore
+    cp \"\$S/plugin.yaml\" \"\$S/__init__.py\" \"\$S/verify_loaded.py\" \"\$D/\" && rm -rf \"\$D/__pycache__\" && echo '  copied'
+    pkill -f '^/opt/hermes-agent/venv/bin/python -m hermes_cli.main gateway run' && echo '  gateway stopped for restart'"
+done
+sleep 30
+for N in winston tris; do
+  P=$(pod "$N"); [ -n "$P" ] || continue
+  echo "== $N check"
+  $K get pod "$P" --no-headers | awk '{print "  pod:", $2, $3, "restarts:", $4, $5, $6}'
+  $K exec "$P" -c gateway -- sh -c '
+    PY=/opt/hermes-agent/venv/bin/python
+    $PY ~/.hermes/plugins/datacore/verify_loaded.py
+    cd ~/.hermes/plugins && $PY -c "
+import sys; sys.path.insert(0, \".\"); import datacore as d
+got = {}
+class C:
+    def register_hook(self, *a): pass
+    def register_tool(self, **k): got[k[\"name\"]] = k[\"schema\"]
+d.register(C())
+for n in (\"datacore_delegate\", \"datacore_ledger_append\"):
+    print(\"  \" + n + \" fields:\", \",\".join(sorted(got[n].get(\"parameters\", {}).get(\"properties\", {}))) or \"NONE\")
+"' | sed 's/^/  /'
+done

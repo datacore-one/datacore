@@ -514,6 +514,26 @@ def test_all_six_tools_register(as_tris):
                      "datacore_delegate", "datacore_who_has_what"]
 
 
+def test_registered_schemas_are_the_bare_function_hermes_wraps(as_tris):
+    # 2026-11-28: Hermes's registry builds {"type": "function", "function":
+    # {**schema, "name": name}} itself. Handed an already-wrapped schema, the
+    # model saw datacore_delegate and datacore_ledger_append with no
+    # parameters ("properties: {}") and sent every call empty.
+    got = {}
+
+    class Ctx:
+        def register_hook(self, name, cb): pass
+        def register_tool(self, **kw): got[kw["name"]] = kw["schema"]
+
+    hp.register(Ctx())
+    for name, schema in got.items():
+        assert "function" not in schema and schema.get("type") != "function", name
+        assert schema.get("name") == name
+        assert schema.get("parameters", {}).get("type") == "object", name
+    for name in ("datacore_delegate", "datacore_ledger_append"):
+        assert got[name]["parameters"]["properties"], f"{name} must declare its fields"
+
+
 
 @pytest.mark.parametrize('space', ['../outside', '/tmp/outside', '.', '..', 'one/two', 'a\0b'])
 def test_ledger_tool_refuses_space_traversal(as_tris, space):

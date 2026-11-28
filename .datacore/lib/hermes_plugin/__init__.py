@@ -1141,7 +1141,12 @@ def register(ctx) -> None:
          "Who has what: open delegated work across spaces, by assignee and status.", "🗂️"),
     ):
         try:
-            ctx.register_tool(name=name, toolset="datacore", schema=schema,
+            # Hermes wraps the schema itself ({"type": "function", "function":
+            # {**schema, "name": ...}}, tools/registry.get_definitions). Handing
+            # it the wrapped form nested the envelope, the model saw no
+            # parameters, and every delegation arrived empty (2026-11-28).
+            bare = schema.get("function", schema) if schema.get("type") == "function" else schema
+            ctx.register_tool(name=name, toolset="datacore", schema=bare,
                               handler=_from_hermes(handler), description=desc, emoji=emoji)
         except Exception as exc:  # noqa: BLE001 — hooks matter more than any tool
             logger.warning("datacore: could not register %s (%s)", name, exc)
