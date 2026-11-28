@@ -145,6 +145,21 @@ def test_items_waiting_for_the_owner_do_not_use_up_the_limit(tmp_path, capsys, m
     assert "waiting=2" in _status_line(out), out
 
 
+def test_requested_work_goes_before_automatic_repairs(tmp_path, capsys, monkeypatch):
+    # 2026-11-28: with the queue in id order, `autofix-`/`repair-` items (filed
+    # by job_verify, retried up to three times) sorted ahead of everything a
+    # person or an agent asked for, so a task filed by Winston for the owner
+    # waited hours behind failing self-repairs at two per run.
+    space = _space(tmp_path, [
+        {"id": "autofix-job-a-20261128", "title": "Repair job a", "check": "test -f autofix-job-a-20261128.txt"},
+        {"id": "repair-job-b", "title": "Repair job b", "check": "test -f repair-job-b.txt"},
+        {"id": "move-the-thing", "title": "task", "check": "test -f move-the-thing.txt"},
+    ])
+    rc, out, calls = _dispatch(space, capsys, monkeypatch, "--limit", "2")
+    # Winston's `repair-` delegation is requested work; job_verify's `autofix-` waits.
+    assert calls == ["move-the-thing", "repair-job-b"], out
+
+
 def test_an_unreadable_tree_asks_for_attention(tmp_path, capsys, monkeypatch):
     space = tmp_path / "2-team"
     guarded_append(EventLog(space, "winston", sign=False), "item.create",

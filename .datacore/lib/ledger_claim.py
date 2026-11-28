@@ -905,7 +905,14 @@ def plan(state, events, actor: str, runner: str | None = None) -> Plan:
     # delegated ahead and waits here. An unreadable time is held, never run.
     later = [i for i in pending if not _start_time_reached((i.payload or {}).get("not_before"))]
     pending = [i for i in pending if i not in later]
-    pending.sort(key=lambda i: i.id)
+    # REQUESTED WORK BEFORE SELF-REPAIRS (2026-11-28). In plain id order the
+    # `autofix-` items job_verify files -- each retried up to three times --
+    # sorted ahead of everything a person or an agent asked for, and a task
+    # Winston filed for the owner waited hours behind them. (`repair-` items
+    # are Winston's delegations and stay with requested work: AGT-12 counts
+    # them.) Id order still decides within each group: the queue is
+    # deterministic.
+    pending.sort(key=lambda i: (i.id.startswith("autofix-"), i.id))
     return Plan(ready=pending, exhausted=exhausted, later=later, mirrored=mirrored,
                 ambiguous=ambiguous, addressed=addressed, siblings=siblings,
                 unaddressed=unaddressed, left_to_runner=left_to_runner, attempts=attempts,
