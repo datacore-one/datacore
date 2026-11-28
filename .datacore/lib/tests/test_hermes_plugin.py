@@ -18,6 +18,11 @@ sys.path.insert(0, str(LIB))
 sys.path.insert(0, str(LIB / "hermes_plugin"))
 
 import hermes_plugin as hp  # noqa: E402
+# Loaded once, for real, before any fixture swaps ledger.events/.log for
+# stand-ins: delegation_watch imports ledger.genesis at module level (since
+# 2026-11-21), which needs the real modules. The fixtures' later
+# `import delegation_watch` then reuses this copy.
+import delegation_watch  # noqa: E402,F401
 
 PRINCIPALS = {"winston": "winston", "bridge": "winston", "tris": "tris",
               "miles": "miles", "nightshift": "miles", "mac": "gregor"}
