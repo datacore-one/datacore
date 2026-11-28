@@ -69,8 +69,14 @@ for SCOPE in public enterprise; do
   files=()
   for f in "$report" "$board"; do [ -f "$f" ] && files+=("$OUT_REL/$(basename "$f")"); done
   if [ "${#files[@]}" -gt 0 ]; then
+    # Already saved is not a failure. On 2026-11-20 another job's ledger autosave
+    # committed the public outputs first; `git commit` found nothing to commit and
+    # the job exited 1 with both boards valid and in HEAD. After a successful add,
+    # index == HEAD for these paths means exactly that.
     if git -C "$PERSONAL" add -- "${files[@]}" \
-        && git -C "$PERSONAL" commit -q -m "github-triage: $DATE $MODE ($SCOPE)" -- "${files[@]}"; then
+        && git -C "$PERSONAL" diff --cached --quiet HEAD -- "${files[@]}"; then
+      echo "[github-triage] $SCOPE outputs already committed" | tee -a "$log"; committed=1
+    elif git -C "$PERSONAL" commit -q -m "github-triage: $DATE $MODE ($SCOPE)" -- "${files[@]}"; then
       committed=1
     else
       echo "[github-triage] $SCOPE commit failed" | tee -a "$log"; rc_all=1
