@@ -59,7 +59,12 @@ for SCOPE in public enterprise; do
   if [ -f "$board" ] && python3 "$SKILL/triage_board.py" validate "$board" >> "$log" 2>&1; then
     echo "[github-triage] $SCOPE board valid" | tee -a "$log"
   else
-    echo "[github-triage] $SCOPE FAILED (claude rc=$rc; board missing or invalid)" | tee -a "$log"; rc_all=1
+    # Say WHY in the job's own log, not only in the per-scope file. On 2026-11-17
+    # and -18 the model refused both scopes ("You've hit your weekly limit"); this
+    # line named no reason, so the failure was read as a broken producer and a
+    # repair was dispatched for what only the limit's reset could clear.
+    why="$(grep -v '^\[github-triage\]' "$log" | grep -v '^\[claude-code:' | grep . | tail -n 1 | cut -c1-200)"
+    echo "[github-triage] $SCOPE FAILED (claude rc=$rc; board missing or invalid): ${why:-no output from the model run}" | tee -a "$log"; rc_all=1
   fi
   # Commit this scope NOW, not after the other scope's run. Uncommitted outputs
   # are "unsaved work" to every other job on the host: on 2026-11-15 the Sunday

@@ -118,6 +118,24 @@ def test_no_owner_configured_fails_clearly(tmp_path):
     assert not (tmp_path / "calls.log").exists()
 
 
+def test_a_refused_model_run_names_the_reason_in_the_jobs_own_log(tmp_path):
+    """2026-11-17: the weekly limit refused both scopes and the job's log said only
+    'board missing or invalid' -- the reason sat in the per-scope file nobody quotes."""
+    data, personal, env = _setup(tmp_path)
+    refuse = tmp_path / "bin" / "claude"
+    refuse.write_text("#!/usr/bin/env bash\ncat >/dev/null\n"
+                      "echo '[claude-code:unrecognized_model] {}'\n"
+                      "echo \"You've hit your weekly limit · resets Nov 19, 2am (UTC)\"\nexit 1\n")
+    r = subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 1
+    failed = [ln for ln in r.stdout.splitlines() if "FAILED" in ln]
+    assert len(failed) == 2 and all("weekly limit" in ln for ln in failed), r.stdout
+    import sys
+    sys.path.insert(0, str(SKILL.parent.parent / "lib"))
+    from check_diagnosis import agent_failure
+    assert agent_failure(r.stdout)[0] == "usage_limit"
+
+
 def test_enterprise_repo_unset_is_reported_not_run(tmp_path):
     data, personal, env = _setup(tmp_path)
     env.pop("TRIAGE_ENTERPRISE_REPO", None)
