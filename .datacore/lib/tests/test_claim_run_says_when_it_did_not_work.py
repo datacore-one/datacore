@@ -114,6 +114,37 @@ def test_refused_items_do_not_use_up_the_limit_and_the_run_asks_for_attention(tm
     assert rc == 3
 
 
+def test_items_waiting_for_the_owner_do_not_use_up_the_limit(tmp_path, capsys, monkeypatch):
+    # 2026-11-28, Miles on dayshift: the two oldest items were repairs waiting
+    # for the owner's merge. Each was counted as taken before the waiting
+    # check skipped it, so with --limit 2 they filled every run and 41 items
+    # behind them -- every delegation to Miles since 2026-11-16 -- never ran.
+    space = _space(tmp_path, [
+        {"id": "a-wait-1", "title": "Repair one", "check": "test -f merged-1"},
+        {"id": "a-wait-2", "title": "Repair two", "check": "test -f merged-2"},
+        {"id": "b-real", "title": "task", "check": "test -f b-real.txt"},
+    ])
+    log = EventLog(space, "miles", sign=False)
+    for iid in ("a-wait-1", "a-wait-2"):
+        log.append("item.claim", {"id": iid, "owner": "miles", "route": "dev", "reason": "test"})
+        log.append("item.release", {"id": iid, "kind": "waiting_on_owner",
+                                    "reason": "waiting for you: the PR is open"})
+    _git(space, "add", "-A")
+    _git(space, "commit", "-qm", "waiting")
+    real = ledger_claim._isolated_check_explained
+
+    def check(sp, chk, baseline=None):
+        if "merged-" in chk:
+            return ledger_claim.WAITING_ON_OWNER, None, "the owner has not merged"
+        return real(sp, chk, baseline)
+    monkeypatch.setattr(ledger_claim, "_isolated_check_explained", check)
+
+    rc, out, calls = _dispatch(space, capsys, monkeypatch, "--limit", "2")
+
+    assert calls == ["b-real"], out
+    assert "waiting=2" in _status_line(out), out
+
+
 def test_an_unreadable_tree_asks_for_attention(tmp_path, capsys, monkeypatch):
     space = tmp_path / "2-team"
     guarded_append(EventLog(space, "winston", sign=False), "item.create",

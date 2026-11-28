@@ -66,8 +66,13 @@ def latest_jobs(root: Path, now: float, *, registry: Path | None = None,
         # (ledger.finality, the rule `verify` and `chain_problems` use). Without
         # them, events the owner cancelled in September -- 6-meridian miles seq
         # 21140-21141, 5-plur tris seq 5 -- read as a broken chain for ever.
-        from ledger.finality import resolve as resolve_voids
-        space_voids = resolve_voids(events).voids
+        # The one correction rule, with the same hub inputs effective_events
+        # uses below, so a hub space's reversals are judged identically.
+        from ledger import finality
+        space_voids = finality.resolve(
+            events, lease_grantors=(kw or {}).get("lease_grantors"),
+            reversers=(kw or {}).get("reversers"),
+            legacy_reversals=(kw or {}).get("legacy_reversals")).voids
         # ONLY CHAINS THAT CARRY EVIDENCE ARE VERIFIED. An attestation is only
         # trustworthy if its own chain verifies -- that is the guarantee, and it
         # is kept exactly. A chain carrying NO attestation contributes nothing

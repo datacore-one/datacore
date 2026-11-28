@@ -1288,11 +1288,17 @@ def _claim_pass(argv, *, transport=_FROM_ENV) -> int:
             # fails after the merge, a retry's check still fails) -> to the
             # agent as an ordinary attempt.
             rc, sha, _ = _isolated_check_explained(space, check, baseline)
+            # A WAITING ITEM WAS NOT TAKEN: give its slot back. Counted above
+            # before this check, two repairs waiting for the owner's merge
+            # filled Miles's --limit 2 on every run and blocked every
+            # delegation behind them from 2026-11-16 (found 2026-11-28).
             if is_waiting and rc == WAITING_ON_JOB:
+                taken -= 1
                 print(f"WAITING  [{route}] {title[:70]}\n         -> the repaired job has not run yet; "
                       f"checked again next time")
                 continue
             if is_waiting and rc == WAITING_ON_OWNER:
+                taken -= 1
                 print(f"WAITING  [{route}] {title[:70]}\n         -> still waiting for you "
                       f"(the owner merges); the agent is not re-run")
                 waiting_n += 1
