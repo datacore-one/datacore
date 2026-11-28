@@ -156,3 +156,24 @@ def test_the_process_environment_wins_over_the_env_file(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     owners = set((tmp_path / "calls.log.owner").read_text().split()) - {"OWNER"}
     assert owners == {"octo-owner"}
+
+
+def test_outputs_another_job_already_committed_are_not_a_failure(tmp_path):
+    """2026-11-20: the public board validated, but another job's ledger autosave had
+    committed the two outputs before the runner reached its own commit. `git commit`
+    found nothing to commit, the runner called that 'commit failed' and the job
+    exited 1 with both boards valid and saved."""
+    data, personal, env = _setup(tmp_path)
+    stub = tmp_path / "bin" / "claude"
+    stub.write_text(STUB + 'git -C "$DATA_DIR/0-personal" add -- "$outrel" && '
+                    'git -C "$DATA_DIR/0-personal" commit -q -m "ledger: autosave before converge" -- "$outrel"\n')
+    r = subprocess.run(["bash", str(RUNNER), "--date", "2026-09-30"], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "commit failed" not in r.stdout
+    assert r.stdout.count("already committed") == 2
+    tracked = subprocess.run(["git", "-C", str(personal), "ls-files", "content/reports/github-triage"],
+                             capture_output=True, text=True).stdout.split()
+    assert len(tracked) == 4
+    # Nothing of the outputs is left unsaved.
+    assert subprocess.run(["git", "-C", str(personal), "status", "--porcelain", "--", "content"],
+                          capture_output=True, text=True).stdout == ""
